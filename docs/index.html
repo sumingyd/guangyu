@@ -17,9 +17,9 @@
   --ink: #dbe4ea;
   --ink-dim: #7c8b96;
   --ink-faint: #55636e;
-  --accent: #5eead4;          /* 青碧：主强调色 */
+  --accent: #5eead4;
   --accent-deep: #2dd4bf;
-  --warm: #f5d9a8;            /* 暖光：极少量点缀 */
+  --warm: #f5d9a8;
   --line: rgba(94, 234, 212, 0.10);
   --line-soft: rgba(255, 255, 255, 0.06);
   --glass: rgba(18, 30, 38, 0.55);
@@ -29,7 +29,7 @@
   --mono: 'JetBrains Mono', ui-monospace, monospace;
 }
 
-html { scroll-behavior: smooth; }
+html { scroll-behavior: auto; }
 body {
   font-family: var(--sans);
   background: var(--bg);
@@ -38,17 +38,21 @@ body {
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
 }
-
 ::selection { background: rgba(94, 234, 212, 0.28); color: #fff; }
 
-/* ---------- 全局氛围：海雾光晕（缓慢漂移，Glow） ---------- */
+/* ---------- 氛围光晕 ---------- */
 .atmosphere {
-  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  position: fixed; inset: -6%; z-index: 0; pointer-events: none;
+  animation: drift 30s ease-in-out infinite alternate;
   background:
     radial-gradient(ellipse 68% 42% at 78% -6%, rgba(45, 212, 191, 0.13), transparent 62%),
     radial-gradient(ellipse 50% 38% at 8% 22%, rgba(20, 90, 100, 0.16), transparent 66%),
     radial-gradient(ellipse 46% 34% at 88% 68%, rgba(245, 217, 168, 0.045), transparent 70%),
     radial-gradient(ellipse 60% 44% at 30% 108%, rgba(28, 118, 128, 0.10), transparent 68%);
+}
+@keyframes drift {
+  from { transform: translate3d(-2.2%, -1.6%, 0) scale(1.04); }
+  to   { transform: translate3d(2.4%, 1.8%, 0) scale(1.09); }
 }
 .grain {
   position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: 0.05;
@@ -59,7 +63,7 @@ body {
 
 /* ---------- 顶栏 ---------- */
 header {
-  position: sticky; top: 0; z-index: 20;
+  position: fixed; top: 0; left: 0; right: 0; z-index: 20;
   backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
   background: rgba(10, 16, 22, 0.62);
   border-bottom: 1px solid var(--line-soft);
@@ -94,7 +98,11 @@ header {
 .gh-btn svg { width: 15px; height: 15px; fill: currentColor; }
 
 /* ---------- Hero ---------- */
-.hero { padding: 108px 0 84px; position: relative; }
+.hero {
+  min-height: 100vh; display: flex; align-items: center;
+  position: relative; overflow: hidden;
+}
+.hero-inner { position: relative; z-index: 2; width: 100%; }
 .eyebrow {
   font-family: var(--mono); font-size: 0.68rem; font-weight: 600;
   letter-spacing: 0.42em; text-transform: uppercase;
@@ -104,19 +112,17 @@ header {
 .eyebrow::before { content: ''; width: 34px; height: 1px; background: var(--accent); opacity: 0.55; }
 .hero h1 {
   font-family: var(--serif); font-weight: 900;
-  font-size: clamp(3.2rem, 8.5vw, 5.6rem);
-  line-height: 1.08; letter-spacing: 0.02em; margin-bottom: 10px;
+  font-size: clamp(3.4rem, 10vw, 7rem);
+  line-height: 1.05; letter-spacing: 0.02em; margin-bottom: 10px;
 }
+.hero h1 .zh { display: inline-block; }
 .hero h1 .en {
   display: block;
   font-size: clamp(1.0rem, 2.4vw, 1.5rem); font-weight: 600;
   letter-spacing: 0.34em; color: var(--ink-dim);
-  margin-top: 16px; font-family: var(--mono);
+  margin-top: 18px; font-family: var(--mono);
 }
-.hero p.lead {
-  max-width: 620px; margin-top: 26px;
-  font-size: 1.02rem; color: var(--ink-dim);
-}
+.hero p.lead { max-width: 620px; margin-top: 26px; font-size: 1.02rem; color: var(--ink-dim); }
 .hero p.lead strong { color: var(--ink); font-weight: 500; }
 .platform-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 30px; }
 .platform-tag {
@@ -140,14 +146,121 @@ header {
 .btn-ghost:hover { border-color: rgba(94, 234, 212, 0.4); transform: translateY(-2px); }
 .btn svg { width: 16px; height: 16px; fill: currentColor; }
 
-/* 浮岛装饰：hero 右侧 CSS 绘制的「屿」形玻璃 */
+/* 浮岛装饰：随滚动放大成背景 */
 .isle {
-  position: absolute; right: -30px; top: 90px; z-index: -1;
-  width: 420px; height: 420px; opacity: 0.9; pointer-events: none;
+  position: absolute; right: -6%; top: 50%;
+  transform: translateY(-50%); z-index: 1;
+  width: 460px; height: 460px; pointer-events: none;
 }
 
-/* ---------- 通用 section ---------- */
-section { padding: 84px 0; }
+/* ---------- 频道跑马灯 ---------- */
+.marquee-band {
+  position: relative; z-index: 1; overflow: hidden;
+  border-block: 1px solid var(--line-soft);
+  background: rgba(13, 21, 29, 0.55);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  padding: 14px 0;
+}
+.marquee-track { display: flex; width: max-content; animation: marquee 40s linear infinite; }
+.marquee-track span {
+  font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.22em;
+  color: var(--ink-faint); white-space: nowrap; padding-right: 2.6em;
+}
+.marquee-track span i { font-style: normal; color: rgba(94, 234, 212, 0.5); padding-right: 2.6em; }
+@keyframes marquee { to { transform: translateX(-50%); } }
+
+/* ---------- Pin 场景通用 ---------- */
+.scene {
+  position: relative; min-height: 100vh;
+  display: flex; align-items: center; overflow: hidden;
+}
+.scene-inner { width: 100%; position: relative; z-index: 2; }
+.scene-eyebrow {
+  font-family: var(--mono); font-size: 0.68rem; font-weight: 600;
+  letter-spacing: 0.42em; text-transform: uppercase; color: var(--accent);
+  margin-bottom: 20px; display: flex; align-items: center; gap: 14px;
+}
+.scene-eyebrow::before { content: ''; width: 34px; height: 1px; background: var(--accent); opacity: 0.55; }
+.scene h2 {
+  font-family: var(--serif); font-weight: 900;
+  font-size: clamp(2.6rem, 7vw, 5rem); line-height: 1.12;
+  letter-spacing: 0.02em; margin-bottom: 22px;
+}
+.scene .sub { color: var(--ink-dim); font-size: 1rem; max-width: 560px; }
+
+/* Scene A：秒开换台 —— 三能力点 */
+.cap-list { margin-top: 44px; display: flex; flex-direction: column; gap: 0; max-width: 640px; }
+.cap {
+  display: flex; gap: 20px; padding: 22px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.cap .ci {
+  font-family: var(--mono); font-size: 0.72rem; font-weight: 600;
+  color: var(--accent); padding-top: 4px; flex-shrink: 0;
+}
+.cap h4 { font-size: 1.05rem; font-weight: 700; margin-bottom: 4px; }
+.cap p { font-size: 0.86rem; color: var(--ink-dim); }
+
+/* Scene B：EPG 时间轴 */
+.epg-axis { margin-top: 48px; max-width: 720px; }
+.epg-bar-track {
+  height: 3px; background: rgba(255, 255, 255, 0.07);
+  border-radius: 99px; overflow: hidden; margin-bottom: 28px;
+}
+.epg-bar-fill {
+  height: 100%; width: 100%; border-radius: 99px;
+  background: linear-gradient(90deg, var(--accent-deep), var(--accent));
+  transform: scaleX(0); transform-origin: left;
+  box-shadow: 0 0 16px rgba(94, 234, 212, 0.55);
+}
+.epg-prog {
+  display: flex; flex-direction: column; gap: 4px;
+}
+.epg-row {
+  display: grid; grid-template-columns: 76px 1fr auto; gap: 16px;
+  align-items: baseline; padding: 13px 16px; border-radius: 12px;
+  border: 1px solid transparent; transition: background 0.3s, border-color 0.3s;
+}
+.epg-row .t { font-family: var(--mono); font-size: 0.78rem; color: var(--ink-faint); }
+.epg-row .n { font-size: 0.95rem; font-weight: 500; }
+.epg-row .d { font-family: var(--mono); font-size: 0.66rem; letter-spacing: 0.14em; color: var(--ink-faint); }
+.epg-row.playing {
+  background: rgba(94, 234, 212, 0.07); border-color: rgba(94, 234, 212, 0.25);
+}
+.epg-row.playing .t { color: var(--accent); }
+.epg-row.playing .d { color: var(--accent); }
+
+/* Scene C：截图展开 */
+.shot-stage {
+  position: relative; height: 72vh; min-height: 480px;
+  display: flex; align-items: center; justify-content: center;
+}
+.shot-main {
+  width: min(860px, 88%); aspect-ratio: 16 / 9.6;
+  border-radius: 40px; overflow: hidden; position: relative;
+  border: 1px solid var(--line-soft);
+  box-shadow: 0 60px 120px -40px rgba(0, 0, 0, 0.8), 0 0 80px -30px rgba(94, 234, 212, 0.25);
+  will-change: transform;
+}
+.shot-main img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; }
+.shot-side {
+  position: absolute; width: 30%; aspect-ratio: 16 / 10;
+  border-radius: 18px; overflow: hidden;
+  border: 1px solid var(--line-soft);
+  box-shadow: 0 40px 90px -40px rgba(0, 0, 0, 0.75);
+  will-change: transform;
+}
+.shot-side img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; }
+.shot-side.l { left: -4%; bottom: 4%; }
+.shot-side.r { right: -4%; top: 4%; }
+.stage-caption {
+  position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%);
+  font-family: var(--mono); font-size: 0.66rem; letter-spacing: 0.3em;
+  color: var(--ink-faint); text-transform: uppercase; white-space: nowrap;
+}
+
+/* ---------- 资源区 ---------- */
+.resource-sec { padding: 110px 0 84px; }
 .sec-head { display: flex; align-items: baseline; gap: 20px; margin-bottom: 14px; }
 .sec-index {
   font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.2em;
@@ -159,33 +272,9 @@ section { padding: 84px 0; }
 }
 .sec-desc { color: var(--ink-dim); max-width: 640px; font-size: 0.95rem; }
 
-/* ---------- 截图条：错落 ---------- */
-.shots {
-  display: grid; grid-template-columns: 1.25fr 0.95fr 1.1fr;
-  gap: 18px; align-items: end;
-}
-.shot {
-  border-radius: 14px; overflow: hidden; position: relative;
-  border: 1px solid var(--line-soft);
-  background: var(--glass);
-  box-shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.7);
-}
-.shot:nth-child(2) { transform: translateY(-26px); }
-.shot img { display: block; width: 100%; height: auto; }
-.shot::after {
-  content: ''; position: absolute; inset: 0; pointer-events: none;
-  background: linear-gradient(180deg, transparent 62%, rgba(10, 16, 22, 0.55));
-}
-.shot figcaption {
-  position: absolute; left: 14px; bottom: 10px; z-index: 1;
-  font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.18em;
-  color: rgba(219, 228, 234, 0.75); text-transform: uppercase;
-}
-
-/* ---------- EPG / 订阅 双栏 ---------- */
 .resources {
   display: grid; grid-template-columns: 1fr 1.25fr; gap: 22px;
-  align-items: stretch;
+  align-items: stretch; margin-top: 40px;
 }
 .panel {
   border: 1px solid var(--line-soft); border-radius: 16px;
@@ -205,7 +294,6 @@ section { padding: 84px 0; }
   margin-bottom: 8px; letter-spacing: 0.02em;
 }
 .panel .sub { color: var(--ink-dim); font-size: 0.85rem; margin-bottom: 20px; }
-
 .addr {
   display: flex; align-items: center; gap: 10px;
   background: rgba(6, 20, 24, 0.6); border: 1px solid var(--line);
@@ -226,8 +314,6 @@ section { padding: 84px 0; }
 }
 .copy-btn:hover { background: rgba(94, 234, 212, 0.12); }
 .copy-btn.done { background: var(--accent); color: #06281f; border-color: var(--accent); }
-.copy-btn svg { width: 12px; height: 12px; fill: currentColor; }
-
 .meta-row {
   display: flex; gap: 18px; flex-wrap: wrap;
   margin-top: auto; padding-top: 18px;
@@ -242,7 +328,6 @@ section { padding: 84px 0; }
 }
 @keyframes pulse { 50% { opacity: 0.35; } }
 
-/* 订阅源列表：分组行 */
 .src-group { margin-bottom: 16px; }
 .src-group:last-child { margin-bottom: 0; }
 .src-group-name {
@@ -266,15 +351,14 @@ section { padding: 84px 0; }
   white-space: nowrap; min-width: 0;
 }
 .src-row .copy-btn { padding: 5px 11px; }
-.src-row .copy-btn svg { display: none; }
 
-/* ---------- 功能亮点：两列错落清单 ---------- */
-.features { display: grid; grid-template-columns: 1fr 1fr; gap: 0 56px; }
+/* ---------- 功能清单 ---------- */
+.feature-sec { padding: 40px 0 90px; }
+.features { display: grid; grid-template-columns: 1fr 1fr; gap: 0 56px; margin-top: 36px; }
 .feature {
   display: flex; gap: 18px; padding: 26px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.045);
 }
-.feature:nth-child(odd) { transform: translateY(0); }
 .feature:nth-child(even) { transform: translateY(30px); }
 .f-index {
   font-family: var(--mono); font-size: 0.7rem; font-weight: 600;
@@ -285,13 +369,8 @@ section { padding: 84px 0; }
 .features-spacer { height: 30px; }
 
 /* ---------- 页脚 ---------- */
-footer {
-  border-top: 1px solid var(--line-soft); margin-top: 60px;
-  padding: 44px 0 56px;
-}
-.foot-inner {
-  display: flex; align-items: center; gap: 24px; flex-wrap: wrap;
-}
+footer { border-top: 1px solid var(--line-soft); padding: 44px 0 56px; }
+.foot-inner { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
 .foot-inner .wordmark { font-size: 1.05rem; }
 .foot-links { display: flex; gap: 22px; margin-left: auto; flex-wrap: wrap; }
 .foot-links a {
@@ -317,33 +396,31 @@ footer {
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
-/* ---------- 滚动 reveal ---------- */
-.reveal { opacity: 0; transform: translateY(26px); transition: opacity 0.7s ease, transform 0.7s ease; }
-.reveal.in { opacity: 1; transform: none; }
+/* ---------- GSAP 未加载/无 JS 时的静态兜底 ---------- */
+.gsap-missing .scene .cap, .gsap-missing .epg-row, .gsap-missing .stage-caption { opacity: 1 !important; transform: none !important; }
+.gsap-missing .epg-bar-fill { transform: scaleX(0.42) !important; }
+.gsap-missing .epg-row.playing-3 { background: rgba(94, 234, 212, 0.07); border-color: rgba(94, 234, 212, 0.25); }
 
 /* ---------- 响应式 ---------- */
 @media (max-width: 900px) {
   .resources { grid-template-columns: 1fr; }
-  .shots { grid-template-columns: 1fr 1fr; }
-  .shot:nth-child(3) { display: none; }
-  .shot:nth-child(2) { transform: none; }
   .features { grid-template-columns: 1fr; gap: 0; }
   .feature:nth-child(even) { transform: none; }
-  .isle { display: none; }
-  .hero { padding: 72px 0 60px; }
+  .isle { opacity: 0.5; }
+  .shot-side { display: none; }
+  .shot-main { border-radius: 22px; }
 }
 @media (max-width: 560px) {
-  .shots { grid-template-columns: 1fr; }
-  .shot:nth-child(3) { display: block; }
   .nav-links a:not(.gh-btn) { display: none; }
   .addr { flex-direction: column; align-items: stretch; }
   .addr .copy-btn { align-self: flex-end; }
+  .epg-row { grid-template-columns: 60px 1fr; }
+  .epg-row .d { display: none; }
+  .scene { min-height: 88vh; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  html { scroll-behavior: auto; }
-  .atmosphere, .meta-row .live-dot { animation: none; }
-  .reveal { opacity: 1; transform: none; transition: none; }
+  .atmosphere, .marquee-track, .meta-row .live-dot { animation: none; }
   .btn, .btn-ghost, .btn-primary { transition: none; }
 }
 </style>
@@ -356,9 +433,9 @@ footer {
   <nav class="nav">
     <a class="wordmark" href="#top">光屿 <small>GuangYu</small></a>
     <div class="nav-links">
-      <a href="#media">功能</a>
       <a href="#epg">EPG</a>
       <a href="#sources">订阅源</a>
+      <a href="#features">功能</a>
       <a class="gh-btn" href="https://github.com/sumingyd/guangyu" target="_blank" rel="noopener">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
         GitHub
@@ -367,28 +444,20 @@ footer {
   </nav>
 </header>
 
-<main class="page" id="top">
-
-  <!-- ============ HERO ============ -->
-  <section class="hero">
-    <svg class="isle" viewBox="0 0 420 420" aria-hidden="true">
-      <defs>
-        <linearGradient id="isleG" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stop-color="rgba(94,234,212,0.10)"/>
-          <stop offset="1" stop-color="rgba(94,234,212,0.02)"/>
-        </linearGradient>
-      </defs>
-      <circle cx="210" cy="210" r="190" fill="none" stroke="rgba(94,234,212,0.14)" stroke-dasharray="2 7"/>
-      <circle cx="210" cy="210" r="132" fill="url(#isleG)" stroke="rgba(94,234,212,0.10)"/>
-      <path d="M120 250 Q 165 218 210 250 T 300 250" fill="none" stroke="rgba(94,234,212,0.35)" stroke-width="1.5"/>
-      <path d="M140 272 Q 180 244 220 272 T 296 272" fill="none" stroke="rgba(94,234,212,0.18)" stroke-width="1.2"/>
-      <circle cx="210" cy="210" r="4" fill="#5eead4"/>
-      <circle cx="330" cy="120" r="2.5" fill="#f5d9a8"/>
-      <circle cx="96" cy="140" r="2" fill="#5eead4" opacity="0.6"/>
-    </svg>
-
+<!-- ============ SCENE 0 · HERO ============ -->
+<section class="hero" id="top">
+  <svg class="isle" viewBox="0 0 460 460" aria-hidden="true">
+    <circle cx="230" cy="230" r="208" fill="none" stroke="rgba(94,234,212,0.14)" stroke-dasharray="2 7"/>
+    <circle cx="230" cy="230" r="144" fill="rgba(94,234,212,0.045)" stroke="rgba(94,234,212,0.10)"/>
+    <path d="M132 274 Q 180 240 230 274 T 328 274" fill="none" stroke="rgba(94,234,212,0.35)" stroke-width="1.5"/>
+    <path d="M154 298 Q 196 268 238 298 T 322 298" fill="none" stroke="rgba(94,234,212,0.18)" stroke-width="1.2"/>
+    <circle cx="230" cy="230" r="4" fill="#5eead4"/>
+    <circle cx="360" cy="132" r="2.5" fill="#f5d9a8"/>
+    <circle cx="104" cy="152" r="2" fill="#5eead4" opacity="0.6"/>
+  </svg>
+  <div class="page hero-inner">
     <p class="eyebrow">IPTV Player · MPV Engine</p>
-    <h1>光屿<span class="en">GUANGYU IPTV</span></h1>
+    <h1><span class="zh">光</span><span class="zh">屿</span><span class="en">GUANGYU IPTV</span></h1>
     <p class="lead">
       以 <strong>MPV 播放引擎</strong>为核心的跨平台 IPTV 播放器，
       覆盖「看、扫、管」完整链路——EPG 电子节目单、频道台标、HDR 显示、
@@ -407,34 +476,79 @@ footer {
       </a>
       <a class="btn btn-ghost" href="#sources">获取订阅源</a>
     </div>
-  </section>
+  </div>
+</section>
 
-  <!-- ============ 截图条 ============ -->
-  <section id="media" style="padding-top:0">
-    <div class="shots reveal">
-      <figure class="shot"><figcaption>Desktop · Player</figcaption><img src="https://raw.githubusercontent.com/sumingyd/guangyu/main/icons/2.png" alt="光屿桌面端播放器界面" loading="lazy"></figure>
-      <figure class="shot"><figcaption>Channels · EPG</figcaption><img src="https://raw.githubusercontent.com/sumingyd/guangyu/main/icons/5.png" alt="光屿频道管理与 EPG 界面" loading="lazy"></figure>
-      <figure class="shot"><figcaption>Android · TV</figcaption><img src="https://raw.githubusercontent.com/sumingyd/guangyu/main/icons/8.png" alt="光屿安卓端界面" loading="lazy"></figure>
+<!-- 频道跑马灯 -->
+<div class="marquee-band" aria-hidden="true">
+  <div class="marquee-track" id="marqueeTrack"></div>
+</div>
+
+<!-- ============ SCENE A · 秒开换台 ============ -->
+<section class="scene" id="scene-a">
+  <div class="page scene-inner">
+    <p class="scene-eyebrow">01 · Playback</p>
+    <h2>秒开换台，<br>如你所见。</h2>
+    <p class="sub">libmpv 高性能驱动，组播 FCC 代理消除切台黑屏——UDP 流按下换台键的瞬间，画面已经就位。</p>
+    <div class="cap-list">
+      <div class="cap"><span class="ci">A1</span><div><h4>FCC 快速换台</h4><p>IPTV 组播 FCC（Fast Channel Change）代理，换台时自动 LEAVE / JOIN，消除 IGMP 加入延迟。</p></div></div>
+      <div class="cap"><span class="ci">A2</span><div><h4>MPV 引擎</h4><p>libmpv 内核 + FFprobe 流探测，probesize / 缓存参数全链路调优，秒开不等待。</p></div></div>
+      <div class="cap"><span class="ci">A3</span><div><h4>HDR · WCG · 运动补偿</h4><p>5 种 HDR 显示模式、广色域、minterpolate 插帧与 AI 超分着色器，画质拉满。</p></div></div>
     </div>
-  </section>
+  </div>
+</section>
 
-  <!-- ============ EPG ============ -->
-  <section id="epg">
-    <div class="sec-head reveal">
-      <span class="sec-index">01</span>
+<!-- ============ SCENE B · EPG ============ -->
+<section class="scene" id="scene-b">
+  <div class="page scene-inner">
+    <p class="scene-eyebrow">02 · Guide</p>
+    <h2>节目单，<br>跟着时间走。</h2>
+    <p class="sub">XMLTV / JSON 双解析，tvg-id → tvg-name → 频道名三级智能匹配。滚动页面，就像滚动一整天的节目单。</p>
+    <div class="epg-axis">
+      <div class="epg-bar-track"><div class="epg-bar-fill"></div></div>
+      <div class="epg-prog">
+        <div class="epg-row"><span class="t">06:30</span><span class="n">朝闻天下</span><span class="d">LIVE</span></div>
+        <div class="epg-row"><span class="t">09:00</span><span class="n">人文·地理纪行</span><span class="d">回看</span></div>
+        <div class="epg-row"><span class="t">12:00</span><span class="n">新闻 30 分</span><span class="d">回看</span></div>
+        <div class="epg-row"><span class="t">19:30</span><span class="n">黄金剧场 · 第 24 集</span><span class="d">时移</span></div>
+        <div class="epg-row"><span class="t">21:45</span><span class="n">深夜书房</span><span class="d">即将播出</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SCENE C · 截图展开 ============ -->
+<section class="scene" id="scene-c">
+  <div class="page scene-inner">
+    <div class="shot-stage">
+      <figure class="shot-side l"><img src="https://raw.githubusercontent.com/sumingyd/guangyu/main/icons/5.png" alt="频道管理与 EPG 界面" loading="lazy"></figure>
+      <div class="shot-main">
+        <img src="https://raw.githubusercontent.com/sumingyd/guangyu/main/icons/2.png" alt="光屿桌面端播放器界面">
+      </div>
+      <figure class="shot-side r"><img src="https://raw.githubusercontent.com/sumingyd/guangyu/main/icons/8.png" alt="光屿安卓端界面" loading="lazy"></figure>
+      <p class="stage-caption">Desktop · Channels · Android</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ EPG / 订阅源 ============ -->
+<section class="resource-sec" id="epg">
+  <div class="page">
+    <div class="sec-head">
+      <span class="sec-index">03</span>
       <h2 class="sec-title">EPG 电子节目单</h2>
     </div>
-    <p class="sec-desc reveal" style="margin-bottom:34px">
+    <p class="sec-desc">
       全量合并的 XMLTV 节目单，含全国频道七日节目数据，每小时自动更新。
       将下方地址填入播放器的 EPG 设置即可使用；也可按天获取轻量单日数据。
     </p>
     <div class="resources">
-      <div class="panel reveal">
+      <div class="panel">
         <p class="panel-tag">EPG Source</p>
         <h3>完整节目单</h3>
         <p class="sub">Gzip 压缩 XMLTV，全频道 · 七日数据，自动更新</p>
         <div class="addr">
-          <code id="epg-main-url">https://raw.githubusercontent.com/sumingyd/xml/main/epg.xml.gz</code>
+          <code>https://raw.githubusercontent.com/sumingyd/xml/main/epg.xml.gz</code>
           <button class="copy-btn" data-copy="https://raw.githubusercontent.com/sumingyd/xml/main/epg.xml.gz" onclick="copyAddr(this)">复制</button>
         </div>
         <div class="meta-row">
@@ -442,7 +556,7 @@ footer {
           <span>格式 <b>XMLTV · .xml.gz</b></span>
         </div>
       </div>
-      <div class="panel reveal">
+      <div class="panel">
         <p class="panel-tag">Daily</p>
         <h3>按天获取</h3>
         <p class="sub">单日节目数据，轻量快速，适合仅需要当日节目的场景</p>
@@ -453,41 +567,43 @@ footer {
         </div>
       </div>
     </div>
-  </section>
+  </div>
+</section>
 
-  <!-- ============ 订阅源 ============ -->
-  <section id="sources">
-    <div class="sec-head reveal">
-      <span class="sec-index">02</span>
+<section id="sources" style="padding-top:0">
+  <div class="page">
+    <div class="sec-head">
+      <span class="sec-index">04</span>
       <h2 class="sec-title">IPTV 订阅源</h2>
     </div>
-    <p class="sec-desc reveal" style="margin-bottom:34px">
+    <p class="sec-desc" style="margin-bottom:36px">
       山东地区三大运营商直播源与江苏电信组播，持续维护更新。
       组播地址需在运营商内网环境使用；单播源可直接播放。
     </p>
-    <div class="panel reveal" style="padding:26px 30px 22px">
+    <div class="panel" style="padding:26px 30px 22px">
       <div id="src-list"></div>
     </div>
-  </section>
+  </div>
+</section>
 
-  <!-- ============ 功能亮点 ============ -->
-  <section id="features">
-    <div class="sec-head reveal">
-      <span class="sec-index">03</span>
-      <h2 class="sec-title">为什么选择光屿</h2>
+<!-- ============ 功能清单 ============ -->
+<section class="feature-sec" id="features">
+  <div class="page">
+    <div class="sec-head">
+      <span class="sec-index">05</span>
+      <h2 class="sec-title">更多能力</h2>
     </div>
-    <div class="features reveal" style="margin-top:30px">
-      <div class="feature"><span class="f-index">A</span><div><h4>MPV 引擎 · FCC 秒开换台</h4><p>libmpv 高性能驱动，支持 IPTV 组播 FCC 代理，消除切台黑屏，UDP 流秒开。</p></div></div>
-      <div class="feature"><span class="f-index">B</span><div><h4>EPG 智能匹配</h4><p>tvg-id → tvg-name → 频道名三级匹配，日期导航、节目提醒、实时进度条。</p></div></div>
-      <div class="feature"><span class="f-index">C</span><div><h4>时移 / 回看</h4><p>5 种回看类型全覆盖（default / append / shift / flussonic / xtream），时区偏移可调。</p></div></div>
-      <div class="feature"><span class="f-index">D</span><div><h4>HDR 与画质增强</h4><p>5 种 HDR 模式、WCG 广色域、运动补偿插帧、AI 超分辨率着色器。</p></div></div>
-      <div class="feature"><span class="f-index">E</span><div><h4>频道扫描与批量管理</h4><p>IP 范围扫描、FFprobe 探测、自动分类、批量验证，M3U 导入导出多格式。</p></div></div>
+    <div class="features">
+      <div class="feature"><span class="f-index">A</span><div><h4>时移 / 回看</h4><p>5 种回看类型全覆盖（default / append / shift / flussonic / xtream），时区偏移可调。</p></div></div>
+      <div class="feature"><span class="f-index">B</span><div><h4>频道扫描与批量管理</h4><p>IP 范围扫描、FFprobe 探测、自动分类、批量验证，M3U 导入导出多格式。</p></div></div>
+      <div class="feature"><span class="f-index">C</span><div><h4>音频可视化</h4><p>7 种 3D 可视化样式（频谱 / 波形 / 环形 / 地形 / 宇宙 / 流体 / 洞洞波），音乐频道秒变舞台。</p></div></div>
+      <div class="feature"><span class="f-index">D</span><div><h4>字幕系统</h4><p>OpenSubtitles / SubHD / SubtitleCat 三源聚合搜索，样式可调，自动同步。</p></div></div>
+      <div class="feature"><span class="f-index">E</span><div><h4>断点续播 · 切片导出</h4><p>每文件设置持久化、跳过片头片尾、书签管理、GIF / 片段导出。</p></div></div>
       <div class="feature"><span class="f-index">F</span><div><h4>Android 全家桶适配</h4><p>手机 / 平板 / TV 三形态，遥控器焦点导航、DLNA 投屏、画中画、18 种全屏底栏。</p></div></div>
     </div>
     <div class="features-spacer"></div>
-  </section>
-
-</main>
+  </div>
+</section>
 
 <footer>
   <div class="page foot-inner">
@@ -505,8 +621,10 @@ footer {
 
 <div class="toast" id="toast">已复制到剪贴板</div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
 <script>
-/* 订阅源数据：分组 → 文件名 / 显示名 / 说明 */
+/* ================= 订阅源数据 ================= */
 const SRC_BASE = 'https://raw.githubusercontent.com/sumingyd/Telecom-Shandong-IPTV-List/main/';
 const SRC_GROUPS = [
   { name: '电信 Telecom', icon: 'T', items: [
@@ -524,8 +642,6 @@ const SRC_GROUPS = [
     ['Unicom-Shandong-Multicast-qingdao.m3u', '山东联通 · 青岛组播', '青岛地区专用'],
   ]},
 ];
-
-/* 渲染订阅源列表 */
 const srcList = document.getElementById('src-list');
 SRC_GROUPS.forEach(g => {
   const div = document.createElement('div');
@@ -539,7 +655,7 @@ SRC_GROUPS.forEach(g => {
   srcList.appendChild(div);
 });
 
-/* 按天 EPG：最近 4 天 */
+/* ================= 按天 EPG ================= */
 const daysWrap = document.getElementById('epg-days');
 const DAY_BASE = 'https://raw.githubusercontent.com/sumingyd/xml/main/days/';
 const pad = n => String(n).padStart(2, '0');
@@ -559,14 +675,14 @@ for (let i = 0; i < 4; i++) {
   daysWrap.appendChild(row);
 }
 
-/* 复制 + toast */
+/* ================= 复制 + toast ================= */
 let toastTimer = null;
 function copyAddr(btn) {
   const text = btn.dataset.copy;
   const done = () => {
-    document.querySelectorAll('.copy-btn.done').forEach(b => { b.classList.remove('done'); if (b !== btn) b.textContent = b.textContent === '完成' ? '复制' : b.textContent; });
-    btn.classList.add('done'); const old = btn.textContent; btn.textContent = '完成';
-    setTimeout(() => { btn.classList.remove('done'); btn.textContent = old === '完成' ? '复制' : old; }, 1600);
+    document.querySelectorAll('.copy-btn.done').forEach(b => { if (b !== btn) { b.classList.remove('done'); b.textContent = '复制'; } });
+    btn.classList.add('done'); btn.textContent = '完成';
+    setTimeout(() => { btn.classList.remove('done'); btn.textContent = '复制'; }, 1600);
     const t = document.getElementById('toast');
     t.classList.add('show');
     clearTimeout(toastTimer);
@@ -584,7 +700,7 @@ function fallbackCopy(text, done) {
   document.body.removeChild(ta);
 }
 
-/* EPG 最近更新时间（fetch 仓库的 epg-last-updated.txt） */
+/* ================= EPG 最近更新时间 ================= */
 fetch('https://raw.githubusercontent.com/sumingyd/xml/main/epg-last-updated.txt')
   .then(r => r.ok ? r.text() : Promise.reject())
   .then(t => {
@@ -597,14 +713,88 @@ fetch('https://raw.githubusercontent.com/sumingyd/xml/main/epg-last-updated.txt'
   })
   .catch(() => { document.getElementById('epg-updated').textContent = '每小时自动更新'; });
 
-/* 滚动 reveal（尊重 reduced-motion） */
-if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
-  const io = new IntersectionObserver(es => es.forEach(e => {
-    if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
-  }), { threshold: 0.12 });
-  document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+/* ================= 跑马灯 ================= */
+const CHANNELS = ['CCTV-1 综合', 'CCTV-5 体育', '湖南卫视', '东方卫视', '浙江卫视', '江苏卫视',
+  '北京卫视', '广东卫视', '深圳卫视', '山东卫视', '安徽卫视', '湖北卫视',
+  '4K 超高清', '8K 实验', 'HDR Vivid', '珠江频道', '南方卫视', '东南卫视'];
+const mt = document.getElementById('marqueeTrack');
+const half = CHANNELS.map(c => `<span>${c}<i>·</i></span>`).join('');
+mt.innerHTML = half + half; /* 两份内容实现无缝循环 */
+
+/* ================= GSAP 滚动叙事 ================= */
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const HAS_GSAP = typeof gsap !== 'undefined' && typeof ScrollTrigger !== 'undefined';
+
+if (!HAS_GSAP || REDUCED) {
+  /* 降级：无 GSAP 或用户偏好减动效 → 静态展示（JS 仅高亮第三行节目） */
+  document.documentElement.classList.add('gsap-missing');
+  const rows = document.querySelectorAll('.epg-row');
+  rows.forEach(r => r.classList.remove('playing'));
+  if (rows[3]) rows[3].classList.add('playing');
 } else {
-  document.querySelectorAll('.reveal').forEach(el => el.classList.add('in'));
+  gsap.registerPlugin(ScrollTrigger);
+  const reduceSec = innerWidth < 700; /* 小屏缩短 pin 距离 */
+
+  /* --- Scene 0 · Hero：逐字浮出 + 滚动放大淡出 --- */
+  const heroTl = gsap.timeline({ defaults: { ease: 'expo.out' } });
+  heroTl
+    .from('.hero .zh', { yPercent: 80, scale: 0.8, rotate: 3, filter: 'blur(14px)', duration: 1.15, stagger: 0.13 }, 0.15)
+    .from('.hero .en', { letterSpacing: '0.68em', opacity: 0, x: -10, duration: 1.1 }, 0.5)
+    .from('.hero .eyebrow', { y: -16, opacity: 0, duration: 0.8 }, 0.1)
+    .from('.hero p.lead', { y: 28, opacity: 0, duration: 0.9 }, 0.62)
+    .from('.hero .platform-tag', { scale: 0.7, opacity: 0, duration: 0.55, stagger: 0.07, ease: 'back.out(1.7)' }, 0.8)
+    .from('.hero-actions', { y: 26, opacity: 0, duration: 0.9 }, 1.0)
+    .from('.isle', { scale: 0.82, opacity: 0, duration: 1.6 }, 0.3);
+  gsap.to('.hero-inner', {
+    yPercent: -14, scale: 1.06, opacity: 0, filter: 'blur(6px)', ease: 'none',
+    scrollTrigger: { trigger: '.hero', start: 'top top', end: 'bottom 35%', scrub: true }
+  });
+  gsap.to('.isle', {
+    scale: 1.7, yPercent: 24, opacity: 0.35, rotate: 10, ease: 'none',
+    scrollTrigger: { trigger: '.hero', start: 'top top', end: 'bottom top', scrub: true }
+  });
+
+  /* --- Scene A · 秒开换台：pin + 能力点依次点亮 --- */
+  const caps = gsap.utils.toArray('#scene-a .cap');
+  const tlA = gsap.timeline({
+    scrollTrigger: { trigger: '#scene-a', pin: true, scrub: 0.6, end: () => `+=${reduceSec ? 1200 : 1800}` }
+  });
+  tlA.from('#scene-a h2', { scale: 0.9, y: 60, opacity: 0.25, duration: 1.2, ease: 'power2.out' }, 0)
+     .from('#scene-a .sub', { y: 34, opacity: 0, duration: 0.9 }, 0.35)
+     .from(caps, { x: -56, opacity: 0, duration: 1.0, stagger: 0.85 }, 0.7)
+     .to({}, { duration: 0.6 }); /* 尾部停留 */
+
+  /* --- Scene B · EPG：进度条填充 + 节目逐条进场 + 当前行高亮 --- */
+  const rows = gsap.utils.toArray('#scene-b .epg-row');
+  const tlB = gsap.timeline({
+    scrollTrigger: { trigger: '#scene-b', pin: true, scrub: 0.6, end: () => `+=${reduceSec ? 1300 : 2000}` }
+  });
+  tlB.from('#scene-b h2', { scale: 0.9, y: 60, opacity: 0.25, duration: 1.2, ease: 'power2.out' }, 0)
+     .from('#scene-b .sub', { y: 34, opacity: 0, duration: 0.9 }, 0.3)
+     .fromTo('.epg-bar-fill', { scaleX: 0 }, { scaleX: 1, duration: 3.2, ease: 'none' }, 0.4)
+     .from(rows, { y: 44, opacity: 0, duration: 0.9, stagger: 0.5 }, 0.5)
+     .add(() => rows.forEach(r => r.classList.remove('playing')))
+     .add(() => rows[2] && rows[2].classList.add('playing'), '-=1.8')
+     .add(() => rows[3] && (rows[2].classList.remove('playing'), rows[3].classList.add('playing')), '-=0.7')
+     .to({}, { duration: 0.5 });
+
+  /* --- Scene C · 截图展开：小卡居中放大归正，侧卡视差滑入 --- */
+  const tlC = gsap.timeline({
+    scrollTrigger: { trigger: '#scene-c', pin: true, scrub: 0.6, end: () => `+=${reduceSec ? 1000 : 1500}` }
+  });
+  tlC.fromTo('.shot-main', { scale: 0.52, borderRadius: 60, yPercent: 8 }, { scale: 1, borderRadius: 40, yPercent: 0, duration: 2.2, ease: 'power1.inOut' }, 0)
+     .from('.shot-side.l', { xPercent: -140, opacity: 0, duration: 1.1, ease: 'power2.out' }, 0.9)
+     .from('.shot-side.r', { xPercent: 140, opacity: 0, duration: 1.1, ease: 'power2.out' }, 1.05)
+     .from('.stage-caption', { opacity: 0, y: 14, duration: 0.6 }, 1.7)
+     .to({}, { duration: 0.5 });
+
+  /* --- 资源区 / 功能区 reveal --- */
+  gsap.utils.toArray('.panel, .sec-head, .sec-desc, .feature').forEach(el => {
+    gsap.from(el, {
+      y: 40, opacity: 0, duration: 0.9, ease: 'power2.out',
+      scrollTrigger: { trigger: el, start: 'top 86%' }
+    });
+  });
 }
 </script>
 </body>
