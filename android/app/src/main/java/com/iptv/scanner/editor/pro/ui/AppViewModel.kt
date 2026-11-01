@@ -1225,8 +1225,12 @@ internal var currentIsLocalFile: Boolean
 
     // 横屏分屏模式（TV/横屏播放页：左视频+控制条，右常驻面板；关闭=传统全屏）
 
-    /** 横屏分屏开关（默认开启；全屏按钮切换） */
-    internal val _landscapeSplitMode = MutableStateFlow(userPrefs.getLandscapeSplitMode())
+    /**
+     * 横屏分屏开关（默认开启；全屏按钮切换）。
+     * TV 端不进分屏布局，恒为全屏页面（手机横屏行为不变）。
+     */
+    internal val _landscapeSplitMode =
+        MutableStateFlow(_uiMode.value != UiMode.TV && userPrefs.getLandscapeSplitMode())
     val landscapeSplitMode: StateFlow<Boolean> = _landscapeSplitMode.asStateFlow()
 
     /**
@@ -1246,8 +1250,9 @@ internal var currentIsLocalFile: Boolean
      */
     var splitTreeHasFocus: Boolean = false
 
-    /** 设置横屏分屏模式 */
+    /** 设置横屏分屏模式（TV 端禁止进入分屏，直接保持全屏页面） */
     fun setLandscapeSplitMode(value: Boolean) {
+        if (_uiMode.value == UiMode.TV && value) return
         _landscapeSplitMode.value = value
         userPrefs.setLandscapeSplitMode(value)
         // 进入分屏：全屏专属悬浮层（左右侧边栏/主菜单/全屏底栏/样式预览弹窗）全部收起。
