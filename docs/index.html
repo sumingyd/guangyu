@@ -351,6 +351,45 @@ header {
   white-space: nowrap; min-width: 0;
 }
 .src-row .copy-btn { padding: 5px 11px; }
+/* 自动发现组：折叠面板 */
+.src-group.auto {
+  border: 1px solid var(--line-soft); border-radius: 12px;
+  padding: 12px 16px; margin-bottom: 12px; background: rgba(6, 20, 24, 0.35);
+}
+.src-group.auto .src-group-name {
+  cursor: pointer; margin-bottom: 0; user-select: none;
+  display: flex; align-items: center; gap: 10px;
+}
+.src-group.auto .src-group-name:hover { color: var(--accent); }
+.src-group.auto .cnt {
+  font-size: 0.62rem; color: var(--ink-faint);
+  border: 1px solid var(--line-soft); border-radius: 999px;
+  padding: 1px 9px; letter-spacing: 0.05em;
+}
+.src-group.auto .chev {
+  margin-left: auto; transition: transform 0.25s;
+  color: var(--ink-faint); font-size: 0.62rem;
+}
+.src-group.auto.open .chev { transform: rotate(90deg); }
+.src-group.auto .src-rows { display: none; margin-top: 10px; }
+.src-group.auto.open .src-rows { display: block; }
+/* 搜索框 */
+.src-search {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 16px;
+  background: rgba(6, 20, 24, 0.6); border: 1px solid var(--line);
+  border-radius: 10px; padding: 9px 14px;
+  transition: border-color 0.2s;
+}
+.src-search:focus-within { border-color: rgba(94, 234, 212, 0.4); }
+.src-search svg { width: 14px; height: 14px; fill: var(--ink-faint); flex-shrink: 0; }
+.src-search input {
+  flex: 1; background: transparent; border: none; outline: none;
+  color: var(--ink); font-family: var(--mono); font-size: 0.78rem;
+  letter-spacing: 0.04em; min-width: 0;
+}
+.src-search input::placeholder { color: var(--ink-faint); }
+.src-empty { display: none; text-align: center; color: var(--ink-faint); font-size: 0.8rem; padding: 22px 0; }
+.src-empty.show { display: block; }
 
 /* ---------- 功能清单 ---------- */
 .feature-sec { padding: 40px 0 90px; }
@@ -581,7 +620,12 @@ footer { border-top: 1px solid var(--line-soft); padding: 44px 0 56px; }
       组播地址需在运营商内网环境使用；单播源可直接播放。
     </p>
     <div class="panel" style="padding:26px 30px 22px">
+      <div class="src-search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2a8 8 0 1 0 4.9 14.3l5 5 1.4-1.4-5-5A8 8 0 0 0 10 2Zm0 2a6 6 0 1 1 0 12 6 6 0 0 1 0-12Z"/></svg>
+        <input id="src-search-input" type="text" placeholder="搜索订阅源：如 福建电信 / 移动 单播 …" oninput="filterSources(this.value)" aria-label="搜索订阅源">
+      </div>
       <div id="src-list"></div>
+      <p class="src-empty" id="src-empty">没有匹配的订阅源</p>
     </div>
   </div>
 </section>
@@ -655,11 +699,37 @@ function srcRowHTML(file, name, note) {
 }
 function renderSrcGroups(groups) {
   const el = document.getElementById('src-list');
-  el.innerHTML = groups.map(g => `
-    <div class="src-group">
+  el.innerHTML = groups.map(g => {
+    if (g.auto) {
+      /* 自动收录组：折叠面板，默认收起 */
+      return `<div class="src-group auto">
+        <p class="src-group-name" onclick="this.parentElement.classList.toggle('open')">
+          <i>${g.icon}</i>${g.name}<span class="cnt">${g.items.length}</span><span class="chev">▶</span>
+        </p>
+        <div class="src-rows">${g.items.map(it => srcRowHTML(it.file, it.name, it.note)).join('')}</div>
+      </div>`;
+    }
+    return `<div class="src-group">
       <p class="src-group-name"><i>${g.icon}</i>${g.name}</p>
       ${g.items.map(it => srcRowHTML(it.file, it.name, it.note)).join('')}
-    </div>`).join('');
+    </div>`;
+  }).join('');
+}
+/* 搜索过滤：命中行保留，搜索时自动展开折叠组 */
+function filterSources(q) {
+  q = q.trim().toLowerCase();
+  let any = false;
+  document.querySelectorAll('#src-list .src-group').forEach(g => {
+    let gAny = false;
+    g.querySelectorAll('.src-row').forEach(row => {
+      const hit = !q || row.textContent.toLowerCase().includes(q);
+      row.style.display = hit ? '' : 'none';
+      if (hit) { gAny = true; any = true; }
+    });
+    if (g.classList.contains('auto')) g.classList.toggle('open', !!q);
+    g.style.display = gAny ? '' : 'none';
+  });
+  document.getElementById('src-empty').classList.toggle('show', !!q && !any);
 }
 
 async function loadSources() {
@@ -691,7 +761,7 @@ async function loadSources() {
       Object.keys(extra).sort().forEach(dir => {
         const label = dir ? `${dir} 目录 · 全国各省市源` : '根目录 · 未分组';
         groups.push({
-          name: label, icon: '✦',
+          name: label, icon: '✦', auto: true,
           items: extra[dir].sort().map(p => ({
             file: p,
             name: decodeURIComponent(p.split('/').pop().replace(/\.m3u$/i, '')),
