@@ -577,7 +577,7 @@ footer { border-top: 1px solid var(--line-soft); padding: 44px 0 56px; }
       <h2 class="sec-title">IPTV 订阅源</h2>
     </div>
     <p class="sec-desc" style="margin-bottom:36px">
-      山东地区三大运营商直播源与江苏电信组播，持续维护更新。
+      精选山东三大运营商直播源与江苏电信组播，另收录全国各省市运营商源（自动同步仓库）。
       组播地址需在运营商内网环境使用；单播源可直接播放。
     </p>
     <div class="panel" style="padding:26px 30px 22px">
@@ -624,36 +624,87 @@ footer { border-top: 1px solid var(--line-soft); padding: 44px 0 56px; }
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
 <script>
-/* ================= 订阅源数据 ================= */
-const SRC_BASE = 'https://raw.githubusercontent.com/sumingyd/Telecom-Shandong-IPTV-List/main/';
-const SRC_GROUPS = [
+/* ================= 订阅源：sources.json 登记 + 自动发现 ================= */
+const SRC_REPO = 'sumingyd/Telecom-Shandong-IPTV-List';
+const SRC_BASE = `https://raw.githubusercontent.com/${SRC_REPO}/main/`;
+/* 兜底：sources.json 加载失败时使用的精选列表 */
+const FALLBACK_GROUPS = [
   { name: '电信 Telecom', icon: 'T', items: [
-    ['Telecom-Shandong.m3u', '山东电信 · 单播', '可直接播放'],
-    ['Telecom-Shandong-Multicast.m3u', '山东电信 · 组播', '需运营商内网 / UDProxy'],
-    ['Telecom-Jiangsu-Multicast.m3u', '江苏电信 · 组播', '需运营商内网 / UDProxy'],
+    { file: 'Telecom-Shandong.m3u', name: '山东电信 · 单播', note: '可直接播放' },
+    { file: 'Telecom-Shandong-Multicast.m3u', name: '山东电信 · 组播', note: '需运营商内网 / UDProxy' },
+    { file: 'Telecom-Jiangsu-Multicast.m3u', name: '江苏电信 · 组播', note: '需运营商内网 / UDProxy' },
   ]},
   { name: '移动 Mobile', icon: 'M', items: [
-    ['Mobile-Shandong.m3u', '山东移动 · 单播', '可直接播放'],
-    ['Mobile-Shandong-taian.m3u', '山东移动 · 泰安', '泰安地区专用'],
+    { file: 'Mobile-Shandong.m3u', name: '山东移动 · 单播', note: '可直接播放' },
+    { file: 'Mobile-Shandong-taian.m3u', name: '山东移动 · 泰安', note: '泰安地区专用' },
   ]},
   { name: '联通 Unicom', icon: 'U', items: [
-    ['Unicom-Shandong.m3u', '山东联通 · 单播', '可直接播放'],
-    ['Unicom-Shandong-Multicast.m3u', '山东联通 · 组播', '需运营商内网 / UDProxy'],
-    ['Unicom-Shandong-Multicast-qingdao.m3u', '山东联通 · 青岛组播', '青岛地区专用'],
+    { file: 'Unicom-Shandong.m3u', name: '山东联通 · 单播', note: '可直接播放' },
+    { file: 'Unicom-Shandong-Multicast.m3u', name: '山东联通 · 组播', note: '需运营商内网 / UDProxy' },
+    { file: 'Unicom-Shandong-Multicast-qingdao.m3u', name: '山东联通 · 青岛组播', note: '青岛地区专用' },
   ]},
 ];
-const srcList = document.getElementById('src-list');
-SRC_GROUPS.forEach(g => {
-  const div = document.createElement('div');
-  div.className = 'src-group';
-  div.innerHTML = `<p class="src-group-name"><i>${g.icon}</i>${g.name}</p>` + g.items.map(([f, name, note]) => `
-    <div class="src-row">
-      <span class="src-name">${name}<small>${note}</small></span>
-      <code>${f}</code>
-      <button class="copy-btn" data-copy="${SRC_BASE}${f}" onclick="copyAddr(this)">复制</button>
+
+function srcRowHTML(file, name, note) {
+  const fname = file.split('/').pop();
+  return `<div class="src-row">
+    <span class="src-name">${name}<small>${note}</small></span>
+    <code>${fname}</code>
+    <button class="copy-btn" data-copy="${SRC_BASE}${encodeURI(file)}" onclick="copyAddr(this)">复制</button>
+  </div>`;
+}
+function renderSrcGroups(groups) {
+  const el = document.getElementById('src-list');
+  el.innerHTML = groups.map(g => `
+    <div class="src-group">
+      <p class="src-group-name"><i>${g.icon}</i>${g.name}</p>
+      ${g.items.map(it => srcRowHTML(it.file, it.name, it.note)).join('')}
     </div>`).join('');
-  srcList.appendChild(div);
-});
+}
+
+async function loadSources() {
+  /* 1. 加载登记数据（失败则用内置兜底） */
+  let data = null;
+  try {
+    data = await (await fetch(SRC_BASE + 'sources.json')).json();
+  } catch (e) {}
+  const groups = (data && Array.isArray(data.groups) && data.groups.length)
+    ? data.groups : FALLBACK_GROUPS;
+  const hide = (data && data.hide) || [];
+  const registered = new Set();
+  groups.forEach(g => g.items.forEach(it => registered.add(it.file)));
+
+  /* 2. 自动发现：仓库全树中未登记的 .m3u，按目录分组（加新文件零维护） */
+  try {
+    const r = await fetch(`https://api.github.com/repos/${SRC_REPO}/git/trees/main?recursive=1`);
+    if (r.ok) {
+      const tree = await r.json();
+      const extra = {};
+      (tree.tree || []).forEach(n => {
+        if (n.type !== 'blob' || !n.path.endsWith('.m3u')) return;
+        const base = n.path.split('/').pop();
+        if (hide.includes(n.path) || hide.includes(base)) return;
+        if (registered.has(n.path) || registered.has(base)) return;
+        const dir = n.path.includes('/') ? n.path.split('/')[0] : '';
+        (extra[dir] = extra[dir] || []).push(n.path);
+      });
+      Object.keys(extra).sort().forEach(dir => {
+        const label = dir ? `${dir} 目录 · 全国各省市源` : '根目录 · 未分组';
+        groups.push({
+          name: label, icon: '✦',
+          items: extra[dir].sort().map(p => ({
+            file: p,
+            name: decodeURIComponent(p.split('/').pop().replace(/\.m3u$/i, '')),
+            note: '自动收录 · push 即更新',
+          })),
+        });
+      });
+    }
+  } catch (e) {}
+
+  renderSrcGroups(groups);
+}
+loadSources();
 
 /* ================= 按天 EPG ================= */
 const daysWrap = document.getElementById('epg-days');
