@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import QDialog
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QCheckBox, QMessageBox, QToolButton
 
@@ -205,6 +205,10 @@ class WindowMixin:
             self.panel_vis.set_all_visible(is_local_file=is_local)
             self._sync_panel_actions()
             self._restart_auto_hide_timer()
+            # 全屏切换后布局异步重算，事件循环处理完再同步视频子控件几何，
+            # 否则原生 HWND（WA_NativeWindow）停留在旧尺寸导致画面区域错位
+            QTimer.singleShot(0, self.update_floating_position)
+            QTimer.singleShot(150, self.update_floating_position)
         else:
             self._stop_auto_hide_timer()
             self.unsetCursor()
@@ -226,6 +230,9 @@ class WindowMixin:
             self.panel_vis.set_auto_hide_visible()
             self._sync_panel_actions()
             self.update_floating_position()
+            # showNormal/geometry 恢复后布局仍在异步重算，延迟补同步一次
+            QTimer.singleShot(0, self.update_floating_position)
+            QTimer.singleShot(150, self.update_floating_position)
 
     def refresh_ui(self):
         self.populate_channel_list(source='auto')

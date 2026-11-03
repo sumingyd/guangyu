@@ -565,10 +565,11 @@ def _get_ctx():
 # -------------------------------------------------------------------
 
 def get_status_json():
-    """返回 standalone 状态 JSON：channels_total / source_loading / source_message"""
+    """返回 standalone 状态 JSON：channels_total / source_loading / source_message / source_warning"""
     if not _inited:
         return _ok({'inited': False, 'channels_total': 0,
-                    'source_loading': False, 'source_message': 'not inited'})
+                    'source_loading': False, 'source_message': 'not inited',
+                    'source_warning': ''})
     try:
         ctx = _get_ctx()
         if ctx is None:
@@ -580,6 +581,7 @@ def get_status_json():
             'channels_total': len(channels),
             'source_loading': bool(status.get('loading', False)),
             'source_message': str(status.get('message', '')),
+            'source_warning': str(status.get('warning', '')),
         })
     except Exception as e:
         logger.exception('get_status_json failed')

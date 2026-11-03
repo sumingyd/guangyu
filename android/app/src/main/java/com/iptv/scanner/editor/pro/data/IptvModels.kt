@@ -23,6 +23,8 @@ data class IptvStatus(
     @SerialName("channels_total") val channelsTotal: Int = 0,
     @SerialName("source_loading") val sourceLoading: Boolean = false,
     @SerialName("source_message") val sourceMessage: String = "",
+    /** 非空表示订阅源刷新失败但已使用缓存频道（如网络异常），UI 应提示用户数据未丢失 */
+    @SerialName("source_warning") val sourceWarning: String = "",
 )
 
 @Serializable

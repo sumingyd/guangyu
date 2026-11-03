@@ -79,6 +79,25 @@ class PlaybackMixin:
         if self.play_state.is_catchup_or_timeshift:
             logger.info("回看/时移流播放到终点，自动续播")
             self.catchup_ctrl.continue_timeshift()
+            # 续播兜底：下一节目回看 URL 若拉流失败，播放器会停在停止状态
+            # （UI 状态已推进到下一节目，出现「显示回看中但实际已停止」）。
+            # 8 秒后仍未播放则退回直播。
+            def _check_catchup_resume():
+                try:
+                    pc = self.player_controller
+                    if (pc and not getattr(pc, 'is_playing', False)
+                            and not getattr(pc, 'is_paused', False)
+                            and not getattr(pc, '_user_stopped', False)
+                            and self.current_channel):
+                        tr = self.language_manager.tr
+                        logger.warning("时移/回看续播 8 秒内未成功，退回直播")
+                        self.status_bar_show_message(
+                            f"{tr('timeshift_failed_back_to_live', '时移播放失败，退回直播')}: "
+                            f"{self.current_channel.get('name', '')}")
+                        self.playback_ctrl.play_channel(self.current_channel)
+                except RuntimeError:
+                    pass
+            safe_single_shot(8000, self, _check_catchup_resume)
 
     def _do_reconnect(self, url):
         if self.player_controller._user_stopped:

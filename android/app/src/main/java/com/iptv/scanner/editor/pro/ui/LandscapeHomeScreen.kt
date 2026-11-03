@@ -413,6 +413,7 @@ private fun LandscapeChannelSplitContent(viewModel: AppViewModel) {
                         when {
                             searchQuery.isNotBlank() -> "无匹配频道"
                             status?.sourceLoading == true -> "正在加载订阅源..."
+                            !status?.sourceWarning.isNullOrBlank() -> status?.sourceWarning ?: "暂无频道"
                             else -> "暂无频道"
                         },
                         color = MaterialTheme.colorScheme.onSurfaceVariant,

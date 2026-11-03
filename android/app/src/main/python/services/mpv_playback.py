@@ -886,6 +886,14 @@ class MpvPlayback:
                                 self._facade._safe_emit(self._facade.play_state_changed, False)
                                 self._facade._safe_emit(self._facade.local_file_ended, ended_url)
                         elif reason == MPV_END_FILE_REASON_ERROR:
+                            if (self._facade._switching_channel
+                                    and not getattr(self._facade, '_switch_stop_sent', True)):
+                                # 本次 play() 没有执行过 stop 旧流（EOF 续播等场景），
+                                # 该 ERROR 是新 URL 拉流失败而非切换残留——
+                                # 不能吞掉，需走重连/退回直播，否则停在停止态
+                                self._facade._switching_channel = False
+                                self._facade.logger.warning(
+                                    "END_FILE错误: 新流加载失败（无切换stop），按重连处理")
                             if self._facade._switching_channel:
                                 self._facade.logger.debug("频道切换导致的END_FILE，忽略重连")
                                 self._facade._switching_channel = False
@@ -1779,6 +1787,9 @@ class MpvPlayback:
             self._facade.current_url = url
             self._facade._user_stopped = False
             self._facade._switching_channel = True
+            # 标记本次切换是否执行过 stop 旧流：EOF 续播等场景旧流已结束、
+            # 不会 stop，此时新 URL 的 ERROR 不属于「切换残留」，需正常处理
+            self._facade._switch_stop_sent = False
 
             reachability = self._facade._check_path_reachability(url)
             if reachability is not None:
@@ -1822,6 +1833,7 @@ class MpvPlayback:
                     with self._facade._lock:
                         if self._facade.mpv_handle and not self._facade._terminated:
                             _mpv_send_command(self._facade.mpv_handle, ['stop'])
+                    self._facade._switch_stop_sent = True
                 except Exception as e:
                     self._facade.logger.debug(f"切换前停止旧播放失败: {e}")
                 # 重置内部状态，但不发 play_state_changed 信号避免 UI 闪烁

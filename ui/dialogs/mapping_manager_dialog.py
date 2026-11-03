@@ -178,15 +178,20 @@ class MappingManagerDialog(FloatingDialog):
             _('group', 'Group'),
             _('logo_address', 'Logo Address')
         ])
-        # 序号列：普通内容列，宽度随内容自适应
+        # 列宽：序号固定窄列；标准/原始/分组可拖动调节；Logo 列伸缩兜底。
+        # 初始宽度保证不横向滚动即可见前 4 列（序号/标准名称/原始名称/分组）
         self.mapping_table.horizontalHeader().setSectionResizeMode(
-            0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+            0, QtWidgets.QHeaderView.ResizeMode.Fixed)
+        self.mapping_table.setColumnWidth(0, 44)
         self.mapping_table.horizontalHeader().setSectionResizeMode(
             1, QtWidgets.QHeaderView.ResizeMode.Interactive)
+        self.mapping_table.setColumnWidth(1, 150)
         self.mapping_table.horizontalHeader().setSectionResizeMode(
             2, QtWidgets.QHeaderView.ResizeMode.Interactive)
+        self.mapping_table.setColumnWidth(2, 180)
         self.mapping_table.horizontalHeader().setSectionResizeMode(
             3, QtWidgets.QHeaderView.ResizeMode.Interactive)
+        self.mapping_table.setColumnWidth(3, 120)
         self.mapping_table.horizontalHeader().setStretchLastSection(True)
         # 隐藏纵向行号表头：序号由第0列普通内容列承担，避免视觉上像表头
         self.mapping_table.verticalHeader().setVisible(False)

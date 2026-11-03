@@ -171,6 +171,36 @@ fun SourceManagerPanel(viewModel: AppViewModel) {
                 }
             }
 
+            // 订阅源刷新失败但已使用缓存频道：提示用户数据未丢失
+            val iptvStatusWarn by viewModel.iptvStatus.collectAsState()
+            val sourceWarningMsg = iptvStatusWarn?.sourceWarning.orEmpty()
+            if (!sourceLoading && sourceWarningMsg.isNotBlank()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Surface(
+                    color = Color(0x26FFB74D),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.WarningAmber,
+                            contentDescription = null,
+                            tint = Color(0xFFFFB74D),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = sourceWarningMsg,
+                            color = Color(0xFFFFDCA8),
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+            }
+
             // 局域网管理提示
             if (adminRunning && adminUrl.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(8.dp))
@@ -939,6 +969,35 @@ private fun SourceManagerPanelAptv(viewModel: AppViewModel) {
                     Spacer(modifier = Modifier.width(16.dp))
                 }
             )
+
+            // 订阅源刷新失败但已使用缓存频道：提示用户数据未丢失
+            val iptvStatusWarnAptv by viewModel.iptvStatus.collectAsState()
+            if (!sourceLoading && iptvStatusWarnAptv?.sourceWarning.orEmpty().isNotBlank()) {
+                Surface(
+                    color = Color(0x26FFB74D),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.WarningAmber,
+                            contentDescription = null,
+                            tint = Color(0xFFFFB74D),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = iptvStatusWarnAptv?.sourceWarning.orEmpty(),
+                            color = Color(0xFFFFDCA8),
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
             // 源类型切换（FilterChip → SelectionGroup）
             SettingsGroup("源类型") {

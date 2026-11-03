@@ -663,7 +663,7 @@ class ServerContext:
         self._epg_parser = None  # standalone 模式下使用的 EPG 解析器
         # 订阅源加载状态（独立于扫描整理功能）
         self._source_loading = False
-        self._source_load_status: Dict = {'loading': False, 'total': 0, 'loaded': 0, 'channels': 0, 'message': '空闲'}
+        self._source_load_status: Dict = {'loading': False, 'total': 0, 'loaded': 0, 'channels': 0, 'message': '空闲', 'warning': ''}
         self._source_load_lock = threading.Lock()
 
         if self._standalone:
@@ -791,12 +791,21 @@ class ServerContext:
             logger.error(f"加载频道数据失败: {e}")
 
     def reload_if_needed(self, max_age=300):
+        """独立模式：仅在内存完全没有频道时兜底异步重载（60s 节流）。
+
+        周期性自动刷新已移除：弱网下每 5 分钟反复拉源失败，会反复触发
+        「网络异常」提示打扰用户；启动时 _load_channels_from_file 线程已
+        负责首次在线刷新，后续更新由用户在订阅源面板手动触发（reload_sources）。
+        """
         if not self._standalone:
             return
-        if time.time() - self._last_load_time > max_age:
-            # 异步触发（带 _source_loading 防重入），避免同步 HTTP 拉源阻塞
-            # get_all_channels / get_status_json 轮询导致 Android 端初始化超时
-            self.reload_sources('')
+        with self._channels_lock:
+            if self._channels:
+                return
+        # 无任何频道（如启动时网络失败且无缓存可恢复）：低频兜底重试
+        if time.time() - self._last_load_time < 60:
+            return
+        self.reload_sources('')
 
     def reload_sources(self, url: str = '') -> bool:
         """重新加载订阅源（独立于扫描整理功能）
@@ -809,7 +818,7 @@ class ServerContext:
             if self._source_loading:
                 return False
             self._source_loading = True
-            self._source_load_status = {'loading': True, 'total': 0, 'loaded': 0, 'channels': 0, 'message': '开始加载'}
+            self._source_load_status = {'loading': True, 'total': 0, 'loaded': 0, 'channels': 0, 'message': '开始加载', 'warning': ''}
         threading.Thread(target=self._reload_sources_worker, args=(url,), daemon=True).start()
         return True
 
@@ -822,7 +831,7 @@ class ServerContext:
                     self._source_loading = False
                     self._source_load_status = {
                         'loading': False, 'total': 0, 'loaded': 0,
-                        'channels': 0, 'message': '配置未初始化'}
+                        'channels': 0, 'message': '配置未初始化', 'warning': ''}
                 return
 
             # 收集要加载的源
@@ -843,7 +852,7 @@ class ServerContext:
                     self._source_loading = False
                     self._source_load_status = {
                         'loading': False, 'total': 0, 'loaded': 0,
-                        'channels': 0, 'message': '无订阅源'}
+                        'channels': 0, 'message': '无订阅源', 'warning': ''}
                 return
 
             all_channels: List[Dict] = []
@@ -909,6 +918,7 @@ class ServerContext:
             # 合并策略：保留本地频道（扫描/导入，无 source 字段），
             # 替换所有订阅频道（有 source 字段）为本次加载的结果。
             # 这样禁用/删除源后，其频道会被正确移除。
+            cache_dirty = True
             with self._channels_lock:
                 local_channels = [
                     c for c in self._channels
@@ -924,19 +934,33 @@ class ServerContext:
                     self._channels = all_channels + local_channels
                     ch_count = len(self._channels)
                     logger.info(f"订阅源 {len(all_channels)} 个 + 本地保留 {len(local_channels)} 个（扫描/导入）")
+                elif errors:
+                    # 存在失败源且无一成功（网络故障/源暂时损坏）：
+                    # 保留现有频道（含订阅频道），不覆盖缓存。
+                    # 否则瞬时网络抖动会把可用订阅数据洗掉并污染缓存，
+                    # 重启后也无法恢复（频道全空的根因）。
+                    with self._channels_lock:
+                        ch_count = len(self._channels)
+                    logger.warning(
+                        f"订阅源加载全部失败（{';'.join(errors[:3])}），"
+                        f"保留现有 {ch_count} 个频道，不覆盖缓存")
+                    cache_dirty = False
                 else:
-                    # 所有源都禁用/删除/加载失败时，只保留本地频道
+                    # 所有源被禁用/删除：只保留本地频道
                     self._channels = local_channels
                     ch_count = len(self._channels)
                     logger.info(f"订阅源无频道，保留本地 {len(local_channels)} 个")
-            self._save_channels_to_cache()
+            if cache_dirty:
+                self._save_channels_to_cache()
             self._last_load_time = time.time()
             with self._source_load_lock:
                 self._source_loading = False
                 self._source_load_status = {
                     'loading': False, 'total': len(sources),
                     'loaded': len(sources), 'channels': ch_count,
-                    'message': f'完成：{ch_count} 个频道'}
+                    'message': f'完成：{ch_count} 个频道',
+                    # 全部源下载失败时保留缓存频道，提示用户网络异常而非数据丢失
+                    'warning': ('' if cache_dirty else '网络异常，已使用缓存频道')}
             logger.info(f"订阅源加载完成，共 {ch_count} 个频道")
 
             # M3U 内嵌 EPG 后台异步加载：频道已入库，EPG 下载/解析不阻塞加载完成状态
