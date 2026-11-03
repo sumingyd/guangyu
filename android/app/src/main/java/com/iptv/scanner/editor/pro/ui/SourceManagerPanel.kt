@@ -186,7 +186,7 @@ fun SourceManagerPanel(viewModel: AppViewModel) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            Icons.Default.WarningAmber,
+                            Icons.Default.Warning,
                             contentDescription = null,
                             tint = Color(0xFFFFB74D),
                             modifier = Modifier.size(18.dp)
@@ -983,7 +983,7 @@ private fun SourceManagerPanelAptv(viewModel: AppViewModel) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            Icons.Default.WarningAmber,
+                            Icons.Default.Warning,
                             contentDescription = null,
                             tint = Color(0xFFFFB74D),
                             modifier = Modifier.size(18.dp)
