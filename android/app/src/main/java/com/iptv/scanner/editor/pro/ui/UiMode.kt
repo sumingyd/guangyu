@@ -88,6 +88,22 @@ object UiModeDetector {
             return UiMode.TV
         }
 
+        // 4. 大屏兜底（智慧屏/魔改盒子：声明触屏、无 leanback、uiMode 非 TELEVISION）。
+        //    电视/盒子的硬件特征：无蜂窝电话（平板可能有）、无相机（平板标配前置相机）。
+        //    屏幕最短边 ≥ 600dp 且两者皆无 → 视为电视；手机（有电话）、平板（有相机）不受影响
+        val pm = context.packageManager
+        val sw = minOf(
+            context.resources.configuration.screenWidthDp,
+            context.resources.configuration.screenHeightDp
+        )
+        if (sw >= 600
+            && !pm.hasSystemFeature(android.content.pm.PackageManager.FEATURE_TELEPHONY)
+            && !pm.hasSystemFeature(android.content.pm.PackageManager.FEATURE_CAMERA_ANY)
+        ) {
+            Log.i("UiModeDetector", "big screen no-telephony no-camera sw=${sw}dp -> TV")
+            return UiMode.TV
+        }
+
         return UiMode.PHONE
     }
 }
