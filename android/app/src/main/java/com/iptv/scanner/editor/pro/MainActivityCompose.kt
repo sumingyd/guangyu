@@ -514,8 +514,11 @@ class MainActivityCompose : ComponentActivity() {
                 return true
             }
             // 播放器模式返回首页（横屏：全屏→回分屏，分屏→回首页；竖屏直接回首页）
+            // TV 无独立首页：全屏即主页，BACK 打开自带的频道列表侧边栏
             if (!viewModel.showHome.value) {
-                if (isLandscapeMode() && !viewModel.landscapeSplitMode.value) {
+                if (isTvMode()) {
+                    viewModel.setLandscapeSidebarVisible(true)
+                } else if (isLandscapeMode() && !viewModel.landscapeSplitMode.value) {
                     viewModel.setLandscapeSplitMode(true)
                 } else {
                     viewModel.showHomeScreen()

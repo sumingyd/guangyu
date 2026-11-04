@@ -284,8 +284,11 @@ fun MainPlayerScreen(viewModel: AppViewModel) {
             }
             !showHome -> {
                 // 竖屏有首页可回；横屏（TV 风格）：全屏→分屏→首页→退出确认
+                // TV 无独立首页：全屏即主页，BACK 打开自带的频道列表侧边栏
                 if (layoutLandscape) {
-                    if (!viewModel.landscapeSplitMode.value) {
+                    if (uiMode.isTV) {
+                        viewModel.setLandscapeSidebarVisible(true)
+                    } else if (!viewModel.landscapeSplitMode.value) {
                         viewModel.setLandscapeSplitMode(true)
                     } else {
                         viewModel.showHomeScreen()
@@ -343,6 +346,11 @@ fun MainPlayerScreen(viewModel: AppViewModel) {
 
     // 所有模式初始自动隐藏控制面板（几秒后自动隐藏，避免一直显示）
     LaunchedEffect(uiMode) {
+        // TV 无独立首页：_showHome 初始为 true（竖屏首页用），TV 组合后立即纠正为 false，
+        // 让 DPAD 按键走全局切台/面板逻辑（而非发给不存在的首页焦点树）
+        if (uiMode.isTV && viewModel.showHome.value) {
+            viewModel.showPlayerScreen()
+        }
         viewModel.showControlsAutoHide()
     }
 
@@ -368,11 +376,11 @@ fun MainPlayerScreen(viewModel: AppViewModel) {
     // 修复：关闭自动续播后横屏启动直接进入空白播放页面的问题
     // 使用 landscapeSidebarVisible（与触控分区一致），避免 tvUnifiedPanelOpen 造成双重侧边栏
     // 仅在首次进入时触发一次，用户关闭后不再自动弹出
-    // 首页（showHome）可见时不弹：首页左右双屏已提供频道选择
+    // 首页（showHome）可见时不弹：首页左右双屏已提供频道选择（TV 无首页概念，不受此限制）
     val currentIdx by viewModel.currentIdx.collectAsState()
     var autoSidebarTriggered by remember { mutableStateOf(false) }
     LaunchedEffect(isLandscape, fileLoaded, currentIdx) {
-        if (!autoSidebarTriggered && isLandscape && currentIdx < 0 && !fileLoaded && !multiViewState.active && !showHome) {
+        if (!autoSidebarTriggered && isLandscape && currentIdx < 0 && !fileLoaded && !multiViewState.active && (!showHome || uiMode.isTV)) {
             autoSidebarTriggered = true
             viewModel.setLandscapeSidebarVisible(true)
         }
@@ -988,11 +996,12 @@ viewModel.mpv.setMute(savedMute)
                         viewModel = viewModel,
                         primaryPlayer = { primaryPlayer() },
                         videoAspectRatio = aspectRatio,
-                        homeOverlay = showHome
+                        homeOverlay = showHome && !uiMode.isTV
                     )
-                    // TV/横屏首页：左右双屏（左宫格 + 右EPG + 玻璃TAB），覆盖在播放层上
+                    // 横屏首页：左右双屏（左宫格 + 右EPG + 玻璃TAB），覆盖在播放层上
                     // （播放器保持组合树中，Surface 不销毁，与竖屏首页策略一致）
-                    if (showHome) {
+                    // TV 无独立首页：直接进入全屏模式（全屏自带频道列表/菜单/底栏）
+                    if (showHome && !uiMode.isTV) {
                         // DPI 自适应缩放（基准 900dp、下限 0.60）：
                         // 手机横屏/小平板进一步缩小整页 UI 提升内容密度，TV 端 ≥900dp 不缩放
                         val homeOrigDensity = androidx.compose.ui.platform.LocalDensity.current

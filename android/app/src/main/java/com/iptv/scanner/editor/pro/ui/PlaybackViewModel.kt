@@ -419,7 +419,8 @@ internal fun AppViewModel.restoreLastChannel(autoPlayFirstFallback: Boolean) {
                 Log.i(AppViewModel.TAG, "restoreLastChannel: restoring '$lastUrl' at idx=$lastIdx")
                 playChannel(lastIdx, silent = true)
                 // 横屏（TV 风格）：后台恢复播放但停留在首页（Mini 播放条可见），由用户点击进入播放页
-                if (autoPlayFirstFallback) _showHome.value = true
+                // TV 无独立首页：直接进入全屏播放
+                if (autoPlayFirstFallback && _uiMode.value != UiMode.TV) _showHome.value = true
                 return
             }
             Log.i(AppViewModel.TAG, "restoreLastChannel: last URL '$lastUrl' not found in ${channels.size} channels, playing first")
@@ -434,7 +435,8 @@ internal fun AppViewModel.restoreLastChannel(autoPlayFirstFallback: Boolean) {
     }
     playChannel(0, silent = true)
     // 横屏（TV 风格）：后台播放但停留在首页（Mini 播放条可见），由用户点击进入播放页
-    _showHome.value = true
+    // TV 无独立首页：直接进入全屏播放
+    if (_uiMode.value != UiMode.TV) _showHome.value = true
 }
 
 internal fun AppViewModel.loadUserPrefs() {
@@ -1163,6 +1165,11 @@ if (mpvSingleton == _player.value) mpvSingleton.suppressFileError()
 
 
 internal fun AppViewModel.showHomeScreen() {
+    // TV 无独立首页：全屏即主页，打开自带的频道列表侧边栏
+    if (_uiMode.value == UiMode.TV) {
+        _landscapeSidebarVisible.value = true
+        return
+    }
 _showHome.value = true
 // 播放器被移除渲染，需要暂停播放（避免后台播放占用资源）
 // 如果需要后台继续播放音频，注释掉这行
