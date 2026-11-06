@@ -67,11 +67,29 @@ def load_mappings_from_file(file_path: str) -> Dict[str, dict]:
         return {}
 
 
+def _looks_like_csv(content: str, source_hint: str = '') -> bool:
+    """判断映射文本是否为 CSV 格式。
+
+    不能再用 str.isalpha() 判断首字符：中文同样满足 isalpha()，会把
+    "CCTV1,中央一台" 这类 TXT 映射误判成 CSV 并静默解析为空。
+    """
+    hint = (source_hint or '').lower()
+    if hint.endswith('.csv'):
+        return True
+    if hint.endswith('.txt'):
+        return False
+    head = content.lstrip('\ufeff').strip()
+    if not head:
+        return False
+    first_line = head.splitlines()[0].lstrip('\ufeff')
+    return 'standard_name' in first_line and ',' in first_line
+
+
 def _parse_mappings_content(content: str, source_hint: str = '') -> Dict[str, dict]:
     """从文本内容解析映射规则"""
     mappings = {}
     try:
-        if source_hint.lower().endswith('.csv') or (content.strip() and content.strip()[0].isalpha()):
+        if _looks_like_csv(content, source_hint):
             import csv
             from io import StringIO
             reader = csv.DictReader(StringIO(content))
@@ -150,18 +168,80 @@ def create_reverse_mappings(mappings: Dict[str, dict]) -> Dict[str, dict]:
     return reverse_mappings
 
 
+def _atomic_write_json(path: str, payload) -> None:
+    """原子写入 JSON 文件，避免进程中断/磁盘满产生半截文件导致缓存损坏"""
+    import tempfile
+    directory = os.path.dirname(path) or '.'
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=directory, suffix='.tmp', prefix=os.path.basename(path) + '.')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _atomic_write_text(path: str, text: str) -> None:
+    """原子写入文本文件"""
+    import tempfile
+    directory = os.path.dirname(path) or '.'
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=directory, suffix='.tmp', prefix=os.path.basename(path) + '.')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _decode_remote_text(response) -> str:
+    """解码远端映射内容：优先 UTF-8，其次 GB18030，最后替换非法字符"""
+    raw = response.content
+    for encoding in ('utf-8-sig', 'gb18030'):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode('utf-8', errors='replace')
+
+
 def load_remote_mappings() -> Dict[str, dict]:
-    """加载远程映射规则 - 简化版本，不重试，不阻塞"""
+    """加载远程映射规则（失败返回空字典，兼容旧调用）"""
+    return try_load_remote_mappings() or {}
+
+
+def try_load_remote_mappings():
+    """加载远程映射规则。
+
+    Returns:
+        成功时返回映射字典；失败时返回 None，供调用方区分“失败”与“确实为空”，
+        避免用空结果覆盖本地缓存。
+    """
     # 检查requests模块是否可用
     if not REQUESTS_AVAILABLE:
         logger.warning("requests模块不可用，无法加载远程映射")
-        return {}
+        return None
 
     try:
         config = ConfigManager()
         try:
-            remote_url = config.get('channel_mappings', 'remote_url', DEFAULT_REMOTE_URL)
-        except AttributeError:
+            remote_url = config.get_value('channel_mappings', 'remote_url', DEFAULT_REMOTE_URL) or DEFAULT_REMOTE_URL
+        except Exception as e:
+            logger.debug(f"读取远程映射URL配置失败: {e}")
             remote_url = DEFAULT_REMOTE_URL
 
         # 简化版本：只尝试一次，不重试
@@ -176,23 +256,19 @@ def load_remote_mappings() -> Dict[str, dict]:
             response.raise_for_status()
 
             # 根据文件扩展名确定格式
-            if remote_url.endswith('.csv') or response.url.endswith('.csv'):
-                file_ext = '.csv'
-            else:
-                file_ext = '.txt'
-
-            mappings = _parse_mappings_content(response.text, remote_url)
-            logger.info(f"成功加载远程映射规则，共 {len(mappings)} 条映射")
-            return mappings
+            source_hint = response.url
+            facts = _parse_mappings_content(_decode_remote_text(response), source_hint)
+            logger.info(f"成功加载远程映射规则，共 {len(facts)} 条映射")
+            return facts
 
         except Exception as e:
-            # 只记录一次错误，不重试
+            # 只记录一次错误，不重试；返回 None 由调用方决定是否保留缓存
             logger.warning(f"加载远程映射失败: {e}, 使用本地缓存")
-            return {}
+            return None
 
     except Exception as e:
         logger.warning(f"加载远程映射失败: {e}, 使用本地映射")
-        return {}
+        return None
 
 
 class ChannelMappingManager:
@@ -238,20 +314,27 @@ class ChannelMappingManager:
 
         return {}
 
-    def _load_and_cache_remote_mappings(self) -> Dict[str, dict]:
-        """加载远程映射并缓存到本地"""
-        mappings = load_remote_mappings()
+    def _load_and_cache_remote_mappings(self):
+        """加载远程映射并缓存到本地。
 
-        # 缓存到本地文件
+        Returns:
+            成功时返回映射字典；网络/解析失败时返回 None，且不写缓存，
+            避免用空结果覆盖已有映射缓存。
+        """
+        mappings = try_load_remote_mappings()
+        if mappings is None:
+            self.logger.warning("远程映射加载失败，保留本地缓存")
+            return None
+
+        # 缓存到本地文件（原子写入，防止中断损坏）
         try:
             with self.cache_lock:
                 cache_data = {
                     'timestamp': time.time(),
                     'mappings': mappings
                 }
-                with open(self.cache_file, 'w', encoding='utf-8') as f:
-                    json.dump(cache_data, f, ensure_ascii=False, indent=2)
-                self.logger.debug(f"远程映射已缓存到本地，共 {len(mappings)} 条映射")
+                _atomic_write_json(self.cache_file, cache_data)
+            self.logger.debug(f"远程映射已缓存到本地，共 {len(mappings)} 条映射")
         except Exception as e:
             self.logger.error(f"缓存远程映射失败: {e}")
 
@@ -297,11 +380,10 @@ class ChannelMappingManager:
         return migrated
 
     def _save_user_mappings(self):
-        """保存用户自定义映射规则"""
+        """保存用户自定义映射规则（原子写入）"""
         try:
             with self.user_mappings_lock:
-                with open(self.user_mappings_file, 'w', encoding='utf-8') as f:
-                    json.dump(self.user_mappings, f, ensure_ascii=False, indent=2)
+                _atomic_write_json(self.user_mappings_file, self.user_mappings)
         except Exception as e:
             self.logger.error(f"保存用户映射失败: {e}")
 
@@ -316,11 +398,17 @@ class ChannelMappingManager:
         return {}
 
     def _save_channel_fingerprints(self):
-        """保存频道指纹数据"""
+        """保存频道指纹数据（原子写入，并限制文件无限增长）"""
         try:
             with self.fingerprint_lock:
-                with open(self.fingerprint_file, 'w', encoding='utf-8') as f:
-                    json.dump(self.channel_fingerprints, f, ensure_ascii=False, indent=2)
+                # 指纹文件会随扫描量无限膨胀：超过阈值时丢弃仅出现 1-2 次的弱证据
+                if len(self.channel_fingerprints) > 20000:
+                    self.channel_fingerprints = {
+                        k: v for k, v in self.channel_fingerprints.items()
+                        if v.get('count', 0) >= 3
+                    }
+                    self.logger.info(f"频道指纹条目过多，已精简为 {len(self.channel_fingerprints)} 条")
+                _atomic_write_json(self.fingerprint_file, self.channel_fingerprints)
         except Exception as e:
             self.logger.error(f"保存频道指纹失败: {e}")
 
@@ -638,7 +726,7 @@ class ChannelMappingManager:
         return list(set(suggestions))
 
     def get_mapping_entries(self) -> List[dict]:
-        """获取映射文件中的所有映射条目，按文件中的顺序返回"""
+        """获取映射文件中的所有映射条目，按标准名称排序返回（与展示顺序一致）"""
         entries = []
         try:
             # 获取组合映射中的所有条目
@@ -705,43 +793,54 @@ class ChannelMappingManager:
 
             try:
                 head_resp = _http_head(remote_url, timeout=5, allow_redirects=True)
-                remote_etag = ''
-                if head_resp.status_code == 200:
-                    remote_etag = head_resp.headers.get('ETag', '')
-                    remote_last_modified = head_resp.headers.get('Last-Modified', '')
+                try:
+                    remote_etag = ''
+                    if head_resp.status_code == 200:
+                        remote_etag = head_resp.headers.get('ETag', '')
+                        remote_last_modified = head_resp.headers.get('Last-Modified', '')
 
-                    etag_file = self.cache_file + '.etag'
-                    local_etag = ''
-                    if os.path.exists(etag_file):
-                        with open(etag_file, 'r') as f:
-                            local_etag = f.read().strip()
+                        etag_file = self.cache_file + '.etag'
+                        local_etag = ''
+                        if os.path.exists(etag_file):
+                            with open(etag_file, 'r', encoding='utf-8') as f:
+                                local_etag = f.read().strip()
 
-                    if remote_etag and local_etag and remote_etag != local_etag:
-                        result['has_update'] = True
-                        return result
-                    if not remote_etag and not remote_last_modified:
-                        pass
-                else:
-                    with _http_get(remote_url, timeout=5, stream=True) as get_resp:
-                        if get_resp.status_code == 200:
-                            content_hash = hashlib.md5(get_resp.content).hexdigest()
-                            hash_file = self.cache_file + '.hash'
-                            local_hash = ''
-                            if os.path.exists(hash_file):
-                                with open(hash_file, 'r') as f:
-                                    local_hash = f.read().strip()
-                            if local_hash and content_hash != local_hash:
-                                result['has_update'] = True
-                            result['remote_count'] = len(_parse_mappings_content(
-                                get_resp.text, remote_url))
-                            if not local_hash:
-                                with open(hash_file, 'w') as f:
-                                    f.write(content_hash)
-                            if remote_etag:
-                                etag_file = self.cache_file + '.etag'
-                                with open(etag_file, 'w') as f:
-                                    f.write(remote_etag)
+                        if remote_etag and local_etag and remote_etag != local_etag:
+                            result['has_update'] = True
                             return result
+                        if not remote_etag and not remote_last_modified:
+                            pass
+                    else:
+                        with _http_get(remote_url, timeout=10, stream=True) as get_resp:
+                            if get_resp.status_code == 200:
+                                content = get_resp.content
+                                content_hash = hashlib.md5(content).hexdigest()
+                                hash_file = self.cache_file + '.hash'
+                                local_hash = ''
+                                if os.path.exists(hash_file):
+                                    with open(hash_file, 'r', encoding='utf-8') as f:
+                                        local_hash = f.read().strip()
+                                if local_hash and content_hash != local_hash:
+                                    result['has_update'] = True
+                                decoded = content.decode('utf-8-sig', errors='replace')
+                                result['remote_count'] = len(_parse_mappings_content(decoded, remote_url))
+                                # 无论本地是否已有记录都要更新哈希，否则“有更新”会一直保持
+                                try:
+                                    _atomic_write_text(hash_file, content_hash)
+                                except Exception as e:
+                                    logger.debug(f"写入映射哈希失败: {e}")
+                                if remote_etag:
+                                    etag_file = self.cache_file + '.etag'
+                                    try:
+                                        _atomic_write_text(etag_file, remote_etag)
+                                    except Exception as e:
+                                        logger.debug(f"写入映射ETag失败: {e}")
+                                return result
+                finally:
+                    try:
+                        head_resp.close()
+                    except Exception:
+                        pass
             except requests.exceptions.RequestException as e:
                 result['error'] = str(e)
 
@@ -751,9 +850,13 @@ class ChannelMappingManager:
         return result
 
     def refresh_cache(self):
-        """刷新远程映射缓存"""
-        self.remote_mappings = self._load_and_cache_remote_mappings()
+        """刷新远程映射缓存（失败时保留现有映射，不清空）"""
+        new_remote = self._load_and_cache_remote_mappings()
+        if new_remote is None:
+            self.logger.warning("远程映射刷新失败，保留现有映射")
+            return False
         with self._mapping_lock:
+            self.remote_mappings = new_remote
             self.combined_mappings = self._combine_mappings()
             self.reverse_mappings = create_reverse_mappings(self.combined_mappings)
             self._normalized_index = self._build_normalized_index()
@@ -762,21 +865,23 @@ class ChannelMappingManager:
                 remote_url = DEFAULT_REMOTE_URL
                 try:
                     config = ConfigManager()
-                    remote_url = config.get('channel_mappings', 'remote_url', DEFAULT_REMOTE_URL)
+                    remote_url = config.get_value('channel_mappings', 'remote_url', DEFAULT_REMOTE_URL) or DEFAULT_REMOTE_URL
                 except Exception:
                     pass
                 try:
                     head_resp = _http_head(remote_url, timeout=5)
-                    if head_resp.status_code == 200 and head_resp.headers.get('ETag'):
-                        etag_file = self.cache_file + '.etag'
-                        with open(etag_file, 'w') as f:
-                            f.write(head_resp.headers['ETag'])
-                    head_resp.close()
+                    try:
+                        if head_resp.status_code == 200 and head_resp.headers.get('ETag'):
+                            etag_file = self.cache_file + '.etag'
+                            _atomic_write_text(etag_file, head_resp.headers['ETag'])
+                    finally:
+                        head_resp.close()
                 except Exception as e:
                     logger.debug(f"保存ETag失败: {e}")
         except Exception as e:
             logger.debug(f"刷新频道映射失败: {e}")
         self.logger.info("远程映射缓存已刷新")
+        return True
 
 
 def get_mapping_manager():
@@ -805,6 +910,9 @@ class MappingManagerProxy:
         def _do_refresh():
             try:
                 new_remote = self._manager._load_and_cache_remote_mappings()
+                if new_remote is None:
+                    self._manager.logger.warning("后台刷新远程映射失败，保留现有映射")
+                    return
                 new_combined = self._manager._combine_mappings()
                 new_reverse = create_reverse_mappings(new_combined)
                 new_index = self._manager._build_normalized_index()

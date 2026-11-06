@@ -16,16 +16,36 @@ from utils.general_utils import redact_url
 logger = logging.getLogger('server.routes')
 
 # --- 安全配置 ---
-# 认证 Token：通过环境变量 ISEP_AUTH_TOKEN 或配置文件 [Server] auth_token 设置
-# 为空时自动生成随机 Token 并输出到日志，防止局域网未授权访问
-_AUTH_TOKEN = os.environ.get('ISEP_AUTH_TOKEN', '').strip()
-if not _AUTH_TOKEN:
+# 认证 Token 优先级：环境变量 ISEP_AUTH_TOKEN > config.ini [Server] auth_token > 自动生成并持久化
+# 持久化后客户端重启无需重新获取 Token，避免每次启动随机 Token 导致已登录客户端 401
+def _resolve_auth_token() -> str:
+    env_token = os.environ.get('ISEP_AUTH_TOKEN', '').strip()
+    if env_token:
+        return env_token
+    try:
+        from core.config_manager import ConfigManager
+        config = ConfigManager()
+        token = (config.get_value('Server', 'auth_token', '') or '').strip()
+        if token:
+            return token
+        token = _secrets_mod.token_hex(16)
+        config.set_value('Server', 'auth_token', token)
+        config.save_config(immediate=True)
+        logger.info('已在 config.ini [Server] auth_token 中生成并保存认证 Token')
+        return token
+    except Exception as e:
+        logger.warning(f'读取/持久化认证 Token 失败，使用进程内临时 Token: {e}')
+        return _secrets_mod.token_hex(16)
 
-    _AUTH_TOKEN = _secrets_mod.token_hex(16)
-    logger.warning(f'未设置 ISEP_AUTH_TOKEN 环境变量，已自动生成认证 Token（前8位）: {_AUTH_TOKEN[:8]}...')
+
+_AUTH_TOKEN = _resolve_auth_token()
+# 认证请求头名称（PC 管理面板使用 X-Auth-Token）
+_AUTH_HEADER_NAME = 'X-Auth-Token'
 
 # 允许的流代理 URL 协议
 _ALLOWED_STREAM_PROTOCOLS = {'http', 'https', 'rtsp', 'rtmp', 'rtp', 'udp', 'srt'}
+# 可被流代理转发的协议（aiohttp 只支持 http/https）
+_PROXYABLE_STREAM_PROTOCOLS = {'http', 'https'}
 
 
 def get_auth_token() -> str:
@@ -34,20 +54,57 @@ def get_auth_token() -> str:
 
 # 共享 aiohttp ClientSession（流代理用），延迟初始化
 _stream_session = None
+_stream_session_loop = None
 _stream_session_lock = asyncio.Lock()
+
+# 流代理超时：total=None 防止长连接在 30s 后被强制中断；只限制连接与单次读取
+_STREAM_TIMEOUT = None
+
+
+def _get_stream_timeout():
+    global _STREAM_TIMEOUT
+    if _STREAM_TIMEOUT is None:
+        import aiohttp
+        _STREAM_TIMEOUT = aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=60)
+    return _STREAM_TIMEOUT
 
 
 async def _get_stream_session():
     """获取共享的 aiohttp ClientSession，避免每个请求创建新连接池"""
-    global _stream_session
+    global _stream_session, _stream_session_loop
+    loop = asyncio.get_running_loop()
     async with _stream_session_lock:
-        if _stream_session is None or _stream_session.closed:
+        # 服务器重启会换事件循环，旧 Session 绑定旧 loop 必须重建
+        if (_stream_session is None or _stream_session.closed
+                or _stream_session_loop is not loop):
             import aiohttp
             _stream_session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30),
+                timeout=_get_stream_timeout(),
                 connector=aiohttp.TCPConnector(limit=20, limit_per_host=5)
             )
+            _stream_session_loop = loop
         return _stream_session
+
+
+_DNS_CACHE: dict = {}
+_DNS_CACHE_TTL = 60.0
+
+
+def _resolve_host_ips(host: str) -> list:
+    """解析主机名到 IP 列表，带 60s 缓存；解析失败返回空列表"""
+    import socket
+    import time as _time
+    now = _time.time()
+    cached = _DNS_CACHE.get(host)
+    if cached and now - cached[0] < _DNS_CACHE_TTL:
+        return cached[1]
+    try:
+        infos = socket.getaddrinfo(host, None)
+        ips = sorted({info[4][0] for info in infos})
+    except Exception:
+        ips = []
+    _DNS_CACHE[host] = (now, ips)
+    return ips
 
 
 def _is_private_ip(host: str) -> bool:
@@ -61,8 +118,20 @@ def _is_private_ip(host: str) -> bool:
             return False
         return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
     except ValueError:
-        # 非 IP 格式的主机名，保守视为私有（防止 DNS rebinding 绕过）
-        return True
+        # 域名：解析后逐个校验，全部为公网地址才放行（防止 DNS rebinding 绕过）
+        ips = _resolve_host_ips(host)
+        if not ips:
+            return True
+        for addr in ips:
+            try:
+                ip = ipaddress.ip_address(addr)
+            except ValueError:
+                return True
+            if ip.is_multicast:
+                continue
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_unspecified:
+                return True
+        return False
 
 
 def _is_safe_stream_url(url: str) -> tuple:
@@ -80,7 +149,7 @@ def _is_safe_stream_url(url: str) -> tuple:
         if not host:
             return False, '无法解析主机名'
         # 仅对 HTTP/HTTPS 执行 SSRF 防护（rtp/udp/rtsp 等流媒体协议豁免）
-        if scheme in ('http', 'https') and _is_private_ip(host):
+        if scheme in _PROXYABLE_STREAM_PROTOCOLS and _is_private_ip(host):
             return False, f'内网地址不允许代理: {host}'
         return True, ''
     except Exception as e:
@@ -184,6 +253,17 @@ def _get_all_channels():
     if ctx:
         return ctx.get_all_channels()
     return []
+
+
+def _call_model_on_qt_thread(model, func, *args, **kwargs):
+    """Qt 模型只能在所属线程操作：跨线程调用投递回主线程，避免界面错乱/崩溃"""
+    try:
+        from utils.thread_safety import invoke_on_thread
+        invoke_on_thread(model, lambda: func(*args, **kwargs))
+        return True
+    except Exception as e:
+        logger.warning(f'操作频道模型失败: {e}')
+        return False
 
 
 _I18N = {
@@ -313,7 +393,11 @@ def _t(lang, key, default=''):
 
 
 def create_app() -> web.Application:
-    app = web.Application(middlewares=[auth_middleware, error_middleware, cors_middleware])
+    # client_max_size：aiohttp 默认 1MB，导入较大的 M3U 内容会被 413 拒绝
+    app = web.Application(
+        middlewares=[auth_middleware, error_middleware, cors_middleware],
+        client_max_size=32 * 1024 * 1024,
+    )
     app.router.add_get('/', handle_index)
     app.router.add_get('/api/status', handle_status)
     app.router.add_get('/api/m3u', handle_m3u)
@@ -466,16 +550,19 @@ def _is_auth_required(request):
 async def auth_middleware(request, handler):
     """API 认证中间件
     通过环境变量 ISEP_AUTH_TOKEN 或配置设置认证 Token。
-    客户端需在请求头中携带 Authorization: Bearer <token> 或查询参数 ?token=<token>。
+    客户端可任选一种方式携带 Token：Authorization: Bearer <token>、
+    X-Auth-Token: <token> 或查询参数 ?token=<token>。
     未配置 Token 时免认证（适用于 localhost 场景）。
     """
     if not _is_auth_required(request):
         return await handler(request)
-    # 从 Authorization 头或查询参数获取 token
+    # 支持三种携带方式：Authorization: Bearer、?token=、X-Auth-Token（PC 管理面板）
     auth_header = request.headers.get('Authorization', '')
     token = ''
     if auth_header.startswith('Bearer '):
         token = auth_header[7:].strip()
+    if not token:
+        token = (request.headers.get(_AUTH_HEADER_NAME, '') or '').strip()
     if not token:
         token = request.rel_url.query.get('token', '').strip()
     if not _secrets_mod.compare_digest(token, _AUTH_TOKEN):
@@ -499,7 +586,7 @@ async def cors_middleware(request, handler):
     else:
         resp.headers['Access-Control-Allow-Origin'] = 'null'
     resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-    resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Auth-Token'
     return resp
 
 
@@ -927,7 +1014,7 @@ async def handle_channel_update(request):
     if not data:
         return _json_error('没有可更新的字段')
     if model and 0 <= idx < model.rowCount():
-        model.update_channel(idx, data)
+        _call_model_on_qt_thread(model, model.update_channel, idx, data)
     elif ctx and hasattr(ctx, '_channels') and 0 <= idx < len(ctx._channels):
         # standalone 模式（Android）：调用带锁方法
         ctx.update_channel(idx, data)
@@ -953,7 +1040,7 @@ async def handle_channel_delete(request):
     except ValueError:
         return _json_error('无效的频道ID')
     if model and 0 <= idx < model.rowCount():
-        model.remove_channel(idx)
+        _call_model_on_qt_thread(model, model.remove_channel, idx)
     elif ctx and hasattr(ctx, '_channels') and 0 <= idx < len(ctx._channels):
         # standalone 模式（Android）：调用带锁方法
         ctx.delete_channel(idx)
@@ -985,7 +1072,7 @@ async def handle_channel_add(request):
     ctx = get_context()
     model = get_channel_model() if ctx else None
     if model:
-        model.add_channel(data)
+        _call_model_on_qt_thread(model, model.add_channel, data)
     elif ctx and hasattr(ctx, '_channels'):
         # standalone 模式（Android）：调用带锁方法
         ctx.add_channel(data)
@@ -1014,8 +1101,8 @@ async def handle_channels_import(request):
             c.setdefault('id', base_id + i + 1)
         with getattr(ctx, '_channels_lock', _noop_lock):
             ctx._channels.extend(channels)
-        # 持久化到缓存，重启后不丢失
-        ctx._save_channels_to_cache()
+        # 持久化到缓存，重启后不丢失（写盘为阻塞操作，放到线程池避免卡住事件循环）
+        await asyncio.to_thread(ctx._save_channels_to_cache)
         all_groups = list(dict.fromkeys([c.get('group', '未分组') for c in ctx._channels]))
         ctx._channels_list = all_groups if hasattr(ctx, '_channels_list') else None
         return _json_success(imported=len(channels))
@@ -1047,14 +1134,22 @@ async def handle_channels_batch(request):
 
     model = get_channel_model() if ctx else None
 
-    def _persist():
+    async def _persist():
         """持久化修改到模型或缓存"""
         if model:
-            model.layoutAboutToBeChanged.emit()
-            model.layoutChanged.emit()
+            # Qt 模型信号必须在主线程发射（本协程运行在事件循环线程）
+            try:
+                from utils.thread_safety import invoke_on_thread
+                invoke_on_thread(
+                    model,
+                    lambda: (model.layoutAboutToBeChanged.emit(),
+                             model.layoutChanged.emit())
+                )
+            except Exception as e:
+                logger.warning(f'刷新频道模型失败: {e}')
         if ctx and hasattr(ctx, '_channels'):
-            # _save_channels_to_cache 内部已有锁保护，不再外加锁（避免死锁）
-            ctx._save_channels_to_cache()
+            # 写盘为阻塞操作，放到线程池避免卡住事件循环；内部已有锁保护
+            await asyncio.to_thread(ctx._save_channels_to_cache)
 
     if action == 'auto_classify':
         try:
@@ -1075,7 +1170,7 @@ async def handle_channels_batch(request):
                     channels[idx]['group'] = r['new_group']
                     channels[idx]['_groups'] = [r['new_group']]
                     changed += 1
-        _persist()
+        await _persist()
         return _json_success(changed=changed, total=len(channels))
 
     elif action == 'clean_names':
@@ -1092,7 +1187,7 @@ async def handle_channels_batch(request):
             if new_name != old_name and new_name:
                 channels[i]['name'] = new_name
                 changed += 1
-        _persist()
+        await _persist()
         return _json_success(changed=changed, total=len(channels))
 
     elif action == 'match_logo':
@@ -1110,7 +1205,7 @@ async def handle_channels_batch(request):
             if logo:
                 channels[i]['logo'] = logo
                 matched += 1
-        _persist()
+        await _persist()
         return _json_success(matched=matched, total=len(channels))
 
     elif action == 'assign_fields':
@@ -1135,7 +1230,7 @@ async def handle_channels_batch(request):
                 if ch.get('tvg_id') and not (only_empty and ch.get('tvg_chno')):
                     ch['tvg_chno'] = ch.get('tvg_id', '')
                     changed += 1
-        _persist()
+        await _persist()
         return _json_success(changed=changed, total=len(channels))
 
     elif action == 'clear_params':
@@ -1151,7 +1246,7 @@ async def handle_channels_batch(request):
                     modified = True
             if modified:
                 changed += 1
-        _persist()
+        await _persist()
         return _json_success(changed=changed, total=len(channels))
 
     elif action == 'sort_by_group':
@@ -1175,7 +1270,7 @@ async def handle_channels_batch(request):
         sorted_channels = sorted(channels, key=_sort_key)
         # 原地替换列表内容
         channels[:] = sorted_channels
-        _persist()
+        await _persist()
         return _json_success(total=len(channels))
 
     else:
@@ -1615,7 +1710,7 @@ async def handle_mappings_list(request):
         config = get_config()
         if config:
             try:
-                remote_url = config.get_setting('channel_mappings', 'remote_url', '')
+                remote_url = config.get_value('channel_mappings', 'remote_url', '')
             except (ValueError, RuntimeError):
                 pass
         return _json_success(entries=entries, remote_url=remote_url)
@@ -1730,7 +1825,17 @@ async def handle_epg(request):
                 return _json_success(programmes=programmes)
             if hasattr(epg_parser, 'get_epg_data_copy'):
                 data = epg_parser.get_epg_data_copy() or {}
-                channels = [{'id': k, 'name': k, 'programmes': len(v)} for k, v in data.items()]
+                # 优先显示 EPG 源里的中文台名，取不到时回退到频道 id
+                channel_names = {}
+                if hasattr(epg_parser, 'get_epg_channel_names'):
+                    try:
+                        channel_names = epg_parser.get_epg_channel_names() or {}
+                    except Exception as e:
+                        logger.debug(f'获取 EPG 频道名失败: {e}')
+                channels = [
+                    {'id': k, 'name': channel_names.get(k, k), 'programmes': len(v)}
+                    for k, v in data.items()
+                ]
                 if search:
                     channels = [
                         ch for ch in channels
@@ -1787,13 +1892,22 @@ async def handle_stream_proxy(request):
         return _json_error('频道URL为空', 404)
     stream_url = ch['url']
     # SSRF 防护：使用统一的 URL 安全检查
-    is_safe, reject_reason = _is_safe_stream_url(stream_url)
+    # 域名解析是阻塞调用，放到线程池避免阻塞事件循环
+    is_safe, reject_reason = await asyncio.to_thread(_is_safe_stream_url, stream_url)
     if not is_safe:
         logger.warning(f'Stream proxy blocked: {redact_url(stream_url)} - {reject_reason}')
         return _json_error(f'不允许的流地址: {reject_reason}', 403)
+    # aiohttp 只能转发 HTTP(S)；rtsp/rtmp/rtp/udp/srt 应交给播放器直连
+    scheme = (urlparse(stream_url).scheme or '').lower()
+    if scheme not in _PROXYABLE_STREAM_PROTOCOLS:
+        return _json_error(f'该协议不支持 HTTP 流代理: {scheme}', 400)
     session = await _get_stream_session()
     try:
         async with session.get(stream_url) as resp:
+            if resp.status >= 400:
+                logger.warning(
+                    f'流代理上游返回 {resp.status}: {redact_url(stream_url)}')
+                return _json_error(f'上游返回错误状态: {resp.status}', 502)
             content_type = resp.headers.get('Content-Type', 'video/mp2t')
             response = web.StreamResponse(
                 status=resp.status,
@@ -1967,6 +2081,9 @@ async def handle_subtitle_download(request):
     name = (body or {}).get('name', '').strip()
     if not url:
         return _json_error('URL 不能为空')
+    # 接口层先做协议白名单校验，服务层还会再校验一次（防 file:// 本地文件读取）
+    if not url.lower().startswith(('http://', 'https://')):
+        return _json_error('仅支持 http/https 字幕下载链接', 400)
     try:
         from services.subtitle_download_service import SubtitleDownloadService
         svc = getattr(handle_subtitle_search, '_svc', None) or SubtitleDownloadService()

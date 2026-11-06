@@ -91,11 +91,34 @@ class LogoCacheService(ThreadSafeQObject):
         return {}
 
     def _save_meta(self):
+        """原子写入元数据，避免中断/磁盘满导致 meta.json 损坏后缓存被整体误删"""
+        import tempfile
         try:
-            with open(self._meta_path, 'w', encoding='utf-8') as f:
-                json.dump(self._meta, f, ensure_ascii=False, indent=2)
+            fd, tmp_path = tempfile.mkstemp(dir=self._cache_dir, suffix='.tmp', prefix='meta.')
+            try:
+                with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                    json.dump(self._meta, f, ensure_ascii=False, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, self._meta_path)
+            except Exception:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+                raise
         except Exception as e:
             logger.debug(f"保存台标元数据失败: {e}")
+
+    def _cached_at(self, meta_entry, disk_path):
+        """获取缓存时间；meta 缺少 time 时回退到文件修改时间，避免把有效缓存误判为过期"""
+        cached_at = meta_entry.get('time', 0) or 0
+        if cached_at > 0:
+            return cached_at
+        try:
+            return os.path.getmtime(disk_path)
+        except OSError:
+            return 0
 
     def _url_to_key(self, url):
         return hashlib.sha1(url.encode('utf-8')).hexdigest()
@@ -197,7 +220,7 @@ class LogoCacheService(ThreadSafeQObject):
 
         if disk_path and os.path.exists(disk_path):
             meta_entry = self._meta.get(key, {})
-            cached_at = meta_entry.get('time', 0)
+            cached_at = self._cached_at(meta_entry, disk_path)
             if time.time() - cached_at > self.DEFAULT_TTL:
                 try:
                     os.remove(disk_path)
@@ -235,7 +258,7 @@ class LogoCacheService(ThreadSafeQObject):
 
         if disk_path and os.path.exists(disk_path):
             meta_entry = self._meta.get(key, {})
-            cached_at = meta_entry.get('time', 0)
+            cached_at = self._cached_at(meta_entry, disk_path)
             if time.time() - cached_at > self.DEFAULT_TTL:
                 return None
 
@@ -327,6 +350,14 @@ class LogoCacheService(ThreadSafeQObject):
             request = QNetworkRequest(QUrl(url))
             request.setHeader(QNetworkRequest.KnownHeaders.UserAgentHeader,
                               'Mozilla/5.0 (Windows NT 10.0; Win64; x64)')
+            try:
+                request.setAttribute(QNetworkRequest.Attribute.RedirectPolicyAttribute,
+                                     QNetworkRequest.RedirectPolicy.NoLessSafeRedirectPolicy)
+            except Exception:
+                pass
+            # 设置传输超时，避免主机黑洞时请求永久挂起、该 URL 再也无法重试
+            if hasattr(request, 'setTransferTimeout'):
+                request.setTransferTimeout(10000)
             reply = self._network_manager.get(request)
             with self._lock:
                 self._pending_replies[url] = reply
@@ -428,7 +459,9 @@ class LogoCacheService(ThreadSafeQObject):
         now = time.time()
         expired_keys = []
         for key, meta in list(self._meta.items()):
-            if now - meta.get('time', 0) > self.DEFAULT_TTL:
+            disk_path = self._find_disk_path(key)
+            cached_at = self._cached_at(meta, disk_path) if disk_path else (meta.get('time', 0) or 0)
+            if now - cached_at > self.DEFAULT_TTL:
                 expired_keys.append(key)
         for key in expired_keys:
             disk_path = self._find_disk_path(key)

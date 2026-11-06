@@ -15,6 +15,16 @@ def detect_and_decode_text(raw_bytes: Union[bytes, None]) -> str:
             return raw_bytes.decode(enc)
         except (UnicodeDecodeError, ValueError):
             continue
+    # 文件主体是 UTF-8、但夹杂个别坏字节时，不应整体按 GB18030 解码（会把中文全变乱码）。
+    # 用替换字符比例判断：比例很低说明仍是 UTF-8，保留正确内容。
+    try:
+        replaced = raw_bytes.decode('utf-8', errors='replace')
+        bad_ratio = replaced.count('\ufffd') / max(len(replaced), 1)
+        if replaced.count('\ufffd') and bad_ratio < 0.005:
+            logger.debug(f"M3U含少量非法UTF-8字节({bad_ratio:.4%})，保留UTF-8并替换非法字符")
+            return replaced
+    except Exception:
+        pass
     for enc in ('gb18030', 'gbk', 'gb2312'):
         try:
             return raw_bytes.decode(enc)
@@ -32,6 +42,19 @@ def detect_and_decode_text(raw_bytes: Union[bytes, None]) -> str:
         return raw_bytes.decode('utf-8', errors='replace')
 
 
+def looks_like_m3u(content: str) -> bool:
+    """粗判内容是否像 M3U 播放列表，用于拦截 HTML/JSON 错误页被当作列表解析"""
+    if not content:
+        return False
+    head = content.lstrip('\ufeff').lstrip()
+    if head.startswith('#EXTM3U'):
+        return True
+    return '#EXTINF' in head[:8192]
+
+
+MAX_M3U_BYTES = 128 * 1024 * 1024
+
+
 def is_gzip(data: bytes) -> bool:
     return len(data) >= 2 and data[0] == 0x1F and data[1] == 0x8B
 
@@ -46,6 +69,9 @@ def load_m3u_file(filepath: str) -> str:
             raw = gzip.decompress(raw)
         except Exception as e:
             logger.debug(f"gzip解压raw数据失败: {e}")
+    if len(raw) > MAX_M3U_BYTES:
+        logger.error(f"M3U文件过大({len(raw)}字节)，已跳过")
+        return ''
     return detect_and_decode_text(raw)
 
 
@@ -55,6 +81,9 @@ def load_m3u_from_url_data(data: bytes) -> str:
             data = gzip.decompress(data)
         except Exception as e:
             logger.debug(f"gzip解压data失败: {e}")
+    if len(data) > MAX_M3U_BYTES:
+        logger.error(f"M3U数据过大({len(data)}字节)，已跳过")
+        return ''
     return detect_and_decode_text(data)
 
 

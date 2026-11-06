@@ -4,6 +4,8 @@ from core.log_manager import global_logger
 
 
 class URLRangeParser:
+    # 单条 URL 允许展开的最大数量，防止 [1-999999999] 之类表达式耗尽内存
+    MAX_EXPAND_COUNT = 200000
 
     def __init__(self):
         self.logger = global_logger
@@ -213,6 +215,15 @@ class URLRangeParser:
         if not slots:
             yield [url]
             return
+
+        estimated = self.estimate_url_count(url)
+        if estimated > self.MAX_EXPAND_COUNT:
+            self.logger.error(
+                f"URL解析: 展开数量 {estimated} 超过上限 {self.MAX_EXPAND_COUNT}，已拒绝解析: {url}"
+            )
+            raise ValueError(
+                f"URL 范围展开数量过大({estimated})，单条最多 {self.MAX_EXPAND_COUNT} 个"
+            )
 
         self.logger.info(f"开始解析范围URL: {url}")
 

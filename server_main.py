@@ -44,6 +44,21 @@ logging.basicConfig(
 logger = logging.getLogger('server_main')
 
 
+def _get_mobile_dir():
+    """返回移动端静态目录，不存在时返回空串"""
+    base = os.path.dirname(os.path.abspath(__file__))
+    for candidate in (os.path.join(base, 'server', 'mobile'), os.path.join(base, 'mobile')):
+        if os.path.isdir(candidate):
+            return candidate
+    return ''
+
+
+def _get_admin_dir():
+    """返回管理面板静态目录，不存在时返回空串"""
+    admin_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'server', 'admin')
+    return admin_dir if os.path.isdir(admin_dir) else ''
+
+
 def create_standalone_app():
     from server.context import ServerContext
     from server.routes import create_app
@@ -51,10 +66,8 @@ def create_standalone_app():
     ServerContext.get_instance(main_window=None)
     app = create_app()
 
-    mobile_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'server', 'mobile')
-    if not os.path.isdir(mobile_dir):
-        mobile_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mobile')
-    if os.path.isdir(mobile_dir):
+    mobile_dir = _get_mobile_dir()
+    if mobile_dir:
         app.router.add_static('/mobile', mobile_dir, name='mobile')
 
     return app
@@ -70,7 +83,13 @@ async def main(host='127.0.0.1', port=8080):
     site = web.TCPSite(runner, host, port)
     await site.start()
     logger.info(f"IPTV Web Server 启动于 http://{host}:{port}")
-    logger.info(f"移动端访问: http://{host}:{port}/mobile/")
+    # 仅在移动端静态目录存在时才提示 /mobile/，否则打印实际可用的入口
+    if _get_mobile_dir():
+        logger.info(f"移动端访问: http://{host}:{port}/mobile/")
+    elif _get_admin_dir():
+        logger.info(f"管理面板入口: http://{host}:{port}/admin/")
+    else:
+        logger.info(f"Web 入口: http://{host}:{port}/")
     logger.info(f"API 文档: http://{host}:{port}/")
 
     stop_event = asyncio.Event()

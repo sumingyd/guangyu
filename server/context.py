@@ -721,12 +721,23 @@ class ServerContext:
             with self._channels_lock:
                 channels_snapshot = list(self._channels)
             data = {'channels': channels_snapshot, 'saved_at': time.time()}
-            # 原子写入：先写临时文件，再 rename 覆盖目标文件
-            tmp_path = cache_path + '.tmp'
-            with open(tmp_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False)
-            # os.replace 在所有平台上都是原子操作
-            os.replace(tmp_path, cache_path)
+            # 原子写入：临时文件名唯一，避免导入/重载并发写同一 .tmp 互相截断
+            import tempfile
+            cache_dir = os.path.dirname(cache_path) or '.'
+            os.makedirs(cache_dir, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(dir=cache_dir, suffix='.tmp', prefix='channels.')
+            try:
+                with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, cache_path)
+            except Exception:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+                raise
         except Exception as e:
             logger.warning(f"保存频道缓存失败: {e}")
 
@@ -747,8 +758,18 @@ class ServerContext:
                 try:
 
                     from utils.http_session import get as _http_get
-                    resp = _http_get(url, timeout=30)
+                    from services.m3u_parser import looks_like_m3u
+                    resp = _http_get(url, timeout=30, headers={
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                        'Accept': '*/*',
+                    })
+                    if resp.status_code != 200:
+                        logger.warning(f"加载源 {url} 返回 HTTP {resp.status_code}，跳过")
+                        continue
                     content = load_m3u_from_url_data(resp.content)
+                    if not looks_like_m3u(content):
+                        logger.warning(f"加载源 {url} 返回内容不是 M3U（可能是错误页），跳过")
+                        continue
                     channels, _ = parse_m3u_content(content)
                     if channels:
                         # 标记频道来源（订阅源 URL），用于 Android 端区分 SUB/LOCAL tab
@@ -857,6 +878,7 @@ class ServerContext:
 
             all_channels: List[Dict] = []
             errors: List[str] = []  # 记录每个源的加载失败原因
+            fetch_errors: List[str] = []  # 仅网络/格式层面的失败，用于区分“源可用但内容为空”
             epg_urls_from_m3u: List[str] = []  # M3U 内嵌 EPG 地址（后台异步加载，不阻塞频道入库）
             for idx, source in enumerate(sources):
                 src_url = source.get('url', '')
@@ -886,9 +908,17 @@ class ServerContext:
                     if resp is None:
                         err = (last_err or '加载失败')[:60]
                         errors.append(err)
+                        fetch_errors.append(err)
                         logger.warning(f"加载源 {redact_url(src_url)} 失败（已重试 1 次）: {last_err}")
                         continue
                     content = load_m3u_from_url_data(resp.content)
+                    from services.m3u_parser import looks_like_m3u
+                    if not looks_like_m3u(content):
+                        err = '内容不是 M3U 格式'
+                        errors.append(err)
+                        fetch_errors.append(err)
+                        logger.warning(f"加载源 {redact_url(src_url)} 返回内容不是 M3U（可能是错误页）")
+                        continue
                     channels, header_attrs = parse_m3u_content(content)
                     # 提取 M3U 头部 x-tvg-url 定义的 EPG 地址，稍后统一异步加载。
                     # EPG 文件可能很大（几十 MB），同步下载会让 source_loading 长时间为 true，
@@ -912,6 +942,7 @@ class ServerContext:
                 except Exception as e:
                     err = str(e)[:60]
                     errors.append(err)
+                    fetch_errors.append(err)
                     logger.warning(f"加载源 {redact_url(src_url)} 异常: {e}")
 
             # 更新频道列表
@@ -934,19 +965,19 @@ class ServerContext:
                     self._channels = all_channels + local_channels
                     ch_count = len(self._channels)
                     logger.info(f"订阅源 {len(all_channels)} 个 + 本地保留 {len(local_channels)} 个（扫描/导入）")
-                elif errors:
-                    # 存在失败源且无一成功（网络故障/源暂时损坏）：
+                elif fetch_errors:
+                    # 存在网络/格式层面的失败且无一成功（网络故障/源暂时损坏）：
                     # 保留现有频道（含订阅频道），不覆盖缓存。
                     # 否则瞬时网络抖动会把可用订阅数据洗掉并污染缓存，
                     # 重启后也无法恢复（频道全空的根因）。
                     with self._channels_lock:
                         ch_count = len(self._channels)
                     logger.warning(
-                        f"订阅源加载全部失败（{';'.join(errors[:3])}），"
+                        f"订阅源加载全部失败（{';'.join(fetch_errors[:3])}），"
                         f"保留现有 {ch_count} 个频道，不覆盖缓存")
                     cache_dirty = False
                 else:
-                    # 所有源被禁用/删除：只保留本地频道
+                    # 所有源都可正常拉取但内容为空（或全部源被禁用/删除）：只保留本地频道
                     self._channels = local_channels
                     ch_count = len(self._channels)
                     logger.info(f"订阅源无频道，保留本地 {len(local_channels)} 个")

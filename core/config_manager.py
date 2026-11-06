@@ -32,7 +32,7 @@ class ConfigManager(Singleton):
             config_dir = os.path.dirname(current_dir)
         self.config_dir = config_dir
         self.config_file = os.path.join(config_dir, config_file)
-        self.config = configparser.ConfigParser(interpolation=None)
+        self.config = configparser.ConfigParser(interpolation=None, strict=False)
         self._lock = threading.RLock()
         self._resume_file = os.path.join(config_dir, 'resume_positions.json')
         self._resume_cache: dict | None = None
@@ -40,6 +40,7 @@ class ConfigManager(Singleton):
         self._bookmark_cache: dict | None = None
         self._save_timer: threading.Timer | None = None
         self._save_timer_lock = threading.Lock()
+        self._config_write_blocked = False
         self.load_config()
         # 域存储实例
         self._window_layout_store = WindowLayoutStore(self)
@@ -123,11 +124,13 @@ class ConfigManager(Singleton):
         with self._lock:
             if os.path.exists(self.config_file):
                 try:
-                    self.config.read(self.config_file, encoding='utf-8')
+                    # utf-8-sig 兼容带 BOM 的配置文件（用户手工编辑常见）
+                    self.config.read(self.config_file, encoding='utf-8-sig')
                     logger.debug(f"配置管理-成功加载配置文件: {self.config_file}")
                     return True
                 except configparser.Error as e:
                     logger.error(f"配置管理-解析配置文件失败: {str(e)}", exc_info=True)
+                    self._backup_broken_config('parse_error')
                     return False
                 except IOError as e:
                     logger.error(f"配置管理-读取配置文件失败: {str(e)}", exc_info=True)
@@ -147,6 +150,23 @@ class ConfigManager(Singleton):
             except Exception as e:
                 logger.warning(f"配置管理-自动创建配置文件失败: {e}")
                 return False
+
+    def _backup_broken_config(self, reason: str):
+        """配置解析失败时备份原文件并重置解析器。
+
+        若备份失败则阻止后续写入，避免用空配置覆盖用户原文件造成不可恢复的数据丢失。
+        """
+        try:
+            import shutil
+            backup = f"{self.config_file}.bad.{reason}.{int(time.time())}"
+            shutil.copy2(self.config_file, backup)
+            self._config_write_blocked = False
+            logger.error(f"配置管理-已备份损坏的配置文件: {backup}")
+        except Exception as e:
+            self._config_write_blocked = True
+            logger.error(f"配置管理-备份损坏配置文件失败，已禁止写入配置: {e}")
+        # 丢弃可能已被部分解析的内容，避免半截配置参与后续读写
+        self.config = configparser.ConfigParser(interpolation=None, strict=False)
 
     def save_config(self, immediate: bool = False):
         if immediate:
@@ -173,6 +193,9 @@ class ConfigManager(Singleton):
     def _do_save_config(self):
         with self._save_timer_lock:
             self._save_timer = None
+        if self._config_write_blocked:
+            logger.error("配置管理-配置文件损坏且备份失败，已跳过写入以避免覆盖原文件")
+            return False
         with self._lock:
             try:
                 config_dir = os.path.dirname(self.config_file)
@@ -207,7 +230,10 @@ class ConfigManager(Singleton):
     def _parse_bool(self, value, default=False):
         if value is None:
             return default
-        return value.lower() == 'true'
+        if isinstance(value, bool):
+            return value
+        # 兼容旧版本/手工编辑产生的多种布尔写法
+        return str(value).strip().lower() in ('1', 'true', 'yes', 'on', 'y')
 
     def _parse_int(self, value, default=0):
         if value is None:
@@ -353,8 +379,27 @@ class ConfigManager(Singleton):
             self.set_value('PlaylistSources', f'name_{i}', source.get('name', f'Source {i+1}'))
             self.set_value('PlaylistSources', f'enabled_{i}', str(source.get('enabled', True)))
             self.set_value('PlaylistSources', f'last_update_{i}', source.get('last_update', '') or '')
+        self._cleanup_stale_indexed_keys('PlaylistSources', len(sources))
         self._cleanup_legacy_playlist_keys()
         return self.save_config()
+
+    def _cleanup_stale_indexed_keys(self, section: str, count: int, suffixes=('url', 'name', 'enabled', 'last_update')):
+        """删除序号 >= count 的残留键，避免配置文件随着增删条目无限膨胀"""
+        with self._lock:
+            if not self.config.has_section(section):
+                return
+            for option in list(self.config.options(section)):
+                for suffix in suffixes:
+                    prefix = f'{suffix}_'
+                    if not option.startswith(prefix):
+                        continue
+                    idx_part = option[len(prefix):]
+                    if not idx_part.isdigit():
+                        continue
+                    if int(idx_part) >= count:
+                        self.config.remove_option(section, option)
+                        logger.debug(f"配置清理-移除残留键: {section}.{option}")
+                    break
 
     def _cleanup_legacy_playlist_keys(self):
         """清理旧[Playlist]段中已迁移到[PlaylistSources]的遗留键"""
@@ -719,21 +764,8 @@ class ConfigManager(Singleton):
         return self._resume_store.load_last_channel()
 
     # ---------- 断点续播（JSON 文件存储）----------
-        """懒加载断点缓存"""
-        if self._resume_cache is not None:
-            return self._resume_cache
-        cache = {}
-        try:
-            if os.path.exists(self._resume_file):
-                import json
-                with open(self._resume_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    if isinstance(data, dict):
-                        cache = data
-        except Exception as e:
-            logger.debug(f"加载断点缓存失败: {e}")
-        self._resume_cache = cache
-        return cache
+    def _load_resume_cache(self):
+        return self._resume_store._load_resume_cache()
 
     def _save_resume_cache(self):
         return self._resume_store._save_resume_cache()
@@ -743,15 +775,7 @@ class ConfigManager(Singleton):
 
     def load_resume_position(self, url: str) -> dict | None:
         """加载指定 URL 的播放位置"""
-        if not url:
-            return None
-        with self._lock:
-            cache = self._load_resume_cache()
-            entry = cache.get(url)
-            if not entry:
-                return None
-            # 复制一份避免外部修改
-            return dict(entry)
+        return self._resume_store.load_resume_position(url)
 
     def load_all_resume_positions(self) -> list:
         return self._resume_store.load_all_resume_positions()
@@ -764,21 +788,8 @@ class ConfigManager(Singleton):
 
     # ---------- 书签管理（JSON 文件存储）----------
     # 一个 URL 可对应多个书签，每个书签结构：{position, name, created_at}
-        """懒加载书签缓存"""
-        if self._bookmark_cache is not None:
-            return self._bookmark_cache
-        cache = {}
-        try:
-            if os.path.exists(self._bookmark_file):
-                import json
-                with open(self._bookmark_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    if isinstance(data, dict):
-                        cache = data
-        except Exception as e:
-            logger.debug(f"加载书签缓存失败: {e}")
-        self._bookmark_cache = cache
-        return cache
+    def _load_bookmark_cache(self):
+        return self._bookmark_store._load_bookmark_cache()
 
     def _save_bookmark_cache(self):
         return self._bookmark_store._save_bookmark_cache()

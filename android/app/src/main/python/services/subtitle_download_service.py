@@ -57,6 +57,54 @@ SUBCAT_LANG_MAP = {
     'kor': ['ko'],
 }
 
+# 只允许通过网络协议下载字幕，禁止 file:// 等本地协议被远端数据注入
+_ALLOWED_DOWNLOAD_SCHEMES = ('http', 'https')
+
+
+def _validate_remote_url(url: str) -> str:
+    """校验远端下载链接，拒绝 file://、ftp:// 等非网络协议"""
+    raw = (url or '').strip()
+    parsed = urllib.parse.urlparse(raw)
+    scheme = (parsed.scheme or '').lower()
+    if scheme not in _ALLOWED_DOWNLOAD_SCHEMES:
+        raise ValueError(f'不支持的下载协议: {scheme or "(空)"}')
+    if not parsed.netloc:
+        raise ValueError('下载链接缺少主机名')
+    return raw
+
+
+def _safe_subtitle_name(name: str, default: str) -> str:
+    """把远端/调用方提供的文件名收敛为单层文件名，防止路径穿越"""
+    base = os.path.basename((name or '').replace('\\', '/')).strip()
+    base = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', base).strip('. ')
+    if not base or base in ('.', '..'):
+        base = default
+    return base
+
+
+def _ensure_inside(path: str, dest_dir: str) -> str:
+    """校验落点 realpath 确实位于缓存目录内"""
+    root = os.path.realpath(dest_dir)
+    target = os.path.realpath(path)
+    if target != root and not target.startswith(root + os.sep):
+        raise ValueError(f'字幕落点超出缓存目录: {target}')
+    return target
+
+
+def _urlopen(request, timeout=DEFAULT_TIMEOUT):
+    """统一走 urllib，并按 [Playback] http_proxy 配置应用代理"""
+    proxy_url = ''
+    try:
+        from core.config_manager import ConfigManager
+        proxy_url = (ConfigManager().get_value('Playback', 'http_proxy', '') or '').strip()
+    except Exception:
+        proxy_url = ''
+    if proxy_url:
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url}))
+        return opener.open(request, timeout=timeout)
+    return urllib.request.urlopen(request, timeout=timeout)
+
 
 class _TimeoutTransport(xmlrpc.client.Transport):
     """带超时控制的 XML-RPC Transport"""
@@ -188,11 +236,22 @@ class SubtitleDownloadService:
             self.last_error = 'SubHD 字幕需要在浏览器中手动下载（需公众号验证码），请使用 open_in_browser()'
             logger.warning(self.last_error)
             return ''
+        # 远端来源可能被注入 file:// 等本地协议，先做协议白名单校验
+        try:
+            download_link = _validate_remote_url(download_link)
+        except ValueError as e:
+            self.last_error = f'下载链接不合法: {e}'
+            logger.warning(f'{self.last_error} | url={download_link[:120]}')
+            return ''
         # SubtitleCat：download_link 是详情页 URL，需 fetch 解析 .srt 直链
         if 'subtitlecat.com' in download_link or '/subs/' in download_link:
             return self._download_subtitlecat(download_link, dest_dir, file_name, language)
         # OpenSubtitles：gzip 自动解压
         return self._download_opensubtitles(download_link, dest_dir, file_name)
+
+    @staticmethod
+    def _urlopen(request, timeout=DEFAULT_TIMEOUT):
+        return _urlopen(request, timeout=timeout)
 
     def open_in_browser(self, url: str) -> bool:
         """在默认浏览器中打开 URL（用于 SubHD 等需要手动下载的源）"""
@@ -370,16 +429,19 @@ class SubtitleDownloadService:
         """下载 OpenSubtitles 字幕（解压 gzip）到 dest_dir，返回最终路径"""
         try:
             os.makedirs(dest_dir, exist_ok=True)
-            fname = file_name or os.path.basename(download_link)
+            download_link = _validate_remote_url(download_link)
+            # 只接受单层文件名，防止 file_name 携带 ../ 造成路径穿越
+            default_name = os.path.basename(urllib.parse.urlparse(download_link).path) or 'subtitle.srt'
+            fname = _safe_subtitle_name(file_name or default_name, 'subtitle.srt')
             # download_link 通常是 .gz 包裹的 srt 文件
-            tmp_path = os.path.join(dest_dir, fname + ".gz")
+            tmp_path = _ensure_inside(os.path.join(dest_dir, fname + ".gz"), dest_dir)
             req = urllib.request.Request(download_link, headers={'User-Agent': OS_USER_AGENT})
-            with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT) as resp, \
+            with _urlopen(req, timeout=DEFAULT_TIMEOUT) as resp, \
                     open(tmp_path, 'wb') as f:
                 f.write(resp.read())
             # 解压
             final_name = fname if not fname.endswith('.gz') else fname[:-3]
-            final_path = os.path.join(dest_dir, final_name)
+            final_path = _ensure_inside(os.path.join(dest_dir, final_name), dest_dir)
             try:
                 import gzip
                 with gzip.open(tmp_path, 'rb') as gz, open(final_path, 'wb') as out:
@@ -536,7 +598,7 @@ class SubtitleDownloadService:
         if referer:
             headers['Referer'] = referer
         req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
+        with _urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
             return resp.read().decode('utf-8', errors='ignore')
 
     @staticmethod
@@ -720,7 +782,7 @@ class SubtitleDownloadService:
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
         }
         req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
+        with _urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
             return resp.read().decode('utf-8', errors='ignore')
 
     @staticmethod
@@ -798,16 +860,17 @@ class SubtitleDownloadService:
                 return ''
 
             os.makedirs(dest_dir, exist_ok=True)
-            fname = file_name or 'subtitle.srt'
+            fname = _safe_subtitle_name(file_name or 'subtitle.srt', 'subtitle.srt')
             if not fname.endswith('.srt'):
                 fname += '.srt'
-            final_path = os.path.join(dest_dir, fname)
+            final_path = _ensure_inside(os.path.join(dest_dir, fname), dest_dir)
 
             # 依次尝试下载，直到获得有效 .srt 内容（非 HTML 404 页面）
             for srt_url in srt_urls:
                 try:
+                    srt_url = _validate_remote_url(srt_url)
                     req = urllib.request.Request(srt_url, headers={'User-Agent': SUBCAT_UA})
-                    with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
+                    with _urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
                         content = resp.read()
                     # 检查是否是 HTML 404 页面（SubtitleCat 返回 200 + HTML 404 内容）
                     if self._is_valid_srt_content(content):

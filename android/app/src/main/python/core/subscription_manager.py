@@ -1,7 +1,7 @@
 import os
 import time as _time
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from .log_manager import global_logger as logger
 from .config_manager import ConfigManager
 from utils.singleton import Singleton
@@ -248,6 +248,7 @@ class SubscriptionManager(Singleton):
         
         merged_data = {}
         total_sources = len(sources)
+        failed_sources = 0
 
         for i, source in enumerate(sources):
             if status_callback:
@@ -266,10 +267,21 @@ class SubscriptionManager(Singleton):
                     logger.info(f"成功加载EPG源: {source.get('name', '')}, 包含 {len(data)} 个频道, 新增 {new_channels} 个频道")
                     self.update_epg_source_last_update(i, datetime.now().isoformat())
                 else:
+                    failed_sources += 1
                     logger.warning(f"EPG源加载失败或无数据: {source.get('name', '')}")
 
             except Exception as e:
+                failed_sources += 1
                 logger.error(f"加载EPG源异常: {source.get('name', '')} - {str(e)}")
+
+        # 全部源都失败时保留现有内存/磁盘缓存，避免网络异常把本地 EPG 清空
+        if not merged_data:
+            logger.warning(f"所有EPG源均加载失败({failed_sources}/{total_sources})，保留现有EPG缓存")
+            with self._epg_lock:
+                existing_channels = len(self._epg_data)
+            if status_callback:
+                status_callback(f"EPG加载失败，继续使用缓存数据（{existing_channels} 个频道）")
+            return False
         
         with self._epg_lock:
             self._epg_data = merged_data
@@ -426,26 +438,48 @@ class SubscriptionManager(Singleton):
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': '*/*'
         }
-        
+        # 限制单次 EPG 响应体大小，避免异常源/压缩炸弹打满内存
+        max_bytes = 64 * 1024 * 1024
+
         max_retries = 3
         last_error = None
         for attempt in range(1, max_retries + 1):
             try:
                 logger.info(f"正在下载EPG数据: {epg_url}" + (f" (第{attempt}次尝试)" if attempt > 1 else ""))
-                response = _http_get(epg_url, timeout=300, headers=headers, allow_redirects=True)
-                response.raise_for_status()
-                
-                content = response.content
+                # 标量超时：连接与读取各自最多 120s（http_session 统一按标量处理）
+                response = _http_get(epg_url, timeout=120, headers=headers,
+                                     allow_redirects=True, stream=True)
+                with response:
+                    response.raise_for_status()
 
-                content_encoding = response.headers.get('Content-Encoding', '')
-                url_is_gz = epg_url.lower().endswith('.gz')
-                already_decompressed = 'gzip' in content_encoding.lower()
-                if url_is_gz and not already_decompressed and len(content) >= 2 and content[0] == 0x1f and content[1] == 0x8b:
-                    import gzip
-                    from io import BytesIO
-                    with gzip.GzipFile(fileobj=BytesIO(content)) as f:
-                        content = f.read()
-                
+                    declared = response.headers.get('Content-Length', '')
+                    if declared.isdigit() and int(declared) > max_bytes:
+                        logger.error(f"EPG文件过大({declared}字节)，已跳过: {epg_url}")
+                        return {}
+
+                    buf = bytearray()
+                    for chunk in response.iter_content(64 * 1024):
+                        if not chunk:
+                            continue
+                        buf.extend(chunk)
+                        if len(buf) > max_bytes:
+                            logger.error(f"EPG文件超过 {max_bytes} 字节上限，已中止下载: {epg_url}")
+                            return {}
+                    content = bytes(buf)
+
+                    content_encoding = response.headers.get('Content-Encoding', '')
+                    url_is_gz = epg_url.lower().endswith('.gz')
+                    already_decompressed = 'gzip' in content_encoding.lower()
+                    if url_is_gz and not already_decompressed and len(content) >= 2 and content[0] == 0x1f and content[1] == 0x8b:
+                        import gzip
+                        from io import BytesIO
+                        with gzip.GzipFile(fileobj=BytesIO(content)) as f:
+                            # 解压同样设上限，防御压缩炸弹
+                            content = f.read(max_bytes + 1)
+                        if len(content) > max_bytes:
+                            logger.error(f"EPG解压后超过 {max_bytes} 字节上限，已跳过: {epg_url}")
+                            return {}
+
                 try:
                     epg_content = content.decode('utf-8')
                 except UnicodeDecodeError:
@@ -459,20 +493,33 @@ class SubscriptionManager(Singleton):
                     return {}
                 
                 logger.info(f"EPG数据下载成功: {len(content)} 字节")
-                return self._parse_epg_content(epg_content)
-            
+                parsed = self._parse_epg_content(epg_content)
+                if not parsed:
+                    logger.warning(f"EPG内容解析后为空: {epg_url}")
+                return parsed
+
+            except requests.exceptions.HTTPError as e:
+                # 4xx（除 429 限流外）重试无意义，直接失败
+                status = getattr(getattr(e, 'response', None), 'status_code', 0) or 0
+                last_error = e
+                logger.warning(f"EPG数据请求返回 HTTP {status}: {epg_url}")
+                if 400 <= status < 500 and status != 429:
+                    break
+                if attempt < max_retries:
+                    import time
+                    time.sleep(2)
             except requests.exceptions.RequestException as e:
                 last_error = e
                 logger.warning(f"EPG数据下载失败(第{attempt}次): {e}")
                 if attempt < max_retries:
                     import time
-                    time.sleep(3)
+                    time.sleep(2)
             except Exception as e:
                 last_error = e
                 logger.error(f"加载EPG数据失败(第{attempt}次): {e}")
                 if attempt < max_retries:
                     import time
-                    time.sleep(3)
+                    time.sleep(2)
         
         logger.error(f"EPG数据下载最终失败(共{max_retries}次): {last_error}")
         return {}
@@ -500,7 +547,9 @@ class SubscriptionManager(Singleton):
         if not time_str or not time_str[0].isdigit():
             raise ValueError(f"非标准XMLTV时间格式: '{time_str}'")
         parts = time_str.split()
-        dt_part = parts[0][:14]
+        dt_part = parts[0][:20]
+        if len(dt_part) < 14 or not dt_part[:14].isdigit():
+            raise ValueError(f"非标准XMLTV时间格式: '{time_str}'")
         tz_part = parts[1] if len(parts) > 1 else None
         dt = datetime(
             int(dt_part[0:4]), int(dt_part[4:6]), int(dt_part[6:8]),
@@ -511,12 +560,9 @@ class SubscriptionManager(Singleton):
             tz_hours = int(tz_part[1:3])
             tz_minutes = int(tz_part[3:5]) if len(tz_part) >= 5 else 0
             offset = timedelta(hours=tz_hours, minutes=tz_minutes) * sign
-            dt_utc = dt - offset
-
-            local_offset = timedelta(seconds=-_time.timezone)
-            if _time.daylight:
-                local_offset = timedelta(seconds=-_time.altzone)
-            dt = dt_utc + local_offset
+            # 明确按 UTC 计算，再交给系统按“该日期”的时区规则转换（正确处理夏令时）
+            dt_utc = dt.replace(tzinfo=timezone.utc) - offset
+            dt = dt_utc.astimezone().replace(tzinfo=None)
         return dt
 
     def _parse_xml_epg(self, content: str) -> dict:
@@ -529,8 +575,11 @@ class SubscriptionManager(Singleton):
             解析后的EPG数据字典
         """
         result = {}
+        parsed_channel_names = {}
         import gc
-        gc.disable()
+        gc_was_enabled = gc.isenabled()
+        if gc_was_enabled:
+            gc.disable()
         try:
             import xml.etree.ElementTree as ET
             root = ET.fromstring(content)
@@ -546,11 +595,9 @@ class SubscriptionManager(Singleton):
                             break
                     if channel_id and channel_name:
                         result[channel_id] = []
-                        self._epg_channel_names[channel_id] = channel_name
+                        parsed_channel_names[channel_id] = channel_name
             
-            programmes = list(root.iter('programme'))
-            
-            for programme in programmes:
+            for programme in root.iter('programme'):
                 channel_id = programme.get('channel')
                 start = programme.get('start')
                 end = programme.get('stop') or programme.get('end')
@@ -569,44 +616,50 @@ class SubscriptionManager(Singleton):
                 
                 if channel_id and start and title:
                     try:
-                        try:
-                            start_time = self._parse_xmltv_time(start)
-                        except ValueError:
-                            now = datetime.now()
-                            start_time = now.replace(minute=(now.minute // 30) * 30, second=0, microsecond=0)
+                        start_time = self._parse_xmltv_time(start)
+                    except ValueError:
+                        # 时间非法的节目直接跳过，避免被错误地显示为“正在播”
+                        logger.debug(f"跳过时间非法的EPG节目: {channel_id} {start}")
+                        continue
 
-                        if end:
-                            try:
-                                end_time = self._parse_xmltv_time(end)
-                            except ValueError:
-                                end_time = start_time + timedelta(minutes=30)
-                        else:
+                    if end:
+                        try:
+                            end_time = self._parse_xmltv_time(end)
+                        except ValueError:
                             end_time = start_time + timedelta(minutes=30)
-                        
-                        if channel_id not in result:
-                            result[channel_id] = []
-                        
-                        result[channel_id].append({
-                            'title': title,
-                            'desc': desc or '',
-                            'start': start_time.isoformat(),
-                            'end': end_time.isoformat()
-                        })
-                    except Exception as e:
-                        logger.debug(f"解析节目时间失败: {e}")
-                        pass
+                    else:
+                        end_time = start_time + timedelta(minutes=30)
+                    
+                    if channel_id not in result:
+                        result[channel_id] = []
+                    
+                    result[channel_id].append({
+                        'title': title,
+                        'desc': desc or '',
+                        'start': start_time.isoformat(),
+                        'end': end_time.isoformat()
+                    })
             
-            gc.enable()
+            if parsed_channel_names:
+                with self._epg_lock:
+                    self._epg_channel_names.update(parsed_channel_names)
             return result
         except Exception as e:
             logger.error(f"XML格式EPG解析失败: {e}")
-            gc.enable()
             return {}
+        finally:
+            if gc_was_enabled:
+                gc.enable()
     
     def get_epg_data_copy(self) -> dict:
         """线程安全地获取EPG数据的浅拷贝"""
         with self._epg_lock:
             return dict(self._epg_data)
+
+    def get_epg_channel_names(self) -> dict:
+        """线程安全地获取 EPG 频道 id -> 显示名 的映射拷贝"""
+        with self._epg_lock:
+            return dict(self._epg_channel_names)
 
     def get_channel_epg(self, channel_name: str, tvg_id: str | None = None,
                         tvg_name: str | None = None, comma_name: str | None = None) -> list:
@@ -744,9 +797,11 @@ class SubscriptionManager(Singleton):
 
         cache_file = os.path.join(cache_dir, 'epg_cache.json')
         try:
+            with self._epg_lock:
+                channel_names = dict(self._epg_channel_names)
             cache_payload = {
                 'epg_data': data,
-                'channel_names': dict(self._epg_channel_names),
+                'channel_names': channel_names,
             }
             fd, tmp_path = tempfile.mkstemp(dir=cache_dir, suffix='.tmp', prefix='epg_')
             try:
@@ -803,6 +858,15 @@ class SubscriptionManager(Singleton):
             traceback.print_exc()
             return False
     
+    @staticmethod
+    def _to_int(value, default: int) -> int:
+        """配置值转整数，非法值回退默认值而不是抛异常导致缓存被判定失效"""
+        try:
+            return int(str(value).strip())
+        except (TypeError, ValueError):
+            logger.warning(f"配置值无法转换为整数: {value!r}，使用默认值 {default}")
+            return default
+
     def is_epg_valid(self) -> bool:
         """检查EPG缓存数据是否有效（基于缓存文件修改时间和配置的更新间隔，
         同时检查数据中是否包含今天的节目）
@@ -820,8 +884,8 @@ class SubscriptionManager(Singleton):
             file_mtime = datetime.fromtimestamp(os.path.getmtime(cache_file))
             age_seconds = (datetime.now() - file_mtime).total_seconds()
 
-            update_interval = int(self._config.get_value('EPGSources', 'update_interval', '60') or 60)
-            max_age_seconds = update_interval * 60
+            update_interval = self._to_int(self._config.get_value('EPGSources', 'update_interval', '60'), 60)
+            max_age_seconds = max(update_interval, 1) * 60
 
             if age_seconds > max_age_seconds:
                 logger.debug(f"EPG缓存文件已过期: {age_seconds/60:.0f} 分钟前 (配置间隔: {update_interval} 分钟)")
