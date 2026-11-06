@@ -79,28 +79,63 @@ class PlaybackMixin:
         if self.play_state.is_catchup_or_timeshift:
             logger.info("回看/时移流播放到终点，自动续播")
             self.catchup_ctrl.continue_timeshift()
-            # 续播兜底：下一节目回看 URL 若拉流失败，播放器会停在停止状态
-            # （UI 状态已推进到下一节目，出现「显示回看中但实际已停止」）。
-            # 8 秒后仍未播放则退回直播。
+            # 续播兜底：只有确认已停流（既未播放也未暂停，且不在缓冲/加载中）
+            # 才退回直播。原先固定 8 秒判定，慢源/IPv6 回退尚未出画面就被误判失败。
+            attempts = {'n': 0}
+
             def _check_catchup_resume():
                 try:
                     pc = self.player_controller
-                    if (pc and not getattr(pc, 'is_playing', False)
-                            and not getattr(pc, 'is_paused', False)
-                            and not getattr(pc, '_user_stopped', False)
-                            and self.current_channel):
-                        tr = self.language_manager.tr
-                        logger.warning("时移/回看续播 8 秒内未成功，退回直播")
-                        self.status_bar_show_message(
-                            f"{tr('timeshift_failed_back_to_live', '时移播放失败，退回直播')}: "
-                            f"{self.current_channel.get('name', '')}")
-                        self.playback_ctrl.play_channel(self.current_channel)
+                    if not pc:
+                        return
+                    if getattr(pc, 'is_playing', False) or getattr(pc, 'is_paused', False):
+                        return
+                    if getattr(pc, '_user_stopped', False):
+                        return
+                    buffering = False
+                    try:
+                        buffering = bool((pc.get_buffer_state() or {}).get('buffering', False))
+                    except Exception:
+                        pass
+                    if (buffering or getattr(pc, '_switching_channel', False)) and attempts['n'] < 2:
+                        attempts['n'] += 1
+                        logger.info("时移/回看续播仍在缓冲，延长等待后再次检查")
+                        safe_single_shot(12000, self, _check_catchup_resume)
+                        return
+                    if not self.current_channel:
+                        return
+                    tr = self.language_manager.tr
+                    logger.warning("时移/回看续播多次等待后仍未播放，退回直播")
+                    self.status_bar_show_message(
+                        f"{tr('timeshift_failed_back_to_live', '时移播放失败，退回直播')}: "
+                        f"{self.current_channel.get('name', '')}")
+                    self.playback_ctrl.play_channel(self.current_channel)
                 except RuntimeError:
                     pass
-            safe_single_shot(8000, self, _check_catchup_resume)
+            safe_single_shot(10000, self, _check_catchup_resume)
+        else:
+            # 直播网络流 EOF（服务器主动断流）：此前该信号在直播模式下无人处理，
+            # 会停在 play_state=False 的停止态。这里按断线处理并重连。
+            # 注意：网络点播（有已知时长）播完不应重连，否则会从头循环播放。
+            pc = getattr(self, 'player_controller', None)
+            if pc and not getattr(pc, '_user_stopped', False) and self.current_channel:
+                duration = 0
+                try:
+                    duration = pc.get_total_time() or 0
+                except Exception:
+                    duration = 0
+                if duration and duration > 0:
+                    logger.info("网络点播播放结束，不自动重连")
+                    return
+                logger.info("直播流播放到终点，触发重连续播")
+                self._do_reconnect(pc.current_url)
 
     def _do_reconnect(self, url):
         if self.player_controller._user_stopped:
+            return
+        # 重连延迟期间若新流已经成功加载，就不要再次重启播放（会造成闪断）
+        if getattr(self.player_controller, 'is_playing', False):
+            logger.debug("重连跳过：播放已恢复")
             return
         if self.current_channel:
             if self.play_state.is_catchup_or_timeshift:

@@ -450,7 +450,10 @@ class MpvPlayback:
                     self._facade.logger.info("设置gpu-context=x11成功")
                 _mpv_set_option_string(self._facade.mpv_handle, 'force-window', 'no')
 
-            if not (is_macos() and getattr(self, '_use_render_api', False)):
+            # 注意：_use_render_api 保存在 facade（MpvPlayerController）上，
+            # MpvPlayback 自身没有该属性。之前误用 getattr(self, ...) 恒为 False，
+            # 导致 macOS 上 vo 被再次改写为非 libmpv，无画面。
+            if not (is_macos() and getattr(self._facade, '_use_render_api', False)):
                 _mpv_set_option_string(self._facade.mpv_handle, 'vo', vo)
             # 硬解模式：auto-copy（默认，copy-back 保证 vf 滤镜可用）/ auto（原生，最快但滤镜受限）/ no（软解）
             # 兼容旧配置：bool True→auto-copy，False→no；字符串 'True'/'False' 同样处理
@@ -591,7 +594,7 @@ class MpvPlayback:
 
             self._facade.logger.info("mpv播放器初始化成功")
 
-            if is_macos() and getattr(self, '_use_render_api', False):
+            if is_macos() and getattr(self._facade, '_use_render_api', False):
                 try:
                     if hasattr(self._facade.video_widget, 'setup_render_context'):
                         if not self._facade.video_widget.setup_render_context(self._facade.mpv_handle):
@@ -630,6 +633,15 @@ class MpvPlayback:
             except Exception as e:
                 self._facade.logger.debug(f"HDR诊断读取失败: {e}")
 
+            # 重建事件轮询定时器前先释放旧实例，避免 HDR 重初始化后
+            # 两个定时器同时轮询同一个事件队列（重复 drain、泄漏）
+            _old_event_timer = getattr(self._facade, 'event_timer', None)
+            if _old_event_timer:
+                try:
+                    _old_event_timer.stop()
+                    _old_event_timer.deleteLater()
+                except Exception as _e:
+                    logger.debug(f"释放旧 event_timer 失败: {_e}")
             self._facade.event_timer = QTimer()
             self._facade.event_timer.timeout.connect(self._facade._process_events)
             self._facade.event_timer.start(100)
@@ -804,8 +816,13 @@ class MpvPlayback:
             handle = self._facade.mpv_handle
             if not handle:
                 return
+        # 单次最多处理的事件数：mpv 在缓冲/日志爆发时事件可能持续到达，
+        # 无上限 drain 会长时间占用 UI 线程导致画面卡顿
+        max_events = 200
+        processed = 0
         try:
-            while not self._facade._terminated:
+            while not self._facade._terminated and processed < max_events:
+                processed += 1
                 with self._facade._lock:
                     if self._facade._terminated or self._facade.mpv_handle is not handle:
                         return
@@ -847,6 +864,9 @@ class MpvPlayback:
                     self._facade._reconnect_count = 0
                     self._facade._switching_channel = False
                     self._facade.is_playing = True
+                    # 新文件加载成功后重置位置日志计数，否则计数器只增不减，
+                    # 后续频道的前几次位置日志会被吞掉
+                    self._facade._pos_log_count = 0
                     self._facade._schedule_media_info_start()
                     self._facade._adjust_buffer_for_content()
                     self._facade._apply_hdr_on_file_loaded()
@@ -886,18 +906,17 @@ class MpvPlayback:
                                 self._facade._safe_emit(self._facade.play_state_changed, False)
                                 self._facade._safe_emit(self._facade.local_file_ended, ended_url)
                         elif reason == MPV_END_FILE_REASON_ERROR:
-                            if (self._facade._switching_channel
-                                    and not getattr(self._facade, '_switch_stop_sent', True)):
-                                # 本次 play() 没有执行过 stop 旧流（EOF 续播等场景），
-                                # 该 ERROR 是新 URL 拉流失败而非切换残留——
-                                # 不能吞掉，需走重连/退回直播，否则停在停止态
+                            if self._facade._switching_channel:
+                                # 旧流被主动 stop 时产生的是 REASON_STOP，因此切换窗口内
+                                # 收到的 ERROR 只可能来自新 URL 拉流失败。之前统一按
+                                # "频道切换噪声"忽略，导致换台到坏源时 UI 停在假播放，
+                                # 这里清除标记后继续走正常失败/重连路径。
                                 self._facade._switching_channel = False
                                 self._facade.logger.warning(
-                                    "END_FILE错误: 新流加载失败（无切换stop），按重连处理")
-                            if self._facade._switching_channel:
-                                self._facade.logger.debug("频道切换导致的END_FILE，忽略重连")
-                                self._facade._switching_channel = False
-                            elif not self._facade._user_stopped and self._facade.current_url:
+                                    "END_FILE错误: 换台后新源加载失败，按播放失败处理")
+                            if self._facade._user_stopped:
+                                self._facade.logger.debug("END_FILE错误: 用户已停止，忽略")
+                            elif self._facade.current_url:
                                 is_net_file = self._facade._is_network_drive(self._facade.current_url)
                                 is_network_url = self._facade.current_url.lower().startswith(
                                     ('http://', 'https://', 'rtsp://', 'rtp://', 'udp://', 'rtmp://'))
@@ -975,7 +994,9 @@ class MpvPlayback:
             self._facade.logger.debug(f"重置demuxer选项失败: {e}")
 
     def _schedule_media_info_start(self):
-        if getattr(self, '_media_info_scheduled', False):
+        # 重入标记保存在 facade 上（play() 会把它重置为 False），
+        # 之前读取 self 上的同名属性恒为 False，防重入完全失效
+        if getattr(self._facade, '_media_info_scheduled', False):
             return
         self._facade._media_info_scheduled = True
 
@@ -983,10 +1004,17 @@ class MpvPlayback:
             self._facade._live_info_timer.stop()
 
         if hasattr(self._facade, '_media_info_timer') and self._facade._media_info_timer:
-            self._facade._media_info_timer.stop()
-            self._facade._media_info_timer.deleteLater()
+            try:
+                self._facade._media_info_timer.stop()
+                self._facade._media_info_timer.deleteLater()
+            except Exception as _e:
+                logger.debug(f"释放旧 media_info_timer 失败: {_e}")
+        # 用真正的单次定时器（而不是对实例调用静态 singleShot），
+        # 这样 stop() 才能真正取消"延迟启动 live info"的动作
         self._facade._media_info_timer = QTimer()
-        self._facade._media_info_timer.singleShot(1000, self._facade._start_live_info_timer)
+        self._facade._media_info_timer.setSingleShot(True)
+        self._facade._media_info_timer.timeout.connect(self._facade._start_live_info_timer)
+        self._facade._media_info_timer.start(1000)
 
         QTimer.singleShot(3000, self._facade._capture_thumbnail)
 
@@ -1222,7 +1250,7 @@ class MpvPlayback:
                 total_time = self._facade.get_total_time()
                 position = self._facade.get_position()
 
-                self._facade._pos_log_count = getattr(self, '_pos_log_count', 0) + 1
+                self._facade._pos_log_count = getattr(self._facade, '_pos_log_count', 0) + 1
                 if self._facade._pos_log_count in (1, 2, 3, 5, 10):
                     self._facade.logger.debug(
                         f"[SRC{self._facade._pos_log_count}] total={total_time} "
@@ -1552,7 +1580,8 @@ class MpvPlayback:
             sig_peak = get_double('video-params/sig-peak')
             sig_avg = get_double('video-params/sig-avg')
 
-            if not hasattr(self, '_last_info_debug') or self._facade._last_info_debug != (w, h, vcodec, acodec):
+            if (getattr(self._facade, '_last_info_debug', None)
+                    != (w, h, vcodec, acodec)):
                 self._facade._last_info_debug = (w, h, vcodec, acodec)
                 self._facade.logger.debug(
                     f"媒体信息：width={w}, height={h}, vcodec='{vcodec}', "
@@ -1570,7 +1599,7 @@ class MpvPlayback:
                 )
 
                 track_list_str = get_str('track-list') or ''
-                if track_list_str and not getattr(self, '_track_list_logged', False):
+                if track_list_str and not getattr(self._facade, '_track_list_logged', False):
                     self._facade._track_list_logged = True
                     self._facade.logger.info(f"track-list: {track_list_str[:500]}")
                 paused = get_str('pause') or ''
@@ -1787,9 +1816,6 @@ class MpvPlayback:
             self._facade.current_url = url
             self._facade._user_stopped = False
             self._facade._switching_channel = True
-            # 标记本次切换是否执行过 stop 旧流：EOF 续播等场景旧流已结束、
-            # 不会 stop，此时新 URL 的 ERROR 不属于「切换残留」，需正常处理
-            self._facade._switch_stop_sent = False
 
             reachability = self._facade._check_path_reachability(url)
             if reachability is not None:
@@ -1833,7 +1859,6 @@ class MpvPlayback:
                     with self._facade._lock:
                         if self._facade.mpv_handle and not self._facade._terminated:
                             _mpv_send_command(self._facade.mpv_handle, ['stop'])
-                    self._facade._switch_stop_sent = True
                 except Exception as e:
                     self._facade.logger.debug(f"切换前停止旧播放失败: {e}")
                 # 重置内部状态，但不发 play_state_changed 信号避免 UI 闪烁
@@ -1846,7 +1871,9 @@ class MpvPlayback:
                 except Exception as _e:
                     self._facade.logger.debug(f"清理视频滤镜失败: {_e}")
 
-            if hasattr(self, 'event_timer') and self._facade.event_timer and not self._facade.event_timer.isActive():
+            # event_timer 保存在 facade 上；此前用 hasattr(self, 'event_timer')
+            # 判断恒为 False，stop() 之后无法重新启动事件轮询（收不到 FILE_LOADED）
+            if getattr(self._facade, 'event_timer', None) and not self._facade.event_timer.isActive():
                 self._facade.event_timer.start(100)
 
             if hasattr(self._facade, '_media_info_timer') and self._facade._media_info_timer:
@@ -1959,7 +1986,7 @@ class MpvPlayback:
                 logger.debug(f"unexpected error: {_e}")
         self._facade.stop()
         for timer_attr in ['_media_info_timer', '_live_info_timer', 'event_timer']:
-            timer = getattr(self, timer_attr, None)
+            timer = getattr(self._facade, timer_attr, None)
             if timer:
                 try:
                     timer.stop()
@@ -2239,7 +2266,7 @@ class MpvPlayback:
             self._facade.current_url = None
             self._facade.media_info = {}
 
-            if hasattr(self, 'event_timer') and self._facade.event_timer:
+            if getattr(self._facade, 'event_timer', None):
                 self._facade.event_timer.stop()
 
             if was_playing:
@@ -2250,8 +2277,9 @@ class MpvPlayback:
             self._facade.logger.error(f"停止播放失败: {str(e)}")
 
     def terminate(self):
-        # 防止重入：如果已在终止过程中，直接返回
-        if getattr(self, '_terminated', False):
+        # 防止重入：终止标记在 facade 上，之前读 self 上的同名属性恒为 False，
+        # 重复调用会反复执行销毁流程
+        if getattr(self._facade, '_terminated', False):
             self._facade.logger.debug("terminate() 已在执行中，跳过重复调用")
             return
         try:
@@ -2264,8 +2292,10 @@ class MpvPlayback:
                 except Exception as _e:
                     logger.debug(f"unexpected error: {_e}")
 
+            # 定时器都挂在 facade 上，之前 getattr(self, ...) 拿到的是 None，
+            # 终止时其实一个定时器都没停
             for timer_attr in ['_media_info_timer', '_live_info_timer', 'event_timer']:
-                timer = getattr(self, timer_attr, None)
+                timer = getattr(self._facade, timer_attr, None)
                 if timer:
                     try:
                         timer.stop()
@@ -2282,17 +2312,17 @@ class MpvPlayback:
                 except Exception as e:
                     self._facade.logger.debug(f"发送quit命令失败（可能已关闭）: {e}")
 
-                from PySide6.QtCore import QElapsedTimer, QEventLoop
-                elapsed = QElapsedTimer()
-                elapsed.start()
-                while elapsed.elapsed() < 150:
+                # 只让 Qt 处理一轮待处理事件（投递挂起的跨线程信号），
+                # 不再用 150ms 的 processEvents 空转等待——mpv_handle 在进入
+                # 这里之前已置 None，原循环条件第一次判断就为真，空转没有意义
+                try:
                     from PySide6.QtWidgets import QApplication
+                    from PySide6.QtCore import QEventLoop
                     QApplication.processEvents(
                         QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents
                     )
-                    with self._facade._lock:
-                        if self._facade.mpv_handle is None:
-                            break
+                except Exception as _e:
+                    logger.debug(f"终止前处理挂起事件失败: {_e}")
 
                 try:
                     terminate_destroy_mpv(handle)

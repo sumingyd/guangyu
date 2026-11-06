@@ -85,8 +85,15 @@ class ProgressController:
                     progress_seconds = min(int(raw_seconds), int(total_duration))
 
                     if progress_seconds >= int(total_duration) * 0.98 and hasattr(w, 'speed_button') and w.player_controller:
+                        # 只有真正追到直播边缘才恢复 1.0x：老节目回看到 98% 但
+                        # 墙钟位置仍落后于直播时，用户可能主动倍速观看，不应被强制降速
+                        try:
+                            playback_wallclock = start_time + timedelta(seconds=progress_seconds)
+                            caught_up = (datetime.now() - playback_wallclock).total_seconds() <= 3
+                        except (TypeError, ValueError):
+                            caught_up = False
                         current_speed = w.player_controller.get_speed()
-                        if current_speed is not None and abs(current_speed - 1.0) > 0.01:
+                        if caught_up and current_speed is not None and abs(current_speed - 1.0) > 0.01:
                             w.player_controller.set_speed(1.0)
                             w.speed_button.setText("1.0x")
                             logger.info("回看已追上直播，自动恢复倍速到1.0x")
@@ -119,10 +126,18 @@ class ProgressController:
     def _update_timeshift_epg_progress(self, current_program, current_time_ms, total_time_ms, position):
         w = self.window
         try:
+            now = datetime.now()
             catchup_program = getattr(w, 'catchup_program', None)
             if catchup_program:
                 start_time = catchup_program.get('start')
                 end_time = catchup_program.get('end')
+                # 时移窗口的终点应随直播推进。若冻结在"进入时移"的时刻，
+                # 进度条会很快顶在 100% 不再前进，拖动映射的窗口范围也不再
+                # 覆盖新到内容。这里把 end 平滑推进到当前直播边缘。
+                if (w.play_state.is_timeshift and isinstance(end_time, datetime)
+                        and end_time < now):
+                    end_time = now
+                    catchup_program['end'] = end_time
             else:
                 start_time = datetime.fromisoformat(current_program.get('start', ''))
                 end_time = datetime.fromisoformat(current_program.get('end', ''))
@@ -130,7 +145,6 @@ class ProgressController:
             if not start_time or not end_time:
                 return
 
-            now = datetime.now()
             total_duration = (end_time - start_time).total_seconds()
             if total_duration <= 0:
                 return

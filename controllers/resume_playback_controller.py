@@ -32,6 +32,25 @@ class ResumePlaybackController(QObject):
                 pc.local_file_position_to_save.connect(self._on_position_to_save)
             if hasattr(pc, 'file_loaded'):
                 pc.file_loaded.connect(self._on_file_loaded)
+            if hasattr(pc, 'play_state_changed'):
+                pc.play_state_changed.connect(self._on_play_state_changed)
+
+    def _on_play_state_changed(self, playing: bool):
+        """播放会话结束时清空已恢复标记。
+
+        暂停也会通过该信号发 False，需要按 is_paused 排除；否则同一次播放中
+        暂停后恢复会被误判为新会话。此前该标记从不清空，导致停止后重新打开
+        同一个文件再也不会自动恢复断点。
+        """
+        if playing:
+            return
+        try:
+            pc = self.window.player_controller
+            if pc and getattr(pc, 'is_paused', False):
+                return
+        except Exception:
+            pass
+        self._restored_url = None
 
     # ---------- 保存位置 ----------
     def _on_position_to_save(self, url: str, position: float, duration: float):
@@ -76,6 +95,9 @@ class ResumePlaybackController(QObject):
             url = pc.current_url or ''
             if not url:
                 return
+            # 切换到其它文件后，上一次的恢复标记不再适用于新 URL
+            if self._restored_url and self._restored_url != url:
+                self._restored_url = None
             # 跳过队列自动切换
             if self._skip_next_url and self._skip_next_url == url:
                 logger.debug(f"跳过自动恢复（队列切换）: {url[:60]}")

@@ -277,6 +277,16 @@ class PipController:
             elif self._pip_saved_geometry is not None:
                 wayland_set_geometry(self.window, self._pip_saved_geometry.x(), self._pip_saved_geometry.y(), self._pip_saved_geometry.width(), self._pip_saved_geometry.height())
 
+            # 进入 PiP 时若原本是全屏，会先退出全屏；退出 PiP 必须恢复，
+            # 否则主窗口会停在普通窗口状态（此前遗漏了这一步）
+            if self._pip_saved_fullscreen:
+                try:
+                    if not getattr(self.window, 'is_fullscreen', False):
+                        self.window.toggle_fullscreen()
+                except Exception as _e:
+                    logger.debug(f"退出画中画恢复全屏失败: {_e}")
+                self._pip_saved_fullscreen = False
+
             self._pip_dragging = False
             self._pip_resizing = False
             self.window.unsetCursor()

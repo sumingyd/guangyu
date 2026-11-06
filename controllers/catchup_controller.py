@@ -489,7 +489,10 @@ class CatchupController:
             is_timeshift = w.play_state.is_timeshift
 
             if is_timeshift:
-                end_time = self.catchup_program['end']
+                # 时移 URL 的 end 必须跟随直播边缘（now）。如果沿用进入时移时
+                # 冻结的 end，向后拖动生成的 URL 窗口会提前结束，流立刻 EOF，
+                # 进度条也会停在冻结点不再前进。
+                end_time = max(self.catchup_program['end'], now)
 
             if new_start_time >= end_time:
                 ch_name, tvg_id, tvg_name, comma_name = w._get_epg_match_params()
@@ -561,7 +564,10 @@ class CatchupController:
 
         if not hasattr(w, 'player_controller') or not w.player_controller:
             return False
-        if not w.player_controller.is_playing:
+        # 暂停时 mpv 依然支持在缓冲区里 seek；此前只判断 is_playing，
+        # 暂停状态拖动进度条会误走 URL 重建（重新拉流、丢失精确位置）
+        if not (w.player_controller.is_playing
+                or getattr(w.player_controller, 'is_paused', False)):
             return False
 
         catchup_start_progress = getattr(w, '_catchup_start_progress', None)
@@ -889,8 +895,11 @@ class CatchupController:
             self._cooldown_timer = None
         w._catchup_start_time = _time.time()
         w._catchup_start_progress = offset_seconds
-        # 新URL从时移目标位置开播，time-pos换算偏移归零
-        w._catchup_time_pos_offset = 0.0
+        # 时移 URL 从 target_wallclock 开始拉流，mpv 的 time-pos 从 0 重新计数。
+        # 节目内真实位置 = time-pos + offset_seconds，而进度代码计算的是
+        # raw = time-pos - _catchup_time_pos_offset，因此偏移必须是 -offset_seconds。
+        # 之前写死为 0 会让进度条立刻跳回节目开头，seek 也会算错目标位置。
+        w._catchup_time_pos_offset = -float(offset_seconds)
 
         w._timeshift_start_time = target_wallclock
         w.play_state.set_timeshift()
