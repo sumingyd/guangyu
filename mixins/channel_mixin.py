@@ -55,16 +55,25 @@ class ChannelMixin:
             target_list = self.sub_channel_list if source == 'subscription' else self.local_channel_list
             if len(channels_to_search or []) > 0:
                 self._pending_last_channel = None
+                last_url = pending.get('url', '')
                 last_name = pending.get('name', '')
                 last_idx = pending.get('index', -1)
                 target_idx = -1
-                if last_name:
+                # 同名多源时频道名无法唯一确定频道，优先按 URL 定位
+                if last_url:
+                    for i, ch in enumerate(channels_to_search or []):
+                        if ch.get('url', '') == last_url:
+                            target_idx = i
+                            break
+                # URL 命中不了（旧配置或列表已变动）退回下标
+                if target_idx < 0 and last_idx >= 0 and last_idx < len(channels_to_search or []):
+                    target_idx = last_idx
+                # 最后才用名字兜底
+                if target_idx < 0 and last_name:
                     for i, ch in enumerate(channels_to_search or []):
                         if ch.get('name', '') == last_name:
                             target_idx = i
                             break
-                if target_idx < 0 and last_idx >= 0 and last_idx < len(channels_to_search or []):
-                    target_idx = last_idx
                 if target_idx >= 0:
                     safe_single_shot(100, self, lambda idx=target_idx, sl=target_list: self.select_channel_by_index(idx, source_list=sl))
 
@@ -256,9 +265,12 @@ class ChannelMixin:
 
             try:
                 ch_name = self.current_channel.get('name', '')
+                ch_url = self.current_channel.get('url', '') or ''
                 ch_idx = idx if isinstance(idx, int) and 0 <= idx < len(channels or []) else self.channel_list.row(item)
                 is_local = channel_list is self.local_channel_list
                 ch_file = getattr(self, '_local_playlist_path', '') if is_local else getattr(self, '_subscription_url', '')
+                # 与 event_handler 关闭时保存保持一致：url 作为恢复时的首要匹配键
+                self.config.set_value('Player', 'last_channel_url', ch_url)
                 self.config.save_last_channel(ch_file, ch_name, ch_idx)
             except Exception:
                 pass
@@ -317,7 +329,13 @@ class ChannelMixin:
     def _load_last_channel(self):
         try:
             last = self.config.load_last_channel()
-            if last.get('name') and last.get('index', -1) >= 0:
+            # url 是恢复时的首要匹配键；旧配置没有该字段时保持原有名字/下标恢复
+            last_url = self.config.get_value('Player', 'last_channel_url', '')
+            if not isinstance(last_url, str):
+                last_url = ''
+            if last_url:
+                last['url'] = last_url
+            if last.get('url') or (last.get('name') and last.get('index', -1) >= 0):
                 self._pending_last_channel = last
         except Exception as e:
             logger.debug(f"加载最后频道失败: {e}")

@@ -834,6 +834,8 @@ class IPTVPlayer(
         self.player_controller.thumbnail_captured.connect(self._on_player_thumbnail_captured)
         self.player_controller.file_loaded.connect(self.media_ctrl.apply_video_eq_on_load)
         self.player_controller.file_loaded.connect(self.media_ctrl.apply_audio_eq_on_load)
+        # 文件真正加载成功后立即取消源超时看门狗（END_FILE/stop 在各自路径取消）
+        self.player_controller.file_loaded.connect(self._cancel_source_timeout)
 
         # 初始化文件队列控制器（在 player_controller 创建后）
         _init_errors = []

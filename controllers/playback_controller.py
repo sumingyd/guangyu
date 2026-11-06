@@ -12,13 +12,19 @@ from utils.delay_constants import DelayMs
 
 class PlaybackController:
 
+    # loadfile 之后等待 FILE_LOADED 的最长时间，超时判定为该源拉流失败
+    SOURCE_TIMEOUT_MS = 10000
+
     def __init__(self, main_window: MainWindowProtocol):
         self.window: MainWindowProtocol = main_window
         self._is_muted = False
         self._pre_mute_volume = 0
         self.current_channel: Optional[Dict[str, Any]] = None
         self._is_switching = False
-        self._live_timeshift_seconds = 0
+        # 切换窗口内到达的最新一次请求，窗口结束后补播（最后一次请求生效）
+        self._pending_channel: Optional[Dict[str, Any]] = None
+        # 切换代次：用于丢弃过期的切换窗口结束回调
+        self._switch_token = 0
         self._last_program_id = None
         self._aspect_ratio_restored = False
         self.fcc = FCCService()
@@ -36,6 +42,13 @@ class PlaybackController:
 
     def stop_playback(self):
         self.fcc.on_stop()
+        if hasattr(self.window, '_cancel_source_timeout'):
+            self.window._cancel_source_timeout()
+        # 停止后不再补播切换窗口内积压的请求，并立即解除切换锁
+        self._pending_channel = None
+        self._is_switching = False
+        self._switch_token += 1
+
         if hasattr(self.window, 'player_controller') and self.window.player_controller:
             self.window.player_controller.stop()
 
@@ -61,6 +74,21 @@ class PlaybackController:
                 self.window.video_placeholder.setText("")
 
         self.current_channel = None
+
+        # 清理时移/回看状态：否则之后播放直播时进度条会一直按旧的时移偏移计算
+        catchup_ctrl = getattr(self.window, 'catchup_ctrl', None)
+        if catchup_ctrl and hasattr(catchup_ctrl, '_clear_catchup_state'):
+            try:
+                catchup_ctrl._clear_catchup_state(set_state='idle')
+            except Exception as e:
+                logger.debug(f"停止播放时清理回看状态失败: {e}")
+        # 兜底：即使没有 catchup_ctrl，也保证窗口级时移状态归零
+        try:
+            self.window._live_timeshift_seconds = 0
+            self.window.catchup_program = None
+        except Exception as e:
+            logger.debug(f"重置窗口时移状态失败: {e}")
+
         self.window.play_state.set_idle()
 
         self._reset_ui_to_initial_state()
@@ -169,41 +197,64 @@ class PlaybackController:
 
     def play_channel(self, channel: Dict[str, Any]):
 
+        if not channel:
+            return
+
         if self._is_switching:
-            logger.debug("play_channel: 忽略重复的频道切换请求")
+            # 300ms 切换窗口内不再静默丢弃：记录最新请求，窗口结束后补播
+            self._pending_channel = channel
+            logger.debug(f"play_channel: 切换窗口内收到新请求，排队最后一次 {channel.get('name', '?')}")
             return
 
         self._is_switching = True
+        self._switch_token += 1
+        token = self._switch_token
 
         try:
             logger.debug(f"play_channel: 开始切换频道 {channel.get('name', '?')} url={channel.get('url', '?')}")
             self._do_play_channel(channel)
         finally:
-            # 确保在主线程上重置 _is_switching 标志
-            # 如果 invoke_on_thread 失败，使用 QTimer.singleShot 兜底，否则标志会永久锁定
-            def _reset_switching():
-                self._is_switching = False
+            self._schedule_switch_window_end(token)
 
+    def _schedule_switch_window_end(self, token: int):
+        """在切换窗口结束后解除锁，并补播窗口内积压的最后一次请求。"""
+        def _on_window_end():
+            # 过期回调（期间已停止播放或开始了新的切换窗口）直接丢弃
+            if token != self._switch_token:
+                return
+            self._is_switching = False
+            pending = self._pending_channel
+            self._pending_channel = None
+            if not pending:
+                return
+            current = self.current_channel or getattr(self.window, 'current_channel', None)
+            if current and pending.get('url') == current.get('url'):
+                logger.debug("play_channel: 积压请求与当前频道一致，跳过补播")
+                return
+            logger.debug(f"play_channel: 切换窗口结束，补播最后一次请求 {pending.get('name', '?')}")
+            self.play_channel(pending)
+
+        try:
+            from utils.thread_safety import invoke_on_thread, safe_single_shot
+
+            def _schedule_reset():
+                safe_single_shot(DelayMs.CHANNEL_CLICK, self.window, _on_window_end)
+
+            invoke_on_thread(self.window, _schedule_reset)
+        except Exception as e:
+            logger.debug(f"invoke_on_thread 失败，使用 QTimer.singleShot 兜底: {e}")
             try:
-                from utils.thread_safety import invoke_on_thread
-
-                def _schedule_reset():
-                    QTimer.singleShot(DelayMs.CHANNEL_CLICK, _reset_switching)
-
-                invoke_on_thread(self.window, _schedule_reset)
-            except Exception as e:
-                logger.debug(f"invoke_on_thread 失败，使用 QTimer.singleShot 兜底: {e}")
-                try:
-                    QTimer.singleShot(DelayMs.CHANNEL_CLICK, _reset_switching)
-                except Exception:
-                    # 最后兜底：直接重置，避免标志永久锁定
-                    self._is_switching = False
+                QTimer.singleShot(DelayMs.CHANNEL_CLICK, _on_window_end)
+            except Exception:
+                # 最后兜底：直接重置，避免标志永久锁定
+                self._is_switching = False
 
     def _do_play_channel(self, channel: Dict[str, Any]):
         if not (hasattr(self.window, 'player_controller') and self.window.player_controller and channel):
             return
 
-        self._live_timeshift_seconds = 0
+        # 时移偏移由 UI（window）读取，必须重置窗口上的同名属性
+        self.window._live_timeshift_seconds = 0
         self._last_program_id = None
 
         if self.window.play_state.is_catchup_or_timeshift:
@@ -239,6 +290,8 @@ class PlaybackController:
 
         self.current_channel = channel
         self.window.play_state.set_live()
+        # loadfile 后启动看门狗：10 秒内没有 FILE_LOADED 即判定拉流失败
+        self._start_source_timeout(channel)
 
         # 重置媒体信息缓存，确保新频道的媒体信息和质量评分被重新计算
         # 不重置会导致：切到相同分辨率的频道时 static_key 不变，评分条不更新
@@ -246,6 +299,27 @@ class PlaybackController:
         self.window._last_media_info = {}
 
         self._prefetch_adjacent_channels(channel)
+
+    def _start_source_timeout(self, channel: Dict[str, Any]):
+        """loadfile 后启动源超时看门狗（FILE_LOADED / END_FILE / stop 时取消）。"""
+        w = self.window
+        if not hasattr(w, 'player_controller') or not w.player_controller:
+            return
+        if not (hasattr(w, '_cancel_source_timeout') and hasattr(w, '_on_source_timeout')):
+            return
+        w._cancel_source_timeout()
+        timer = getattr(w, '_source_timeout_timer', None)
+        if timer is None:
+            timer = QTimer(w)
+            timer.setSingleShot(True)
+            w._source_timeout_timer = timer
+        else:
+            try:
+                timer.timeout.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+        timer.timeout.connect(lambda ch=channel: w._on_source_timeout(ch))
+        timer.start(self.SOURCE_TIMEOUT_MS)
 
     def _exit_catchup_mode(self):
         catchup_ctrl = getattr(self.window, 'catchup_ctrl', None)
@@ -417,6 +491,9 @@ class PlaybackController:
                 else:
                     w.status_bar_show_message(f"{tr('playing', 'Playing')}: {channel_name}")
         else:
+            # END_FILE / stop / 暂停都会走到这里；源超时看门狗只在加载阶段有意义
+            if hasattr(w, '_cancel_source_timeout'):
+                w._cancel_source_timeout()
             play_path = AppStyles.get_icon('play', btn_color)
             if play_path:
                 w.play_button.setIcon(QIcon(play_path))

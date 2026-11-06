@@ -164,6 +164,8 @@ class PlaylistPanelMixin:
         self.channel_list = self.sub_channel_list
         self.group_combo = self.sub_group_combo
         self.channel_empty_label = self.sub_empty_label
+        # 当前页签对应的频道列表（含收藏/历史），供上下键切台使用
+        self.active_channel_list = self.sub_channel_list
 
         self._click_timer = QTimer(self)
         self._click_timer.setSingleShot(True)
@@ -412,14 +414,22 @@ class PlaylistPanelMixin:
             self.channel_list = self.sub_channel_list
             self.group_combo = self.sub_group_combo
             self.channel_empty_label = self.sub_empty_label
+            self.active_channel_list = self.sub_channel_list
         elif index == 1:
             self.channel_list = self.local_channel_list
             self.group_combo = self.local_group_combo
             self.channel_empty_label = self.local_empty_label
+            self.active_channel_list = self.local_channel_list
         elif index == 2:
+            fav_list = getattr(self, 'fav_channel_list', None)
+            if fav_list is not None:
+                self.active_channel_list = fav_list
             self.favorites_ctrl.populate_favorites_tab()
             return
         elif index == 3:
+            history_list = getattr(self, 'history_channel_list', None)
+            if history_list is not None:
+                self.active_channel_list = history_list
             self.favorites_ctrl.populate_history_tab()
             return
 

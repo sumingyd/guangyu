@@ -14,6 +14,9 @@ class MultiScreenController(QObject):
         self._players: Dict[int, Any] = {}
         self._active = False
         self._info_timer: Optional[QTimer] = None
+        # 进入多画面前主播放器的实际音量（None 表示未接管）
+        self._main_player_volume: Optional[int] = None
+        self._last_cell_index = 0
 
     @property
     def is_active(self) -> bool:
@@ -29,6 +32,8 @@ class MultiScreenController(QObject):
                 return
             self._stop_all_cells()
             self._widget.set_layout(count)
+            self._last_cell_index = 0
+            self._focus_cell(0)
             return
 
         pip_ctrl = getattr(self.window, 'pip_ctrl', None)
@@ -46,13 +51,19 @@ class MultiScreenController(QObject):
         self._widget.cell_volume_changed.connect(self._on_volume_changed)
         self._widget.cell_audio_track_changed.connect(self._on_audio_track_changed)
         self._widget.cell_clicked.connect(self._on_cell_clicked)
+        self._widget.cell_navigation_requested.connect(self._on_cell_navigation)
+        self._widget.exit_requested.connect(self.exit_multi_screen)
         self._widget.global_mute_toggled.connect(self._on_global_mute_toggled)
         self._widget.set_layout(count)
 
         self._replace_video_frame(w, self._widget)
 
         self._active = True
+        # 主播放器被遮挡且仍在出声，先静音避免多路音频串音
+        self._mute_main_player()
         self._start_info_timer()
+        self._last_cell_index = 0
+        self._focus_cell(0)
 
         if hasattr(w, 'status_bar_show_message'):
             tr = w.language_manager.tr
@@ -109,6 +120,7 @@ class MultiScreenController(QObject):
             self._widget = None
 
         self._active = False
+        self._restore_main_player_volume()
 
         if hasattr(w, 'status_bar_show_message'):
             tr = w.language_manager.tr
@@ -169,6 +181,9 @@ class MultiScreenController(QObject):
 
             cell.set_channel(channel)
             self._players[index] = player
+            # 键盘焦点跟随新播放的单元格，避免方向键/空格落到隐藏的主播放器
+            self._last_cell_index = index
+            cell.setFocus()
 
         except Exception as e:
             logger.error(f"多画面播放失败 cell={index}: {e}")
@@ -238,7 +253,64 @@ class MultiScreenController(QObject):
                 logger.debug(f"processEvents 失败: {e}")
 
     def _on_cell_clicked(self, index: int):
-        logger.debug(f"多画面 cell {index} 被点击 (功能开发中)")
+        self._last_cell_index = index
+        self._focus_cell(index)
+
+    def _focus_cell(self, index: int):
+        """把键盘焦点放到指定单元格，使方向键/空格作用于网格而不是隐藏的主播放器。"""
+        if not self._widget:
+            return
+        cell = self._widget.get_cell(index)
+        if cell:
+            cell.setFocus()
+
+    def move_focus(self, key):
+        """按方向键在网格中移动焦点（供全局快捷键在分屏激活时调用）。"""
+        if not self._widget:
+            return
+        current = self._widget.cell_index_of(QApplication.focusWidget())
+        if current < 0:
+            current = self._last_cell_index
+        self._last_cell_index = self._widget.move_focus(current, key)
+
+    def _on_cell_navigation(self, index: int, key):
+        if not self._widget:
+            return
+        self._last_cell_index = self._widget.move_focus(index, key)
+
+    def toggle_focused_mute(self):
+        """切换当前焦点单元格的静音（供全局静音键在分屏激活时使用）。"""
+        if not self._widget:
+            return
+        index = self._widget.cell_index_of(QApplication.focusWidget())
+        if index < 0:
+            index = self._last_cell_index
+        cell = self._widget.get_cell(index)
+        if cell:
+            cell.toggle_mute()
+
+    def _mute_main_player(self):
+        """进入多画面时把主播放器静音，退出时恢复。"""
+        player = getattr(self.window, 'player_controller', None)
+        if not player:
+            return
+        try:
+            self._main_player_volume = player.get_volume()
+            player.set_volume(0)
+        except Exception as e:
+            self._main_player_volume = None
+            logger.debug(f"多画面静音主播放器失败: {e}")
+
+    def _restore_main_player_volume(self):
+        if self._main_player_volume is None:
+            return
+        player = getattr(self.window, 'player_controller', None)
+        if player:
+            try:
+                player.set_volume(self._main_player_volume)
+            except Exception as e:
+                logger.debug(f"多画面恢复主播放器音量失败: {e}")
+        self._main_player_volume = None
 
     def _on_global_mute_toggled(self, muted: bool):
         for index, player in list(self._players.items()):

@@ -5,7 +5,7 @@
 
 from core.log_manager import global_logger as logger
 from PySide6.QtCore import Qt, QEvent, QTimer
-from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPlainTextEdit, QSpinBox, QTextEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QDockWidget, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPlainTextEdit, QSpinBox, QTextEdit, QVBoxLayout, QWidget
 from controllers.main_window_protocol import MainWindowProtocol
 from utils.thread_safety import safe_single_shot
 
@@ -25,13 +25,53 @@ class EventHandler:
             current = vs.value() if vs else 100
             mc._set_volume(max(0, min(current + delta, 100)))
 
-    def _is_main_window_focused(self) -> bool:
-        """判断当前焦点是否在主窗口上（排除悬浮面板、对话框等）"""
+    def _is_app_window_active(self) -> bool:
+        """当前活动窗口是否属于本应用（主窗口或其浮动面板），对话框不算"""
+        active = QApplication.activeWindow()
+        if active is None:
+            return self.window.isActiveWindow()
+        if active is self.window:
+            return True
+        if isinstance(active, QDialog):
+            return False
+        if isinstance(active, QDockWidget):
+            if active.parent() is self.window:
+                return True
+            for attr in ('epg_dock', 'playlist_dock', 'floating_dock'):
+                if active is getattr(self.window, attr, None):
+                    return True
+            return False
+        return active.parent() is self.window
+
+    def _has_open_dialog(self) -> bool:
+        """是否存在模态对话框、活动的非模态对话框，或弹出控件（右键菜单/下拉框）"""
+        modal = QApplication.activeModalWidget()
+        if modal is not None and modal is not self.window:
+            return True
+        # 右键菜单、QComboBox 下拉列表等弹出控件同样持有键盘焦点：
+        # 此时 Escape 应关闭弹层，而不是停播放/退全屏
+        popup = QApplication.activePopupWidget()
+        if popup is not None and popup is not self.window:
+            return True
+        active = QApplication.activeWindow()
+        if active is not None and active is not self.window and isinstance(active, QDialog):
+            return True
+        return False
+
+    def _is_player_focus(self) -> bool:
+        """焦点是否在视频区域/主窗口空白处（此时可安全接管方向键）"""
         focus_widget = QApplication.focusWidget()
         if focus_widget is None:
             return self.window.isActiveWindow()
-        window = focus_widget.window()
-        return window is self.window
+        if focus_widget is self.window:
+            return True
+        return (focus_widget is getattr(self.window, 'video_widget', None)
+                or focus_widget is getattr(self.window, 'video_frame', None))
+
+    def _is_multi_screen_active(self) -> bool:
+        """多画面是否激活（激活时方向键/空格由网格单元格处理）"""
+        ms = getattr(self.window, 'multi_screen_ctrl', None)
+        return bool(ms is not None and getattr(ms, 'is_active', False))
 
     def eventFilter(self, obj, event: QEvent) -> bool:
         """事件过滤器 - 在 app 级别统一处理所有快捷键（不受焦点影响）"""
@@ -100,6 +140,9 @@ class EventHandler:
 
     def _is_handled_shortcut(self, key, modifiers) -> bool:
         """判断按键组合是否由 eventFilter 统一处理（用于拦截 ShortcutOverride）"""
+        # 对话框打开或活动窗口不属于本应用时，不抢占任何按键
+        if self._has_open_dialog() or not self._is_app_window_active():
+            return False
         if self._is_input_widget_focused():
             return False
         # 快捷键速查浮层（? 键；Shift+/ 与直接 ? 两种键盘布局均支持）
@@ -107,10 +150,11 @@ class EventHandler:
             return True
         # _is_input_widget_focused() 已在上方检查，此处无需重复判断
         if modifiers == Qt.KeyboardModifier.NoModifier:
-            global_keys = (Qt.Key.Key_Space, Qt.Key.Key_Escape,
+            # 注意：Tab 与 Space 不在此列表中，交回 Qt 处理焦点移动与控件激活
+            global_keys = (Qt.Key.Key_Escape,
                            Qt.Key.Key_F, Qt.Key.Key_E,
                            Qt.Key.Key_L,
-                           Qt.Key.Key_Y, Qt.Key.Key_Tab,
+                           Qt.Key.Key_Y,
                            Qt.Key.Key_F5, Qt.Key.Key_F11,
                            Qt.Key.Key_Backspace, Qt.Key.Key_S,
                            Qt.Key.Key_Period, Qt.Key.Key_Comma,
@@ -137,7 +181,8 @@ class EventHandler:
             # Backspace 已被上方 _is_input_widget_focused() 检查拦截，此处无需重复判断
             if key in global_keys:
                 return True
-            if key in main_only_keys and self._is_main_window_focused():
+            # 方向键仅在视频区域聚焦且非多画面时接管（多画面交给单元格自己处理）
+            if key in main_only_keys and self._is_player_focus() and not self._is_multi_screen_active():
                 return True
             return False
         elif modifiers == Qt.KeyboardModifier.ControlModifier:
@@ -150,7 +195,7 @@ class EventHandler:
                 return True
             if key in (Qt.Key.Key_S, Qt.Key.Key_M, Qt.Key.Key_E, Qt.Key.Key_R, Qt.Key.Key_F):
                 return True
-            if key in (Qt.Key.Key_Left, Qt.Key.Key_Right) and self._is_main_window_focused():
+            if key in (Qt.Key.Key_Left, Qt.Key.Key_Right) and self._is_player_focus() and not self._is_multi_screen_active():
                 return True
             return False
         return False
@@ -158,6 +203,9 @@ class EventHandler:
     def _handle_global_shortcut(self, key, modifiers) -> bool:
         """统一快捷键分发（所有快捷键在此处理，保证可靠触发）"""
         try:
+            # 对话框打开时把按键交回对话框；活动窗口不属于本应用时不响应
+            if self._has_open_dialog() or not self._is_app_window_active():
+                return False
             if self._is_input_widget_focused():
                 return False
             w = self.window
@@ -173,14 +221,24 @@ class EventHandler:
 
             if modifiers == Qt.KeyboardModifier.NoModifier:
                 if key == Qt.Key.Key_Space:
-                    if not self._is_main_window_focused():
+                    # 多画面激活时由获得焦点的单元格处理，主播放器不响应
+                    if self._is_multi_screen_active():
+                        return False
+                    # 焦点在按钮/列表等控件上时交回控件（Space 激活控件）
+                    if not self._is_player_focus():
                         return False
                     if hasattr(w, 'playback_ctrl'):
                         w.playback_ctrl.toggle_play()
                     return True
                 elif key == Qt.Key.Key_Escape:
-                    active = QApplication.activeModalWidget()
-                    if active and isinstance(active, QDialog):
+                    # 多画面激活时先退出多画面
+                    if self._is_multi_screen_active():
+                        ms = getattr(w, 'multi_screen_ctrl', None)
+                        if ms and hasattr(ms, 'exit_multi_screen'):
+                            ms.exit_multi_screen()
+                            return True
+                        return False
+                    if not self._is_app_window_active():
                         return False
                     if hasattr(w, 'isFullScreen') and w.isFullScreen():
                         w.toggle_fullscreen()
@@ -189,7 +247,13 @@ class EventHandler:
                     return True
                 elif key in (Qt.Key.Key_Up, Qt.Key.Key_Down,
                              Qt.Key.Key_Left, Qt.Key.Key_Right):
-                    if not self._is_main_window_focused():
+                    if self._is_multi_screen_active():
+                        ms = getattr(w, 'multi_screen_ctrl', None)
+                        if ms and hasattr(ms, 'move_focus'):
+                            ms.move_focus(key)
+                            return True
+                        return False
+                    if not self._is_player_focus():
                         return False
                     if key == Qt.Key.Key_Up:
                         self._switch_channel(-1)
@@ -220,10 +284,6 @@ class EventHandler:
                     if hasattr(w, 'toggle_hide_floating'):
                         logger.debug("eventFilter: Y key pressed, calling toggle_hide_floating")
                         w.toggle_hide_floating(None)
-                    return True
-                elif key == Qt.Key.Key_Tab:
-                    if hasattr(w, 'toggle_osd'):
-                        w.toggle_osd(None)
                     return True
                 elif key == Qt.Key.Key_F5:
                     if hasattr(w, 'refresh_ui'):
@@ -370,8 +430,13 @@ class EventHandler:
                     if hasattr(w, 'media_ctrl'):
                         w.media_ctrl.frame_step()
                     return True
-                # 静音切换（J）
+                # 静音切换（J）：分屏激活时作用于当前单元格，避免解除主播放器静音造成串音
                 elif key == Qt.Key.Key_J:
+                    if self._is_multi_screen_active():
+                        ms = getattr(w, 'multi_screen_ctrl', None)
+                        if ms and hasattr(ms, 'toggle_focused_mute'):
+                            ms.toggle_focused_mute()
+                            return True
                     if hasattr(w, 'toggle_mute'):
                         w.toggle_mute()
                     return True
@@ -396,7 +461,7 @@ class EventHandler:
 
             elif modifiers == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
                 if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
-                    if not self._is_main_window_focused():
+                    if not self._is_player_focus() or self._is_multi_screen_active():
                         return False
                     if key == Qt.Key.Key_Left:
                         self._switch_channel(-1)
@@ -460,7 +525,6 @@ class EventHandler:
             ("L", tr("sc_playlist", "频道列表")),
             ("M", tr("sc_control_panel", "控制面板")),
             ("Y", tr("sc_hide_panels", "隐藏悬浮面板")),
-            ("Tab", tr("sc_osd", "OSD 切换")),
             ("J", tr("sc_mute", "静音切换")),
             ("S", tr("sc_screenshot", "截图")),
             ("P", tr("sc_pip", "画中画")),
@@ -522,29 +586,42 @@ class EventHandler:
         w._shortcut_overlay = overlay
 
     def _switch_channel(self, direction: int):
-        """切换频道（-1=上一个，1=下一个）"""
-        if hasattr(self.window, 'playlist_tab') and self.window.playlist_tab:
-            if self.window.playlist_tab.currentIndex() == 1:
-                channel_list = self.window.local_channel_list
-            else:
-                channel_list = self.window.sub_channel_list
-        elif hasattr(self.window, 'channel_list'):
-            channel_list = self.window.channel_list
-        else:
+        """切换频道（-1=上一个，1=下一个），按当前激活的播放列表页签取列表"""
+        w = self.window
+        active_list = getattr(w, 'active_channel_list', None)
+        if active_list is None:
+            active_list = getattr(w, 'channel_list', None)
+        if active_list is None:
             return
 
-        current_row = channel_list.currentRow()
-        total_rows = channel_list.count()
-
+        total_rows = active_list.count()
         if total_rows == 0:
             return
 
-        new_row = (current_row + direction) % total_rows
-        channel_list.setCurrentRow(new_row)
+        current_row = active_list.currentRow()
+        # currentRow 为 -1（未选中）时按方向取首/尾，避免负数取模跳到倒数第二行
+        if current_row < 0:
+            new_row = 0 if direction > 0 else total_rows - 1
+        else:
+            new_row = (current_row + direction) % total_rows
+        active_list.setCurrentRow(new_row)
 
-        item = channel_list.currentItem()
-        if item and hasattr(self.window, 'select_channel'):
-            self.window.select_channel(item, source_list=channel_list)
+        item = active_list.currentItem()
+        if item is None:
+            return
+
+        # 收藏/历史页签的索引指向各自的服务数据，不能交给 select_channel 解析
+        favorites_ctrl = getattr(w, 'favorites_ctrl', None)
+        if favorites_ctrl:
+            if active_list is getattr(w, 'fav_channel_list', None):
+                favorites_ctrl.on_favorite_item_clicked(item)
+                return
+            if active_list is getattr(w, 'history_channel_list', None):
+                favorites_ctrl.on_history_item_clicked(item)
+                return
+
+        if hasattr(w, 'select_channel'):
+            w.select_channel(item, source_list=active_list)
 
     def _is_local_file_playing(self) -> bool:
         """判断当前是否在播放本地视频文件或回看/时移（支持seek）"""
@@ -711,20 +788,34 @@ class EventHandler:
                 ch = self.window.current_channel
                 if ch:
                     ch_name = ch.get('name', '')
+                    ch_url = ch.get('url', '')
+                    is_local = (getattr(self.window, 'channel_list', None)
+                                is getattr(self.window, 'local_channel_list', None))
+                    # 同名多源时频道名无法唯一确定频道，优先按 URL 定位；
+                    # 当前激活的列表优先，避免订阅/本地存在同 URL 时记错来源
+                    ordered_attrs = (('_local_channels', '_sub_channels') if is_local
+                                     else ('_sub_channels', '_local_channels'))
                     ch_idx = -1
-                    channels = getattr(self.window, '_sub_channels', [])
-                    for i, c in enumerate(channels):
-                        if c.get('name', '') == ch_name:
-                            ch_idx = i
-                            break
-                    if ch_idx < 0:
-                        channels = getattr(self.window, '_local_channels', [])
-                        for i, c in enumerate(channels):
-                            if c.get('name', '') == ch_name:
-                                ch_idx = i
+                    if ch_url:
+                        for attr in ordered_attrs:
+                            for i, c in enumerate(getattr(self.window, attr, []) or []):
+                                if c.get('url') == ch_url:
+                                    ch_idx = i
+                                    break
+                            if ch_idx >= 0:
                                 break
-                    is_local = getattr(self.window, 'channel_list', None) is getattr(self.window, 'local_channel_list', None)
+                    if ch_idx < 0 and ch_name:
+                        # URL 缺失（如回看/时移期间被改写）时退回名字匹配
+                        for attr in ordered_attrs:
+                            for i, c in enumerate(getattr(self.window, attr, []) or []):
+                                if c.get('name', '') == ch_name:
+                                    ch_idx = i
+                                    break
+                            if ch_idx >= 0:
+                                break
                     ch_file = getattr(self.window, '_local_playlist_path', '') if is_local else getattr(self.window, '_subscription_url', '')
+                    # url 作为恢复时的首要匹配键，与 channel_mixin 选择频道时的写入保持一致
+                    self.window.config.set_value('Player', 'last_channel_url', ch_url or '')
                     self.window.config.save_last_channel(ch_file, ch_name, ch_idx)
             except Exception as e:
                 logger.debug(f"保存最后频道失败: {e}")
