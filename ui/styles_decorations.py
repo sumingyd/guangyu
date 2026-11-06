@@ -238,6 +238,7 @@ class StylesDecorations(StylesBase):
         c['font_family'] = "'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei', sans-serif"
         c['border_thin'] = 'rgba(255,255,255,0.08)' if color_mode == 'dark' else 'rgba(0,0,0,0.06)'
         c['shadow_subtle'] = '0 2px 4px rgba(0,0,0,0.16)' if color_mode == 'dark' else '0 2px 4px rgba(0,0,0,0.08)'
+        c['border_subtle'] = 'rgba(255,255,255,0.10)' if color_mode == 'dark' else 'rgba(0,0,0,0.08)'
         return c
 
     @classmethod
@@ -254,6 +255,7 @@ class StylesDecorations(StylesBase):
             c['shadow_dark'] = 'rgba(0,0,0,0.3)'
             c['shadow_light'] = 'rgba(255,255,255,0.06)'
             c['shadow_subtle'] = '0 2px 8px rgba(0,0,0,0.24)'
+            c['border_subtle'] = 'rgba(255,255,255,0.12)'
         else:
             c['window'] = '#f5f5f7'
             c['base'] = '#ffffff'
@@ -265,6 +267,7 @@ class StylesDecorations(StylesBase):
             c['shadow_dark'] = 'rgba(0,0,0,0.1)'
             c['shadow_light'] = 'rgba(255,255,255,0.9)'
             c['shadow_subtle'] = '0 2px 8px rgba(0,0,0,0.12)'
+            c['border_subtle'] = 'rgba(0,0,0,0.08)'
         c['font_family'] = "'SF Pro Display', 'SF Pro', 'Segoe UI', 'Microsoft YaHei', sans-serif"
         return c
 
@@ -282,6 +285,7 @@ class StylesDecorations(StylesBase):
             c['shadow_dark'] = 'rgba(0,0,0,0.2)'
             c['shadow_light'] = 'rgba(255,255,255,0.04)'
             c['shadow_subtle'] = '0 1px 4px rgba(0,0,0,0.16)'
+            c['border_subtle'] = 'rgba(255,255,255,0.12)'
         else:
             c['window'] = '#f2f2f7'
             c['base'] = '#ffffff'
@@ -293,6 +297,7 @@ class StylesDecorations(StylesBase):
             c['shadow_dark'] = 'rgba(0,0,0,0.06)'
             c['shadow_light'] = 'rgba(255,255,255,0.95)'
             c['shadow_subtle'] = '0 1px 4px rgba(0,0,0,0.08)'
+            c['border_subtle'] = 'rgba(0,0,0,0.08)'
         c['font_family'] = "'SF Pro Display', 'SF Pro', 'Segoe UI', 'Microsoft YaHei', sans-serif"
         return c
 
@@ -306,6 +311,37 @@ class StylesDecorations(StylesBase):
         'ios': _style_modifier_ios,
     }
 
+
+    @staticmethod
+    def _accent_fill(accent: str, alpha: int) -> str:
+        """把强调色转成半透明填充，供玻璃风格主按钮使用。"""
+        from PySide6.QtGui import QColor
+        c = QColor(accent)
+        if not c.isValid():
+            return accent
+        return f"rgba({c.red()}, {c.green()}, {c.blue()}, {alpha / 255:.2f})"
+
+    @classmethod
+    def _style_primary_btn_decoration(cls, colors, hover=False, pressed=False):
+        """主按钮（强调色按钮）装饰。
+
+        四套玻璃风格用“强调色淡填充 + 强调色描边”与普通按钮拉开层级；
+        其余风格保持原有表现，不引入额外视觉噪音。
+        """
+        c = colors
+        style = cls._visual_style
+        r = cls._get_style_border_radius()
+        ac = c.get('accent', '#4a9eff')
+        if style in cls.GLASS_STYLES:
+            alpha = 102 if pressed else (66 if hover else 40)
+            border = ac
+            return (
+                f"background-color: {cls._accent_fill(ac, alpha)}; "
+                f"border: 1px solid {border}; border-radius: {r}px;"
+            )
+        return cls._style_btn_decoration(
+            c, hover=hover, pressed=pressed, accent_color=ac
+        )
 
     @classmethod
     def _style_btn_decoration(cls, colors, hover=False, pressed=False, disabled=False, accent_color=None):
@@ -327,7 +363,7 @@ class StylesDecorations(StylesBase):
             elif style == 'win11':
                 return f"background-color: {c['dark']}; border: 1px solid {c.get('border_thin', c['mid'])}; border-radius: {r}px;"
             elif style == 'mac':
-                return f"background-color: {c['dark']}; border: 1px solid; border-top-color: {c.get('shadow_subtle', c['shadow_dark'])}; border-left-color: {c.get('shadow_subtle', c['shadow_dark'])}; border-bottom-color: {c['mid']}; border-right-color: {c['mid']}; border-radius: {r}px;"
+                return f"background-color: {c['dark']}; border: 1px solid; border-top-color: {c.get('border_subtle', c['shadow_dark'])}; border-left-color: {c.get('border_subtle', c['shadow_dark'])}; border-bottom-color: {c['mid']}; border-right-color: {c['mid']}; border-radius: {r}px;"
             elif style == 'ios':
                 return f"background-color: {c['dark']}; border: none; border-radius: {r - 1}px;"
             return f"background-color: {c['dark']}; border-color: {c.get('accent_pressed', ac)};"
@@ -341,7 +377,7 @@ class StylesDecorations(StylesBase):
             elif style == 'win11':
                 return f"background-color: {c['light']}; border: 1px solid {ac}; border-radius: {r}px;"
             elif style == 'mac':
-                return f"background-color: {c['light']}; border: 1px solid {c.get('shadow_subtle', c['mid'])}; border-radius: {r}px;"
+                return f"background-color: {c['light']}; border: 1px solid {c.get('border_subtle', c['mid'])}; border-radius: {r}px;"
             elif style == 'ios':
                 return f"background-color: {c['light']}; border: none; border-radius: {r}px;"
             return f"background-color: {c['light']}; border-color: {ac};"
@@ -389,9 +425,9 @@ class StylesDecorations(StylesBase):
         elif style == 'win11':
             return f"background-color: {c['alternate_base']}; border: 1px solid {c.get('border_thin', c['mid'])}; border-radius: {r}px; border-bottom: 2px solid {c['accent']};"
         elif style == 'mac':
-            return f"background-color: {c['alternate_base']}; border: 1px solid; border-top-color: {c.get('shadow_subtle', c['shadow_dark'])}; border-left-color: {c.get('shadow_subtle', c['shadow_dark'])}; border-bottom-color: {c['mid']}; border-right-color: {c['mid']}; border-radius: {r}px;"
+            return f"background-color: {c['alternate_base']}; border: 1px solid; border-top-color: {c.get('border_subtle', c['shadow_dark'])}; border-left-color: {c.get('border_subtle', c['shadow_dark'])}; border-bottom-color: {c['mid']}; border-right-color: {c['mid']}; border-radius: {r}px;"
         elif style == 'ios':
-            return f"background-color: {c['alternate_base']}; border: 1px solid {c.get('shadow_subtle', c['shadow_dark'])}; border-radius: {r}px;"
+            return f"background-color: {c['alternate_base']}; border: 1px solid {c.get('border_subtle', c['shadow_dark'])}; border-radius: {r}px;"
         return f"background-color: {c['alternate_base']}; border: 1px solid {c['mid']}; border-radius: {r}px;"
 
     @classmethod
@@ -408,9 +444,9 @@ class StylesDecorations(StylesBase):
         elif style == 'win11':
             return f"background-color: {c.get('card_color', c['alternate_base'])}; border: 1px solid {c.get('border_thin', c['mid'])}; border-radius: {r}px;"
         elif style == 'mac':
-            return f"background-color: {c['alternate_base']}; border-top: 1px solid {c.get('shadow_subtle', c['shadow_dark'])}; border-radius: {r}px;"
+            return f"background-color: {c['alternate_base']}; border-top: 1px solid {c.get('border_subtle', c['shadow_dark'])}; border-radius: {r}px;"
         elif style == 'ios':
-            return f"background-color: {c['alternate_base']}; border: 1px solid {c.get('shadow_subtle', c['shadow_dark'])}; border-radius: {r}px;"
+            return f"background-color: {c['alternate_base']}; border: 1px solid {c.get('border_subtle', c['shadow_dark'])}; border-radius: {r}px;"
         return f"background-color: {c['alternate_base']}; border: 1px solid {c['mid']}; border-radius: {r}px;"
 
     @classmethod
@@ -429,9 +465,9 @@ class StylesDecorations(StylesBase):
         elif style == 'win11':
             return f"background-color: {c['base']}; padding: {menu_pad}px; border: 1px solid {c.get('border_thin', c['mid'])}; border-radius: {menu_r}px;"
         elif style == 'mac':
-            return f"background-color: {c['base']}; padding: {menu_pad}px; border: 1px solid {c.get('shadow_subtle', c['mid'])}; border-radius: {menu_r}px;"
+            return f"background-color: {c['base']}; padding: {menu_pad}px; border: 1px solid {c.get('border_subtle', c['mid'])}; border-radius: {menu_r}px;"
         elif style == 'ios':
-            return f"background-color: {c['base']}; padding: {menu_pad}px; border: 1px solid {c.get('shadow_subtle', c['shadow_dark'])}; border-radius: {menu_r}px;"
+            return f"background-color: {c['base']}; padding: {menu_pad}px; border: 1px solid {c.get('border_subtle', c['shadow_dark'])}; border-radius: {menu_r}px;"
         return f"background-color: {c['base']}; padding: 2px; border: 1px solid {c['mid']}; border-radius: {menu_r}px;"
 
     @classmethod

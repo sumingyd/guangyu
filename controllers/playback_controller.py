@@ -265,7 +265,7 @@ class PlaybackController:
                 current_speed = self.window.player_controller.get_speed()
                 if abs(current_speed - 1.0) > 0.01:
                     self.window.player_controller.set_speed(1.0)
-                    if hasattr(self.window, 'speed_button'):
+                    if getattr(self.window, 'speed_button', None) is not None:
                         self.window.speed_button.setText("1.0x")
                     if hasattr(self.window, '_show_osd_feedback'):
                         tr = self.window.language_manager.tr

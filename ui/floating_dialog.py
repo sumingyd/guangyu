@@ -1,7 +1,8 @@
 from PySide6.QtWidgets import (QDialog, QDockWidget, QWidget,
                                QHBoxLayout, QLabel, QPushButton)
 from PySide6 import QtWidgets
-from PySide6.QtGui import QPainter, QColor, QPainterPath, QCursor, QIcon, QBitmap
+from PySide6.QtGui import (QPainter, QColor, QPainterPath, QCursor, QIcon, QBitmap,
+                           QPixmap)
 from PySide6.QtCore import Qt, QRectF, QSize
 import PySide6.QtCore as QtCore
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QPushButton
@@ -52,10 +53,243 @@ def _parse_hex_color(hex_str, default=(0, 0, 0)):
     return default
 
 
-class FloatingDockWidget(QDockWidget):
+def _blur_pixmap(pixmap: QPixmap, radius: int = 24) -> QPixmap:
+    """对背景快照做高斯模糊，作为无系统模糊平台上的玻璃兜底。"""
+    try:
+        from PySide6.QtWidgets import (QGraphicsScene, QGraphicsPixmapItem,
+                                       QGraphicsBlurEffect)
+        effect = QGraphicsBlurEffect()
+        effect.setBlurRadius(radius)
+        effect.setBlurHints(QGraphicsBlurEffect.BlurHint.QualityHint)
+        item = QGraphicsPixmapItem(pixmap)
+        item.setGraphicsEffect(effect)
+        scene = QGraphicsScene()
+        scene.addItem(item)
+        out = QPixmap(pixmap.size())
+        out.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(out)
+        scene.render(painter, QRectF(out.rect()), QRectF(pixmap.rect()))
+        painter.end()
+        return out
+    except Exception:
+        return pixmap
+
+
+class _GlassSurfaceMixin:
+    """玻璃卡片的统一实现：透明度解析、平台模糊、背景快照兜底、圆角 mask。
+
+    dock 与 dialog 共用同一套语义：
+    - 玻璃风格（frosted/win11/mac/ios）必须有真模糊；
+    - 其余风格使用 alpha 255 的实色卡片，不再停在"半透明无模糊"的中间态。
+    """
+
+    _bg_color_key = 'window'
+    _border_color_key = 'mid'
+
+    def _init_glass_surface(self):
+        self._dwm_blur_enabled = getattr(self, '_dwm_blur_enabled', False)
+        self._backdrop = None
+        self._backdrop_offset = QtCore.QPoint(0, 0)
+        self._capturing_backdrop = False
+        self._glass_timer = QtCore.QTimer(self)
+        self._glass_timer.setSingleShot(True)
+        self._glass_timer.setInterval(180)
+        self._glass_timer.timeout.connect(self._refresh_backdrop_if_needed)
+
+    def _glass_active(self) -> bool:
+        from ui.styles import AppStyles
+        return AppStyles.is_glass_style() and not is_android()
+
+    def _card_alpha(self) -> int:
+        from ui.styles import AppStyles
+        if not AppStyles.is_glass_style():
+            return 255
+        if AppStyles._visual_style == 'frosted':
+            try:
+                colors = AppStyles._get_colors()
+                return int(max(0.35, min(0.72, float(colors.get('frosted_opacity', 0.66)))) * 255)
+            except Exception:
+                return 168
+        return 168
+
+    def _update_glass_mask(self):
+        from ui.styles import AppStyles
+        try:
+            if not AppStyles.is_glass_style():
+                self.clearMask()
+                return
+            size = self.size()
+            if size.width() <= 0 or size.height() <= 0:
+                return
+            corner_r = AppStyles._get_style_border_radius()
+            bitmap = QBitmap(size)
+            bitmap.fill(QtCore.Qt.GlobalColor.color0)
+            p = QPainter(bitmap)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.setBrush(QtCore.Qt.GlobalColor.color1)
+            p.setPen(QtCore.Qt.PenStyle.NoPen)
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(0, 0, size.width(), size.height()), corner_r, corner_r)
+            p.drawPath(path)
+            p.end()
+            self.setMask(bitmap)
+        except Exception:
+            pass
+
+    def _try_enable_macos_blur(self):
+        try:
+            from ui.styles import AppStyles
+            from utils.mac_blur_helper import MacBlurHelper
+            if not self._glass_active():
+                self._dwm_blur_enabled = False
+                MacBlurHelper.remove(self)
+                return
+            if self._dwm_blur_enabled:
+                return
+            self._dwm_blur_enabled = bool(MacBlurHelper.apply(self, material="menu"))
+        except Exception:
+            self._dwm_blur_enabled = False
+
+    def _try_enable_dwm_blur(self):
+        if is_android():
+            return
+        if is_macos():
+            self._try_enable_macos_blur()
+            return
+        if not is_windows():
+            return
+        try:
+            import ctypes
+            from ui.styles import AppStyles
+            if not self._glass_active():
+                if self._dwm_blur_enabled:
+                    self._disable_dwm_blur()
+                self._dwm_blur_enabled = False
+                self.clearMask()
+                return
+            if self._dwm_blur_enabled:
+                return
+            self._dwm_blur_enabled = True
+            try:
+                hwnd = int(self.winId())
+                DWMWA_SYSTEMBACKDROP_TYPE = 38
+                DWMSBT_MAINVIEW = 2
+                value = ctypes.c_int(DWMSBT_MAINVIEW)
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
+                    ctypes.byref(value), ctypes.sizeof(value)
+                )
+            except Exception:
+                pass
+            self._update_glass_mask()
+        except Exception:
+            pass
+
+    def _disable_dwm_blur(self):
+        if is_android():
+            return
+        if is_macos():
+            self._dwm_blur_enabled = False
+            return
+        if not is_windows():
+            return
+        try:
+            import ctypes
+            hwnd = int(self.winId())
+            DWMWA_SYSTEMBACKDROP_TYPE = 38
+            DWMSBT_NONE = 1
+            value = ctypes.c_int(DWMSBT_NONE)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
+                ctypes.byref(value), ctypes.sizeof(value)
+            )
+        except Exception:
+            pass
+
+    def _capture_backdrop(self):
+        """抓取窗口背后区域的快照并模糊；只在没有系统模糊时使用。"""
+        from ui.styles import AppStyles
+        if self._dwm_blur_enabled or not AppStyles.is_glass_style():
+            self._backdrop = None
+            return
+        if getattr(self, '_capturing_backdrop', False):
+            return
+        self._capturing_backdrop = True
+        try:
+            win = self.parentWidget() or self.parent()
+            while win is not None and win.parentWidget() is not None:
+                win = win.parentWidget()
+            if win is None or win is self or not win.isVisible():
+                self._backdrop = None
+                return
+            origin = self.mapToGlobal(self.rect().topLeft())
+            top_left = win.mapFromGlobal(origin)
+            rect = QtCore.QRect(top_left, self.size()).intersected(win.rect())
+            if rect.width() < 2 or rect.height() < 2:
+                self._backdrop = None
+                return
+            pm = win.grab(rect)
+            self._backdrop = _blur_pixmap(pm, 24)
+            self._backdrop_offset = top_left - rect.topLeft()
+        except Exception:
+            self._backdrop = None
+        finally:
+            self._capturing_backdrop = False
+
+    def _refresh_backdrop_if_needed(self):
+        from ui.styles import AppStyles
+        if self.isVisible() and AppStyles.is_glass_style() and not self._dwm_blur_enabled:
+            self._capture_backdrop()
+            self.update()
+
+    def refresh_glass_surface(self):
+        """主题切换后重新解析卡片语义（模糊 / 实色 / mask / 快照）。"""
+        self._cached_frosted_colors = None
+        self._cached_frosted_theme = None
+        self._backdrop = None
+        self._dwm_blur_enabled = False
+        self._try_enable_dwm_blur()
+        self._glass_timer.start()
+        self.update()
+
+    def _paint_card(self, painter: QPainter, colors: dict):
+        from ui.styles import AppStyles
+        corner_r = AppStyles._get_style_border_radius()
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()), corner_r, corner_r)
+
+        glass = AppStyles.is_glass_style()
+        if glass and not self._dwm_blur_enabled and self._backdrop is not None:
+            painter.save()
+            painter.setClipPath(path)
+            painter.drawPixmap(self._backdrop_offset, self._backdrop)
+            painter.restore()
+
+        r, g, b = _parse_hex_color(colors.get(self._bg_color_key, '#333333'))
+        painter.fillPath(path, QColor(r, g, b, self._card_alpha()))
+
+        lr, lg, lb = _parse_hex_color(colors.get(self._border_color_key, '#646464'))
+        if AppStyles.is_neumorphic():
+            painter.setPen(QColor(lr, lg, lb, 60))
+            painter.drawPath(path)
+        elif glass:
+            mode = AppStyles._get_effective_color_mode()
+            painter.setPen(QColor(255, 255, 255, 52) if mode == 'dark' else QColor(0, 0, 0, 34))
+            painter.drawPath(path)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_glass_mask()
+        if hasattr(self, '_glass_timer'):
+            self._glass_timer.start()
+
+
+class FloatingDockWidget(_GlassSurfaceMixin, QDockWidget):
     """浮动停靠窗口 - QDockWidget 子控件模式（用于诊断对比）"""
 
     _RESIZE_MARGIN = 8
+    _bg_color_key = 'player_panel'
+    _border_color_key = 'mid'
 
     def __init__(self, title, parent=None, opacity=130):
         super().__init__(title, parent)
@@ -76,6 +310,7 @@ class FloatingDockWidget(QDockWidget):
         self._resize_edge = None
         self._resize_start_geo = None
         self._resize_start_pos = None
+        self._init_glass_surface()
 
     def _set_transient_parent(self):
         try:
@@ -102,11 +337,11 @@ class FloatingDockWidget(QDockWidget):
             if self.parent() and (self.parent().windowFlags() & Qt.WindowType.WindowStaysOnTopHint):
                 flags |= Qt.WindowType.WindowStaysOnTopHint
             from ui.styles import AppStyles
-            is_frosted = AppStyles._visual_style == 'frosted'
-            if is_frosted:
+            is_glass = AppStyles.is_glass_style()
+            if is_glass:
                 self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
             self.setWindowFlags(flags)
-            if is_frosted:
+            if is_glass:
                 self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
             if is_linux():
                 self._set_transient_parent()
@@ -115,96 +350,9 @@ class FloatingDockWidget(QDockWidget):
     def show(self):
         super().show()
         _hide_from_taskbar(self)
-
-    def _try_enable_macos_blur(self):
-        try:
-            from ui.styles import AppStyles
-            if AppStyles._visual_style != 'frosted':
-                if self._dwm_blur_enabled:
-                    self._dwm_blur_enabled = False
-                from utils.mac_blur_helper import MacBlurHelper
-                MacBlurHelper.remove(self)
-                return
-            if self._dwm_blur_enabled:
-                return
-            self._dwm_blur_enabled = True
-            from utils.mac_blur_helper import MacBlurHelper
-            if not MacBlurHelper.apply(self, material="menu"):
-                self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        except Exception:
-            pass
-
-    def _try_enable_dwm_blur(self):
-        if is_android():
-            return
-        if is_macos():
-            self._try_enable_macos_blur()
-            return
-        if not is_windows():
-            return
-        try:
-            import ctypes
-            from ui.styles import AppStyles
-            if AppStyles._visual_style != 'frosted':
-                if self._dwm_blur_enabled:
-                    self._disable_dwm_blur()
-                self._dwm_blur_enabled = False
-                self.clearMask()
-                return
-            if self._dwm_blur_enabled:
-                return
-            self._dwm_blur_enabled = True
-            try:
-                hwnd = int(self.winId())
-                DWMWA_SYSTEMBACKDROP_TYPE = 38
-                DWMSBT_MAINVIEW = 2
-                value = ctypes.c_int(DWMSBT_MAINVIEW)
-                ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                    hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
-                    ctypes.byref(value), ctypes.sizeof(value)
-                )
-            except Exception:
-                pass
-            try:
-
-                corner_r = AppStyles._get_style_border_radius()
-                size = self.size()
-                bitmap = QBitmap(size)
-                bitmap.fill(QtCore.Qt.GlobalColor.color0)
-                p = QPainter(bitmap)
-                p.setRenderHint(QPainter.RenderHint.Antialiasing)
-                p.setBrush(QtCore.Qt.GlobalColor.color1)
-                p.setPen(QtCore.Qt.PenStyle.NoPen)
-                path = QPainterPath()
-                path.addRoundedRect(QRectF(0, 0, size.width(), size.height()), corner_r, corner_r)
-                p.drawPath(path)
-                p.end()
-                self.setMask(bitmap)
-            except Exception:
-                pass
-        except Exception:
-            pass
-
-    def _disable_dwm_blur(self):
-        if is_android():
-            return
-        if is_macos():
-            self._dwm_blur_enabled = False
-            return
-        if not is_windows():
-            return
-        try:
-            import ctypes
-            hwnd = int(self.winId())
-            DWMWA_SYSTEMBACKDROP_TYPE = 38
-            DWMSBT_NONE = 1
-            value = ctypes.c_int(DWMSBT_NONE)
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
-                ctypes.byref(value), ctypes.sizeof(value)
-            )
-        except Exception:
-            pass
+        self._try_enable_dwm_blur()
+        if hasattr(self, '_glass_timer'):
+            self._glass_timer.start()
 
     def _hit_resize_edge(self, pos):
         m = self._RESIZE_MARGIN
@@ -321,17 +469,15 @@ class FloatingDockWidget(QDockWidget):
     def paintEvent(self, event):
         from ui.styles import AppStyles, rgba_to_blended_hex
 
-        if not self._dwm_blur_enabled:
+        if not self._dwm_blur_enabled and AppStyles.is_glass_style():
             self._try_enable_dwm_blur()
 
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         colors = AppStyles._get_colors()
-        neo = AppStyles.is_neumorphic()
-        is_frosted = AppStyles._visual_style == 'frosted'
 
-        if is_frosted:
+        if AppStyles._visual_style == 'frosted':
             current_theme = AppStyles._current_theme
             if self._cached_frosted_theme != current_theme:
                 effective_mode = AppStyles._get_effective_color_mode()
@@ -347,22 +493,11 @@ class FloatingDockWidget(QDockWidget):
         else:
             dock_colors = colors
 
-        path = QPainterPath()
-        corner_r = AppStyles._get_style_border_radius()
-        path.addRoundedRect(QRectF(self.rect()), corner_r, corner_r)
-
-        panel_hex = dock_colors.get('player_panel', '#1e1e1e')
-        r, g, b = _parse_hex_color(panel_hex)
-        painter.fillPath(path, QColor(r, g, b, self._opacity))
-        if neo:
-            br, bg, bb = _parse_hex_color(dock_colors.get('mid', '#646464'))
-            painter.setPen(QColor(br, bg, bb, 60))
-            painter.drawPath(path)
-
+        self._paint_card(painter, dock_colors)
         super().paintEvent(event)
 
 
-class FloatingDialog(QDialog):
+class FloatingDialog(_GlassSurfaceMixin, QDialog):
     _bg_color_key = 'window'
     _border_color_key = 'mid'
 
@@ -440,6 +575,7 @@ class FloatingDialog(QDialog):
         self._cached_frosted_colors = None
         self._cached_frosted_theme = None
         self._centered = False
+        self._init_glass_surface()
 
     # ------------------------------------------------------------------
     # 主题样式钩子（DRY）：子类只需覆写 _extra_theme_css() 返回差异 CSS
@@ -454,6 +590,7 @@ class FloatingDialog(QDialog):
     def _apply_theme(self):
         from ui.styles import AppStyles
         self.setStyleSheet(AppStyles.popup_dialog_style() + self._extra_theme_css())
+        self.refresh_glass_surface()
 
     # ------------------------------------------------------------------
     # 标准按钮区范式
@@ -527,6 +664,8 @@ class FloatingDialog(QDialog):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._try_enable_dwm_blur()
+        self._glass_timer.start()
         if not self._centered:
             self._centered = True
             try:
@@ -572,7 +711,7 @@ class FloatingDialog(QDialog):
             return
         if is_macos():
             from ui.styles import AppStyles
-            if AppStyles._visual_style == 'frosted' and not self._dwm_blur_enabled:
+            if AppStyles.is_glass_style() and not self._dwm_blur_enabled:
                 self._try_enable_macos_blur()
             return
         if not is_windows():
@@ -698,11 +837,13 @@ class FloatingDialog(QDialog):
 
         from ui.styles import AppStyles, rgba_to_blended_hex
 
+        if not self._dwm_blur_enabled and AppStyles.is_glass_style():
+            self._try_enable_dwm_blur()
+
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         colors = AppStyles._get_colors()
-        neo = AppStyles.is_neumorphic()
         is_frosted = AppStyles._visual_style == 'frosted'
 
         if is_frosted:
@@ -721,16 +862,6 @@ class FloatingDialog(QDialog):
         else:
             dlg_colors = colors
 
-        path = QPainterPath()
-        corner_r = AppStyles._get_style_border_radius()
-        path.addRoundedRect(QRectF(self.rect()), corner_r, corner_r)
-
-        bg_hex = dlg_colors.get(self._bg_color_key, '#333333')
-        r, g, b = _parse_hex_color(bg_hex)
-        painter.fillPath(path, QColor(r, g, b, self.opacity))
-        if neo:
-            br, bg, bb = _parse_hex_color(dlg_colors.get(self._border_color_key, '#999999'))
-            painter.setPen(QColor(br, bg, bb, 60))
-            painter.drawPath(path)
+        self._paint_card(painter, dlg_colors)
 
         super().paintEvent(event)

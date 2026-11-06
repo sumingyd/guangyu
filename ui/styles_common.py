@@ -137,9 +137,8 @@ class StylesCommon(StylesBase):
             QLabel {{
                 color: {colors['window_text']};
                 padding: 0 5px;
-                font-size: 13px;
+                font-size: {AppStyles.fs('body')}px;
                 font-family: {ff};
-                opacity: 0.8;
             }}
         """
 
@@ -518,7 +517,7 @@ class StylesCommon(StylesBase):
                 margin-top: 12px;
                 padding-top: 16px;
                 font-weight: 600;
-                font-size: 13px;
+                font-size: {AppStyles.fs('title')}px;
                 font-family: {ff};
                 {grp_dec}
             }}
@@ -528,7 +527,7 @@ class StylesCommon(StylesBase):
                 padding: 0 6px;
                 color: {colors['window_text']};
                 font-weight: 600;
-                font-size: 13px;
+                font-size: {AppStyles.fs('title')}px;
                 font-family: {ff};
             }}
         """
@@ -570,7 +569,7 @@ class StylesCommon(StylesBase):
         return f"""
             QLabel {{
                 color: {colors['window_text']};
-                font-size: 16px;
+                font-size: {AppStyles.fs('title')}px;
                 font-weight: bold;
                 font-family: {ff};
                 background-color: transparent;
@@ -584,7 +583,7 @@ class StylesCommon(StylesBase):
         return f"""
             QLabel {{
                 color: {colors['link']};
-                font-size: 12px;
+                font-size: {AppStyles.fs('body')}px;
                 font-family: {ff};
                 background-color: transparent;
                 text-decoration: underline;
@@ -635,7 +634,7 @@ class StylesCommon(StylesBase):
         colors = AppStyles._get_colors()
         return f"""
             QLabel {{
-                font-size: 13px;
+                font-size: {AppStyles.fs('title')}px;
                 font-weight: bold;
                 color: {colors['window_text']};
                 background-color: transparent;
@@ -647,7 +646,7 @@ class StylesCommon(StylesBase):
         colors = AppStyles._get_colors()
         return f"""
             QLabel {{
-                font-size: 11px;
+                font-size: {AppStyles.fs('caption')}px;
                 color: {colors['window_text']};
                 background-color: transparent;
             }}
@@ -658,7 +657,7 @@ class StylesCommon(StylesBase):
         colors = AppStyles._get_colors()
         return f"""
             QLabel {{
-                font-size: 10px;
+                font-size: {AppStyles.fs('caption')}px;
                 color: {colors['mid']};
                 background-color: transparent;
             }}
@@ -670,9 +669,9 @@ class StylesCommon(StylesBase):
         r = AppStyles._get_style_border_radius()
         ff = AppStyles._get_style_font_family()
         if active:
-            btn_dec = AppStyles._style_btn_decoration(colors, accent_color=colors['accent'])
-            btn_hover = AppStyles._style_btn_decoration(colors, hover=True, accent_color=colors['accent'])
-            btn_pressed = AppStyles._style_btn_decoration(colors, pressed=True, accent_color=colors['accent'])
+            btn_dec = AppStyles._style_primary_btn_decoration(colors)
+            btn_hover = AppStyles._style_primary_btn_decoration(colors, hover=True)
+            btn_pressed = AppStyles._style_primary_btn_decoration(colors, pressed=True)
         else:
             btn_dec = AppStyles._style_btn_decoration(colors)
             btn_hover = AppStyles._style_btn_decoration(colors, hover=True)
@@ -686,7 +685,7 @@ class StylesCommon(StylesBase):
                     {btn_dec}
                     padding: {pad};
                     font-weight: 500;
-                    font-size: 12px;
+                    font-size: {AppStyles.fs('body')}px;
                     font-family: {ff};
                 }}
                 QPushButton:hover {{
@@ -695,6 +694,9 @@ class StylesCommon(StylesBase):
                 QPushButton:pressed {{
                     {btn_pressed}
                 }}
+                QPushButton:focus {{
+                    border: 2px solid {colors['accent']};
+                }}
             """
         return f"""
             QPushButton {{
@@ -702,7 +704,7 @@ class StylesCommon(StylesBase):
                 {btn_dec}
                 padding: {pad};
                 font-weight: 500;
-                font-size: 12px;
+                font-size: {AppStyles.fs('body')}px;
                 font-family: {ff};
             }}
             QPushButton:hover {{
@@ -710,6 +712,9 @@ class StylesCommon(StylesBase):
             }}
             QPushButton:pressed {{
                 {btn_pressed}
+            }}
+            QPushButton:focus {{
+                border: 2px solid {colors['accent']};
             }}
             QPushButton:disabled {{
                 {btn_disabled}
@@ -729,23 +734,29 @@ class StylesCommon(StylesBase):
             QToolButton {{
                 color: {color};
                 background: transparent;
-                border: none;
+                border: 2px solid transparent;
+                border-radius: 6px;
                 padding: 1px 3px;
-                font-size: 11px;
+                font-size: {AppStyles.fs('caption')}px;
             }}
             QToolButton:checked {{
                 color: {accent};
+                background-color: rgba(127, 127, 127, 0.16);
                 font-weight: bold;
             }}
             QToolButton:hover {{
                 color: {accent};
+                background-color: rgba(127, 127, 127, 0.10);
+            }}
+            QToolButton:focus {{
+                border-color: {accent};
             }}
         """
 
     @staticmethod
     def description_text_style():
         colors = AppStyles._get_colors()
-        return f"color: {colors.get('mid', 'gray')}; font-size: 11px;"
+        return f"color: {colors.get('mid', 'gray')}; font-size: {AppStyles.fs('caption')}px;"
 
     @staticmethod
     def separator_line_style():
@@ -763,7 +774,7 @@ class StylesCommon(StylesBase):
                 border: 1px solid {colors['mid']};
                 border-radius: {r}px;
                 padding: 10px;
-                font-size: 13px;
+                font-size: {AppStyles.fs('body')}px;
             }}
         """
 
@@ -788,5 +799,17 @@ class StylesCommon(StylesBase):
             color = colors.get('success', '#4CAF50')
         else:
             color = colors.get('warning', '#FF9800')
-        return f"color: {color}; font-weight: bold; font-size: 13px;"
+        return f"color: {color}; font-weight: bold; font-size: {AppStyles.fs('body')}px;"
+
+    @classmethod
+    def tooltip_style(cls):
+        """QToolTip 是独立顶层窗口，必须在 QApplication 级样式表中生效。"""
+        c = cls._get_colors()
+        return f"""
+            QToolTip {{
+                {cls._style_tooltip_decoration(c)}
+                color: {c.get('tooltip_text', c.get('window_text', '#ffffff'))};
+                font-family: {cls._get_style_font_family()};
+            }}
+        """
 

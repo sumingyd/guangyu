@@ -1,6 +1,6 @@
 import re
 from PySide6.QtWidgets import QWidget
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QPainter, QColor, QFont, QLinearGradient, QPen, QBrush
 
 
@@ -253,6 +253,7 @@ class LyricsWidget(QWidget):
         _, text = self._lines[idx]
         painter.setFont(self._font_single)
         fm = painter.fontMetrics()
+        text = fm.elidedText(text, Qt.TextElideMode.ElideRight, max(0, int(w - 24)))
         text_width = fm.horizontalAdvance(text)
         text_height = fm.height()
         x = (w - text_width) / 2.0
@@ -303,6 +304,7 @@ class LyricsWidget(QWidget):
                 painter.setPen(QColor(120, 130, 150, alpha))
 
             fm = painter.fontMetrics()
+            text = fm.elidedText(text, Qt.TextElideMode.ElideRight, max(0, int(w - 24)))
             text_width = fm.horizontalAdvance(text)
             text_height = fm.height()
             x = (w - text_width) / 2.0

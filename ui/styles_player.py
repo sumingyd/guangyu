@@ -18,7 +18,7 @@ class StylesPlayer(StylesBase):
         return f"""
             QToolButton {{
                 color: {colors['player_panel_text']};
-                font-size: 11px;
+                font-size: {AppStyles.fs('caption')}px;
                 {btn_dec}
                 padding: 1px 4px;
                 margin: 0px;
@@ -30,6 +30,16 @@ class StylesPlayer(StylesBase):
             QToolButton:pressed {{
                 color: {colors['player_button']};
                 {btn_dec_pressed}
+            }}
+            QToolButton:checked {{
+                background-color: {colors['highlight']};
+                color: {colors['highlighted_text']};
+            }}
+            QToolButton:focus {{
+                border: 2px solid {colors['accent']};
+            }}
+            QToolButton:disabled {{
+                color: {colors['player_panel_disabled']};
             }}
         """
 
@@ -77,7 +87,7 @@ class StylesPlayer(StylesBase):
         return f"""
             QToolButton {{
                 color: {colors['window_text']};
-                font-size: 12px;
+                font-size: {AppStyles.fs('body')}px;
                 {btn_dec}
                 padding: 0px;
                 margin: 0px;
@@ -93,7 +103,7 @@ class StylesPlayer(StylesBase):
         return f"""
             QLabel {{
                 color: {colors['player_panel_secondary']};
-                font-size: 12px;
+                font-size: {AppStyles.fs('body')}px;
                 background-color: transparent;
             }}
         """
@@ -105,7 +115,7 @@ class StylesPlayer(StylesBase):
         return f"""
             QLabel {{
                 color: {colors['player_panel_secondary']};
-                font-size: 11px;
+                font-size: {AppStyles.fs('caption')}px;
                 background-color: transparent;
                 padding: 1px 5px;
                 border: 1px solid {colors['player_line']};
@@ -119,8 +129,8 @@ class StylesPlayer(StylesBase):
         badge_r = AppStyles._get_scaled_radius('badge')
         return f"""
             QLabel {{
-                color: {colors['player_panel_disabled']};
-                font-size: 11px;
+                color: {colors['player_panel_secondary']};
+                font-size: {AppStyles.fs('caption')}px;
                 background-color: transparent;
                 padding: 1px 5px;
                 border: 1px solid {colors['player_line']};
@@ -135,7 +145,7 @@ class StylesPlayer(StylesBase):
         return f"""
             QLabel {{
                 color: #FFD700;
-                font-size: 11px;
+                font-size: {AppStyles.fs('caption')}px;
                 font-weight: bold;
                 background-color: rgba(255, 215, 0, 0.12);
                 padding: 1px 6px;
@@ -151,7 +161,7 @@ class StylesPlayer(StylesBase):
         return f"""
             QLabel {{
                 color: {colors['player_success']};
-                font-size: 11px;
+                font-size: {AppStyles.fs('caption')}px;
                 background-color: transparent;
                 padding: 1px 5px;
                 border: 1px solid {colors['player_success']};
@@ -165,7 +175,7 @@ class StylesPlayer(StylesBase):
         return f"""
             QLabel {{
                 color: {colors['player_panel_text']};
-                font-size: 18px;
+                font-size: {AppStyles.fs('title')}px;
                 font-weight: bold;
                 background-color: transparent;
                 padding: 0px;
@@ -177,7 +187,7 @@ class StylesPlayer(StylesBase):
     @staticmethod
     def player_channel_list_name_style() -> str:
         colors = AppStyles._get_colors()
-        return f"font-size: 12px; font-weight: bold; color: {colors['player_panel_text']}; background: transparent; border: none;"
+        return f"font-size: {AppStyles.fs('body')}px; font-weight: bold; color: {colors['player_panel_text']}; background: transparent; border: none;"
 
     @staticmethod
     def player_program_style() -> str:
@@ -185,7 +195,7 @@ class StylesPlayer(StylesBase):
         return f"""
             QLabel {{
                 color: {colors['player_success']};
-                font-size: 14px;
+                font-size: {AppStyles.fs('title')}px;
                 background-color: transparent;
                 padding: 0px;
                 margin: 0px;
@@ -200,7 +210,7 @@ class StylesPlayer(StylesBase):
         return f"""
             QLabel {{
                 color: {colors['player_accent']};
-                font-size: 11px;
+                font-size: {AppStyles.fs('caption')}px;
                 background-color: transparent;
                 padding: 1px 4px;
                 border: 1px solid {colors['player_accent']};
@@ -214,7 +224,7 @@ class StylesPlayer(StylesBase):
         return f"""
             QLabel {{
                 color: {colors['player_panel_secondary']};
-                font-size: 12px;
+                font-size: {AppStyles.fs('body')}px;
                 background-color: transparent;
                 padding: 0px;
                 margin: 0px;
@@ -230,8 +240,8 @@ class StylesPlayer(StylesBase):
         return f"""
             QPushButton {{
                 background-color: transparent;
-                color: {colors['player_panel_disabled']};
-                font-size: 16px;
+                color: {colors['player_panel_secondary']};
+                font-size: {AppStyles.fs('title')}px;
                 padding: 0px;
                 margin: 0px;
                 border: none;
@@ -244,7 +254,7 @@ class StylesPlayer(StylesBase):
         return f"""
             QLabel {{
                 color: {colors['player_panel_text']};
-                font-size: 12px;
+                font-size: {AppStyles.fs('body')}px;
                 background-color: transparent;
             }}
         """
@@ -255,7 +265,7 @@ class StylesPlayer(StylesBase):
         return f"""
             QLabel {{
                 color: {colors['player_panel_text']};
-                font-size: 14px;
+                font-size: {AppStyles.fs('title')}px;
                 font-weight: bold;
                 padding: 8px;
                 background-color: transparent;
@@ -275,7 +285,7 @@ class StylesPlayer(StylesBase):
                 color: {colors['player_panel_text']};
                 padding: {pad};
                 {inp_dec}
-                font-size: 12px;
+                font-size: {AppStyles.fs('body')}px;
                 min-width: 80px;
             }}
             QComboBox:hover {{
@@ -298,7 +308,7 @@ class StylesPlayer(StylesBase):
                 background-color: {colors['player_panel']};
                 color: {colors['player_panel_text']};
                 selection-background-color: {colors['player_accent']};
-                selection-color: {colors['player_panel_text']};
+                selection-color: #ffffff;
                 border: 1px solid {colors['player_line']};
                 border-radius: {AppStyles._get_scaled_radius('list_item')}px;
                 padding: 4px;
@@ -327,7 +337,7 @@ class StylesPlayer(StylesBase):
                 border-bottom: none;
                 border-top-left-radius: {tab_r}px;
                 border-top-right-radius: {tab_r}px;
-                font-size: 11px;
+                font-size: {AppStyles.fs('caption')}px;
                 min-width: 90px;
             }}
             QTabBar::tab:selected {{
@@ -345,7 +355,7 @@ class StylesPlayer(StylesBase):
         return f"""
             QLabel {{
                 color: {colors['player_panel_text']};
-                font-size: 14px;
+                font-size: {AppStyles.fs('title')}px;
                 font-weight: bold;
                 padding: 8px;
                 background-color: transparent;
@@ -365,7 +375,7 @@ class StylesPlayer(StylesBase):
                 color: {colors['player_panel_text']};
                 {inp_dec}
                 padding: {pad};
-                font-size: 12px;
+                font-size: {AppStyles.fs('body')}px;
             }}
             QLineEdit:focus {{
                 border: 1px solid {colors['player_accent']};
@@ -405,7 +415,7 @@ class StylesPlayer(StylesBase):
         return f"""
             QLabel {{
                 color: {colors['player_panel_hint']};
-                font-size: 12px;
+                font-size: {AppStyles.fs('body')}px;
                 background-color: transparent;
             }}
         """
@@ -417,21 +427,29 @@ class StylesPlayer(StylesBase):
             QListWidget {{
                 background-color: transparent;
                 color: {colors['player_panel_text']};
-                border: none;
+                border: 2px solid transparent;
+                border-radius: {AppStyles._get_scaled_radius('tab')}px;
                 padding: 2px;
                 outline: none;
+            }}
+            QListWidget:focus {{
+                border-color: {colors['accent']};
             }}
             QListWidget::item {{
                 padding: 2px 4px;
                 min-height: 26px;
                 border: none;
             }}
-            QListWidget::item:selected {{
-                background-color: {colors['highlight']};
-                color: {colors['highlighted_text']};
-            }}
             QListWidget::item:hover {{
                 background-color: {colors['highlight']};
+            }}
+            QListWidget::item:selected {{
+                background-color: {colors['accent']};
+                color: #ffffff;
+            }}
+            QListWidget::item:selected:!active {{
+                background-color: {colors['highlight']};
+                color: {colors['highlighted_text']};
             }}
         """
 
@@ -440,8 +458,8 @@ class StylesPlayer(StylesBase):
         colors = AppStyles._get_colors()
         return f"""
             QLabel {{
-                color: {colors['player_panel_disabled']};
-                font-size: 11px;
+                color: {colors['player_panel_secondary']};
+                font-size: {AppStyles.fs('caption')}px;
                 background-color: transparent;
             }}
         """
@@ -478,17 +496,17 @@ class StylesPlayer(StylesBase):
         title_text = colors.get('window_text', AppStyles._safe_fallback('window_text'))
         accent_color = colors.get('accent', AppStyles._safe_fallback('accent'))
         if style == 'neumorphic':
-            btn_dec = f"background-color: transparent; border: none; font-size: 14px; padding: 4px 12px; margin: 2px; border-radius: {r}px;"
+            btn_dec = f"background-color: transparent; border: none; font-size: {AppStyles.fs('title')}px; padding: 4px 12px; margin: 2px; border-radius: {r}px;"
         elif style == 'skeuomorphic':
-            btn_dec = f"background-color: transparent; border: 1px outset {colors.get('border_3d_light', colors['mid'])}; font-size: 14px; padding: 4px 12px; margin: 2px; border-radius: {r}px;"
+            btn_dec = f"background-color: transparent; border: 1px outset {colors.get('border_3d_light', colors['mid'])}; font-size: {AppStyles.fs('title')}px; padding: 4px 12px; margin: 2px; border-radius: {r}px;"
         elif style == 'frosted':
-            btn_dec = f"background-color: {colors.get('frosted_border', 'transparent')}; border: 1px solid {colors.get('frosted_border', colors.get('border_thin', colors['mid']))}; font-size: 14px; padding: 4px 12px; margin: 2px; border-radius: {r}px;"
+            btn_dec = f"background-color: {colors.get('frosted_border', 'transparent')}; border: 1px solid {colors.get('frosted_border', colors.get('border_thin', colors['mid']))}; font-size: {AppStyles.fs('title')}px; padding: 4px 12px; margin: 2px; border-radius: {r}px;"
         elif style == 'win11':
-            btn_dec = f"background-color: transparent; border: none; font-size: 14px; padding: 4px 12px; margin: 2px; border-radius: {r}px;"
+            btn_dec = f"background-color: transparent; border: none; font-size: {AppStyles.fs('title')}px; padding: 4px 12px; margin: 2px; border-radius: {r}px;"
         elif style in ('mac', 'ios'):
-            btn_dec = f"background-color: transparent; border: none; font-size: 14px; padding: 4px 14px; margin: 1px; border-radius: {r}px;"
+            btn_dec = f"background-color: transparent; border: none; font-size: {AppStyles.fs('title')}px; padding: 4px 14px; margin: 1px; border-radius: {r}px;"
         else:
-            btn_dec = f"background-color: transparent; border: none; font-size: 14px; padding: 4px 12px; margin: 2px; border-radius: {r}px;"
+            btn_dec = f"background-color: transparent; border: none; font-size: {AppStyles.fs('title')}px; padding: 4px 12px; margin: 2px; border-radius: {r}px;"
         return f"""
             QWidget#titleBar {{
                 background-color: {title_bg};
@@ -513,7 +531,7 @@ class StylesPlayer(StylesBase):
     def title_label_style() -> str:
         colors = AppStyles._get_colors()
         title_text = colors.get('window_text', AppStyles._safe_fallback('window_text'))
-        return f"color: {title_text}; font-size: 13px; font-weight: bold; background: transparent; padding-left: 6px;"
+        return f"color: {title_text}; font-size: {AppStyles.fs('body')}px; font-weight: bold; background: transparent; padding-left: 6px;"
 
     @staticmethod
     def dialog_title_bar_style() -> str:

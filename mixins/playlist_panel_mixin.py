@@ -100,14 +100,23 @@ class PlaylistPanelMixin:
         self.epg_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.epg_empty_label.setStyleSheet(AppStyles.player_empty_label_style())
         self.epg_empty_label.hide()
-        # 空态 CTA：EPG 空时点击引导打开/导入订阅（该标签仅在空态可见）
+        # 空态 CTA：动作由 EPG 控制器按空态原因设置（无订阅源/无频道/无节目）
+        self.epg_empty_action = 'open_playlist'
         self.epg_empty_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self.epg_empty_label.setToolTip(tr("tooltip_open_playlist_cta", "点击打开订阅文件"))
 
         def _on_epg_empty_clicked(event):
             if event.button() == Qt.MouseButton.LeftButton:
                 event.accept()
-                self.open_playlist()
+                action = getattr(self, 'epg_empty_action', 'open_playlist')
+                if action == 'manage_sources':
+                    settings_ops = getattr(self, 'settings_ops', None)
+                    if settings_ops is not None:
+                        settings_ops.player_settings()
+                    else:
+                        self.open_playlist()
+                elif action == 'open_playlist':
+                    self.open_playlist()
 
         self.epg_empty_label.mousePressEvent = _on_epg_empty_clicked
 

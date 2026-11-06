@@ -135,6 +135,20 @@ class StylesBase:
     # 统一 5 档字阶：辅助 12 / 正文 14 / 小标题 16 / 标题 20 / 大标题 28
     FONT_SIZE_STEPS = (12, 14, 16, 20, 28)
 
+    # 三级语义字号：辅助（说明/徽标）/ 正文（按钮/输入）/ 标题（区块标题）
+    FONT_LEVELS = {'caption': 11, 'body': 12, 'title': 14}
+
+    @classmethod
+    def fs(cls, level: str = 'body') -> int:
+        """语义字号（px）；按逻辑屏宽分级缩放，并保证不小于 10px。"""
+        base = cls.FONT_LEVELS.get(level, 12)
+        try:
+            from utils.platform_utils import get_ui_scale
+            base = base * get_ui_scale()
+        except Exception:
+            pass
+        return max(10, int(round(base)))
+
     @classmethod
     def font_size(cls, level: str) -> int:
         """语义字阶：caption(辅助)/body(正文)/subtitle(小标题)/title(标题)/display(大标题)"""
@@ -371,6 +385,18 @@ class StylesBase:
     @staticmethod
     def is_neumorphic():
         return AppStyles._visual_style == 'neumorphic'
+
+    # 具备“玻璃”语义的风格：必须实打实有模糊，而不是半透明纯色
+    GLASS_STYLES = ('frosted', 'win11', 'mac', 'ios')
+
+    @classmethod
+    def is_glass_style(cls) -> bool:
+        return cls._visual_style in cls.GLASS_STYLES
+
+    @classmethod
+    def get_card_alpha(cls) -> int:
+        """玻璃卡片统一透明度：玻璃风格带通透感，其余风格必须是实色"""
+        return 168 if cls.is_glass_style() else 255
 
     @classmethod
     def _get_style_border_radius(cls):

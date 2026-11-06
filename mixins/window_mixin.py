@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QApplication, QCheckBox, QMessageBox, QToolButton
 
 from core.log_manager import global_logger as logger
 from ui.styles import AppStyles
-from utils.platform_utils import wayland_move, wayland_set_geometry
+from utils.platform_utils import wayland_move, wayland_set_geometry, get_ui_scale
 from utils.thread_safety import safe_single_shot
 
 
@@ -94,15 +94,16 @@ class WindowMixin:
         # 全屏时标题栏已隐藏，不能再按 32px 预留，否则底栏整体上移出现空隙
         title_bar_h = 0 if is_fullscreen else 32
         menu_bar_h = 28 if (hasattr(self, '_custom_menu_bar') and self._custom_menu_bar and self._custom_menu_bar.isVisible()) else 0
+        fallback_panel_h = int(round(170 * get_ui_scale()))
         floating_dock = self.floating_dock
         if floating_dock:
             if floating_dock.isVisible():
                 control_panel_h = floating_dock.height()
                 self._last_control_panel_h = control_panel_h
             else:
-                control_panel_h = getattr(self, '_last_control_panel_h', floating_dock.height() or 170)
+                control_panel_h = getattr(self, '_last_control_panel_h', floating_dock.height() or fallback_panel_h)
         else:
-            control_panel_h = 170
+            control_panel_h = fallback_panel_h
         sb = self.statusBar() if hasattr(self, 'statusBar') else None
         # 全屏隐藏状态栏时按 0 计算，避免底栏被多顶起 25px
         status_bar_h = sb.height() if sb and sb.isVisible() else (0 if is_fullscreen else 25)
@@ -138,12 +139,33 @@ class WindowMixin:
             if not self.floating_dock.isFloating():
                 self.floating_dock.setFloating(True)
             avail_w = max(0, mw_w - gap * 2)
-            fl_w = min(avail_w, 1050)
+            # 底栏宽度按窗口比例与屏宽因子推导，不再写死固定像素
+            scale = get_ui_scale()
+            if is_fullscreen:
+                fl_w = int(round(560 * scale))
+            else:
+                fl_w = max(int(round(720 * scale)), int(mw_w * 0.7))
+            fl_w = min(avail_w, fl_w)
             if fl_w > 0:
                 self.floating_dock.setMinimumWidth(fl_w)
             fl_x = mw_x + (mw_w - self.floating_dock.width()) // 2
             fl_y = mw_y + mw_h - control_panel_h - status_bar_h - gap
             wayland_move(self.floating_dock, fl_x, fl_y)
+
+    def _sync_floating_dock_width(self):
+        """全屏/常规切换后底栏控件集合变化，强制按目标宽度收缩或恢复。"""
+        dock = getattr(self, 'floating_dock', None)
+        if not dock:
+            return
+        avail_w = max(0, self.width() - 16)
+        scale = get_ui_scale()
+        if getattr(self, 'is_fullscreen', False):
+            target_w = int(round(560 * scale))
+        else:
+            target_w = max(int(round(720 * scale)), int(self.width() * 0.7))
+        target_w = min(avail_w, target_w)
+        if target_w > 0 and dock.width() != target_w:
+            dock.resize(target_w, dock.height())
 
     def _flush_floating_position(self):
         """节流窗口结束后的尾帧补算。"""
@@ -254,6 +276,9 @@ class WindowMixin:
             self.unsetCursor()
             is_local = self._is_local_file() if hasattr(self, '_is_local_file') else False
             self.panel_vis.set_all_visible(is_local_file=is_local)
+            # 全屏精简底栏：只留暂停/停止/全屏，信息区保持完整
+            self._apply_control_panel_compact_mode(True)
+            self._sync_floating_dock_width()
             self._sync_panel_actions()
             self._restart_auto_hide_timer()
             # 全屏切换后布局异步重算，事件循环处理完再同步视频子控件几何，
@@ -279,6 +304,9 @@ class WindowMixin:
                 if saved.get('status_bar', True) and self.status_bar:
                     self.status_bar.show()
             self.panel_vis.set_auto_hide_visible()
+            # 退出全屏恢复完整控件集合
+            self._apply_control_panel_compact_mode(False)
+            self._sync_floating_dock_width()
             self._sync_panel_actions()
             self.update_floating_position()
             # showNormal/geometry 恢复后布局仍在异步重算，延迟补同步一次

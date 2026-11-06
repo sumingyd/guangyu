@@ -395,7 +395,7 @@ class MultiScreenCell(QWidget):
                 color: {colors['player_panel_text']};
                 border: 1px solid {colors['player_line']};
                 border-radius: {max(r - 4, 2)}px;
-                font-size: 10px;
+                font-size: {AppStyles.fs('caption')}px;
                 padding: 0px 2px;
             }}
             QComboBox::drop-down {{
@@ -472,18 +472,21 @@ class MultiScreenWidget(QWidget):
         self._toolbar.setContentsMargins(4, 2, 4, 2)
 
         self._mute_button = QToolButton()
-        self._mute_button.setFixedSize(24, 20)
+        from utils.platform_utils import get_ui_scale
+        _s = get_ui_scale()
+        self._mute_button.setFixedSize(max(20, int(round(24 * _s))), max(18, int(round(20 * _s))))
         mute_color = AppStyles.get_color('player_panel_text')
         mute_icon_path = AppStyles.get_icon('volume', mute_color, 14)
         if mute_icon_path:
             self._mute_button.setIcon(QIcon(mute_icon_path))
-        self._mute_button.setIconSize(QSize(14, 14))
+        _icon_sz = max(12, int(round(14 * _s)))
+        self._mute_button.setIconSize(QSize(_icon_sz, _icon_sz))
         self._mute_button.setStyleSheet("QToolButton { background: transparent; border: none; } QToolButton:hover { background: rgba(255,255,255,0.1); }")
         self._mute_button.clicked.connect(self._toggle_global_mute)
         self._toolbar.addWidget(self._mute_button)
 
         self._mute_label = QLabel()
-        self._mute_label.setStyleSheet("color: " + AppStyles._get_colors().get('player_panel_secondary', '#aaa') + "; font-size: 11px; background: transparent;")
+        self._mute_label.setStyleSheet("color: " + AppStyles._get_colors().get('player_panel_secondary', '#aaa') + f"; font-size: {AppStyles.fs('caption')}px; background: transparent;")
         self._mute_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self._toolbar.addWidget(self._mute_label)
         self._toolbar.addStretch()

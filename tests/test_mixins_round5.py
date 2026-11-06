@@ -91,6 +91,7 @@ class TestControlPanelMixin:
         with patch('mixins.control_panel_mixin.QHBoxLayout', return_value=MagicMock()), \
              patch('mixins.control_panel_mixin.QVBoxLayout', return_value=MagicMock()), \
              patch('mixins.control_panel_mixin.QLabel', return_value=MagicMock()), \
+             patch('mixins.control_panel_mixin.ElidedLabel', return_value=MagicMock()), \
              patch('mixins.control_panel_mixin.QWidget', return_value=MagicMock()), \
              patch('mixins.control_panel_mixin.QFrame') as mock_frame:
             mock_frame.return_value = MagicMock()

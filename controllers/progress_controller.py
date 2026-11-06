@@ -84,7 +84,7 @@ class ProgressController:
 
                     progress_seconds = min(int(raw_seconds), int(total_duration))
 
-                    if progress_seconds >= int(total_duration) * 0.98 and hasattr(w, 'speed_button') and w.player_controller:
+                    if progress_seconds >= int(total_duration) * 0.98 and getattr(w, 'speed_button', None) is not None and w.player_controller:
                         # 只有真正追到直播边缘才恢复 1.0x：老节目回看到 98% 但
                         # 墙钟位置仍落后于直播时，用户可能主动倍速观看，不应被强制降速
                         try:
@@ -95,7 +95,8 @@ class ProgressController:
                         current_speed = w.player_controller.get_speed()
                         if caught_up and current_speed is not None and abs(current_speed - 1.0) > 0.01:
                             w.player_controller.set_speed(1.0)
-                            w.speed_button.setText("1.0x")
+                            if getattr(w, 'speed_button', None) is not None:
+                                w.speed_button.setText("1.0x")
                             logger.info("回看已追上直播，自动恢复倍速到1.0x")
 
                     w._set_progress_value(progress_seconds)

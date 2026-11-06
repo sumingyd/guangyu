@@ -176,15 +176,18 @@ class QualityBarDelegate(QStyledItemDelegate):
         opt = self._copy_option(option)
         style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, option.widget)
 
-        # 2. 绘制频道名称（在文本矩形顶部）
+        # 2. 绘制频道名称（在文本矩形顶部，超长省略）
         text = index.data(Qt.ItemDataRole.DisplayRole) or ''
         text_rect = self._text_rect(option)
         painter.setPen(self._text_color(option))
         # 使用 option.font 确保字体一致
         painter.setFont(option.font)
+        elided = painter.fontMetrics().elidedText(
+            str(text), Qt.TextElideMode.ElideRight, max(0, int(text_rect.width()))
+        )
         painter.drawText(text_rect,
                          Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                         str(text))
+                         elided)
 
         # 3. 在名称下方绘制评分条
         self._draw_bar(painter, option, float(score), grade)

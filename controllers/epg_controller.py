@@ -5,7 +5,7 @@ EPG节目单控制器 - 负责EPG数据管理、显示、交互
 
 from datetime import datetime, timedelta, date
 from PySide6.QtWidgets import QListWidgetItem, QStyledItemDelegate, QStyleOptionViewItem
-from PySide6.QtGui import QPainter, QFontMetrics, QFont
+from PySide6.QtGui import QPainter, QFontMetrics, QFont, QCursor
 from PySide6.QtCore import Qt, QTimer, QRect
 
 from core.log_manager import global_logger as logger
@@ -247,6 +247,47 @@ class EPGController:
         epg_content.viewport().update()
         return True
 
+    @staticmethod
+    def _has_playlist_sources() -> bool:
+        try:
+            from core.subscription_manager import SubscriptionManager
+            return bool(SubscriptionManager().get_playlist_sources())
+        except Exception:
+            return False
+
+    def _show_epg_empty(self, kind: str):
+        """统一 EPG 空态：按原因分文案与 CTA，且每次显式设置，避免残留上一次状态。
+
+        kind: 'no_source' | 'no_channel' | 'no_program'
+        """
+        if not hasattr(self.window, 'epg_empty_label'):
+            return
+        label = self.window.epg_empty_label
+        tr = self.tr
+        if kind == 'no_source':
+            label.setText(tr("epg_empty_no_source", "暂无订阅源，点击打开或导入订阅"))
+            label.setToolTip(tr("tooltip_open_playlist_cta", "点击打开订阅文件"))
+            label.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            self.window.epg_empty_action = 'open_playlist'
+        elif kind == 'no_channel':
+            label.setText(tr("epg_empty_no_channel", "订阅源中没有频道，点击管理订阅源"))
+            label.setToolTip(tr("tooltip_manage_sources_cta", "点击管理订阅源"))
+            label.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            self.window.epg_empty_action = 'manage_sources'
+        else:
+            label.setText(tr("epg_empty_no_program", "该频道暂无节目单"))
+            label.setToolTip('')
+            label.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+            self.window.epg_empty_action = None
+        label.show()
+        label.adjustSize()
+        cw = self.window.epg_content.width()
+        ch = self.window.epg_content.height()
+        lw = label.width()
+        lh = label.height()
+        label.setGeometry((cw - lw) // 2, (ch - lh) // 2, lw, lh)
+        label.raise_()
+
     def populate_epg_list(self):
         """填充EPG列表"""
         if not hasattr(self.window, 'epg_content'):
@@ -264,19 +305,9 @@ class EPGController:
 
         # 检查是否有当前频道
         if not hasattr(self.window, 'current_channel') or not self.window.current_channel:
-            if hasattr(self.window, 'epg_empty_label'):
-                # 无频道时空态文案带动作引导（标签已绑定点击打开订阅）
-                self.window.epg_empty_label.setText(
-                    self.tr("no_epg_open_playlist", "暂无节目信息，点击打开或导入订阅")
-                )
-                self.window.epg_empty_label.show()
-                self.window.epg_empty_label.adjustSize()
-                cw = self.window.epg_content.width()
-                ch = self.window.epg_content.height()
-                lw = self.window.epg_empty_label.width()
-                lh = self.window.epg_empty_label.height()
-                self.window.epg_empty_label.setGeometry((cw - lw) // 2, (ch - lh) // 2, lw, lh)
-                self.window.epg_empty_label.raise_()
+            self._show_epg_empty(
+                'no_source' if not self._has_playlist_sources() else 'no_channel'
+            )
             logger.debug("无当前频道，显示空EPG提示")
             return
 
@@ -470,15 +501,8 @@ class EPGController:
             if hasattr(self.window, 'epg_content'):
                 self.window.epg_content.clear()
                 self.window.epg_content.show()
-            if hasattr(self.window, 'epg_empty_label'):
-                self.window.epg_empty_label.show()
-                self.window.epg_empty_label.adjustSize()
-                cw = self.window.epg_content.width()
-                ch = self.window.epg_content.height()
-                lw = self.window.epg_empty_label.width()
-                lh = self.window.epg_empty_label.height()
-                self.window.epg_empty_label.setGeometry((cw - lw) // 2, (ch - lh) // 2, lw, lh)
-                self.window.epg_empty_label.raise_()
+            # 有频道但没有节目单：不提供跳转 CTA，避免误导去打开订阅文件
+            self._show_epg_empty('no_program')
             logger.debug(f"频道 {channel_name} 无EPG数据")
 
     def on_epg_item_clicked(self, item: QListWidgetItem):

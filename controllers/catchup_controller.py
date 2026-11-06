@@ -338,7 +338,7 @@ class CatchupController:
             if hasattr(self.window, 'program_progress'):
                 self._set_progress_value(0)
 
-            if hasattr(self.window, 'speed_button') and self.window.player_controller:
+            if getattr(self.window, 'speed_button', None) is not None and self.window.player_controller:
                 current_speed = self.window.player_controller.get_speed()
                 if abs(current_speed - 1.0) > 0.01:
                     self.window.player_controller.set_speed(1.0)
@@ -353,14 +353,13 @@ class CatchupController:
 
     def add_exit_catchup_button(self):
 
-        if hasattr(self.window, 'exit_catchup_button') and self.window.exit_catchup_button:
-            try:
-                tr = getattr(self.window.language_manager, 'tr', lambda x, y: x)
-                # 退出项已收入“更多”菜单，通过统一入口同步可见性与文案
-                self.window._set_exit_catchup_visible(True, tr("exit_catchup", "退出回看"))
-                logger.debug("退出回看菜单项已显示")
-            except Exception as e:
-                logger.error(f"显示退出回看按钮失败: {e}")
+        try:
+            tr = getattr(self.window.language_manager, 'tr', lambda x, y: x)
+            # 退出项已收入“更多”菜单，通过统一入口同步可见性与文案
+            self.window._set_exit_catchup_visible(True, tr("exit_catchup", "退出回看"))
+            logger.debug("退出回看菜单项已显示")
+        except Exception as e:
+            logger.error(f"显示退出回看按钮失败: {e}")
 
     def exit_catchup(self):
 
@@ -390,14 +389,13 @@ class CatchupController:
 
     def show_exit_timeshift_button(self):
 
-        if hasattr(self.window, 'exit_catchup_button') and self.window.exit_catchup_button:
-            try:
-                tr = getattr(self.window.language_manager, 'tr', lambda x, y: x)
-                # 退出项已收入“更多”菜单，通过统一入口同步可见性与文案
-                self.window._set_exit_catchup_visible(True, tr("exit_timeshift", "退出时移"))
-                logger.debug("退出时移菜单项已显示")
-            except Exception as e:
-                logger.error(f"显示退出时移按钮失败: {e}")
+        try:
+            tr = getattr(self.window.language_manager, 'tr', lambda x, y: x)
+            # 退出项已收入“更多”菜单，通过统一入口同步可见性与文案
+            self.window._set_exit_catchup_visible(True, tr("exit_timeshift", "退出时移"))
+            logger.debug("退出时移菜单项已显示")
+        except Exception as e:
+            logger.error(f"显示退出时移按钮失败: {e}")
 
     def exit_timeshift(self):
 

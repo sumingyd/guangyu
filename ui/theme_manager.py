@@ -1,7 +1,7 @@
 from core.log_manager import global_logger as logger
 from PySide6 import QtCore, QtWidgets
 from PySide6.QtCore import QSize
-from PySide6.QtGui import QGuiApplication, QIcon
+from PySide6.QtGui import QGuiApplication, QIcon, QColor, QPalette
 from ui.styles import AppStyles
 from utils.singleton import Singleton
 from utils.platform_utils import is_windows, is_macos, is_android
@@ -84,6 +84,7 @@ class ThemeManager(Singleton, QtCore.QObject):
 
     def _apply_theme_to_window(self, window: QtWidgets.QWidget):
         try:
+            self._apply_app_level_styles()
             self._apply_window_backdrop(window)
             window.setUpdatesEnabled(False)
             window.setStyleSheet("")
@@ -104,27 +105,57 @@ class ThemeManager(Singleton, QtCore.QObject):
             window.setUpdatesEnabled(True)
             logger.error(f"应用主题到窗口失败: {e}")
 
+    def _apply_app_level_styles(self):
+        """应用级样式：QToolTip 是独立顶层窗口，必须写在 QApplication 上才生效。"""
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return
+        try:
+            qss = AppStyles.tooltip_style()
+            if getattr(self, '_app_qss', None) != qss:
+                self._app_qss = qss
+                app.setStyleSheet(qss)
+            colors = AppStyles._get_colors()
+            palette = app.palette()
+            base = QColor(colors.get('tooltip_base', colors.get('base', '#2b2b2b')))
+            text = QColor(colors.get('tooltip_text', colors.get('window_text', '#ffffff')))
+            if palette.color(QPalette.ColorRole.ToolTipBase) != base or \
+                    palette.color(QPalette.ColorRole.ToolTipText) != text:
+                palette.setColor(QPalette.ColorRole.ToolTipBase, base)
+                palette.setColor(QPalette.ColorRole.ToolTipText, text)
+                app.setPalette(palette)
+        except Exception as e:
+            logger.debug(f"_apply_app_level_styles: {e}")
+
     def _apply_window_backdrop(self, window):
         try:
-            is_frosted = AppStyles._visual_style == 'frosted'
+            # 玻璃语义统一由 AppStyles 判定：玻璃风格必须真正启用模糊，
+            # 非玻璃风格使用实色卡片，不再保留"半透明无模糊"的中间态。
+            is_glass = AppStyles.is_glass_style()
             if isinstance(window, QtWidgets.QMainWindow):
-                if is_frosted:
+                if is_glass:
                     window.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
                     self._enable_dwm_blur(window)
-                    for child in window.findChildren(QtWidgets.QDialog):
-                        child.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
-                        self._enable_dwm_blur(child)
                 else:
                     window.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, False)
                     self._disable_dwm_blur(window)
-                    for child in window.findChildren(QtWidgets.QDialog):
-                        child.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, False)
+                # 对话框/dock 需要半透明才能做圆角切口；透明不等于玻璃，
+                # 卡片填充色由 AppStyles.get_card_alpha() 决定（非玻璃风格 alpha=255）。
+                for child in window.findChildren(QtWidgets.QDialog):
+                    child.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+                    if is_glass:
+                        self._enable_dwm_blur(child)
+                    else:
                         self._disable_dwm_blur(child)
                 for dock_attr in ('epg_dock', 'playlist_dock', 'floating_dock'):
                     dock = getattr(window, dock_attr, None)
                     if dock:
                         dock.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
-                        if is_frosted:
+                        # 通知 dock 重新解析卡片语义（模糊/实色 + mask + 背景快照）
+                        refresh = getattr(dock, 'refresh_glass_surface', None)
+                        if callable(refresh):
+                            refresh()
+                        if is_glass:
                             self._enable_dwm_blur(dock)
                         else:
                             self._disable_dwm_blur(dock)
@@ -135,7 +166,7 @@ class ThemeManager(Singleton, QtCore.QObject):
         if is_android():
             return
         if is_macos():
-            if AppStyles._visual_style == 'frosted':
+            if AppStyles.is_glass_style():
                 from utils.mac_blur_helper import MacBlurHelper
                 if not MacBlurHelper.apply(window, material="sidebar"):
                     window.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -344,6 +375,28 @@ class ThemeManager(Singleton, QtCore.QObject):
         return False
 
     def _update_child_widgets(self, parent: QtWidgets.QWidget):
+        def _line_edit_style(w):
+            # 只兜底没有自管样式的输入框；应用显式设置过的样式不能覆盖
+            if w.styleSheet() and not w.property('_themeManagedInput'):
+                return None
+            w.setProperty('_themeManagedInput', True)
+            return AppStyles.common_line_edit_style()
+
+        def _combo_box_style(w):
+            if w.styleSheet() and not w.property('_themeManagedInput'):
+                return None
+            w.setProperty('_themeManagedInput', True)
+            return AppStyles.common_combo_box_style()
+
+        def _label_style(w):
+            # 有 objectName / style_type / 应用自定义样式的标签由创建方自管
+            if getattr(w, 'style_type', None) or w.objectName():
+                return None
+            if w.styleSheet() and not w.property('_themeManagedLabel'):
+                return None
+            w.setProperty('_themeManagedLabel', True)
+            return AppStyles.label_style() if hasattr(AppStyles, 'label_style') else None
+
         style_map = {
             QtWidgets.QPushButton: lambda w: AppStyles.button_style() if not hasattr(w, 'style_type') else (
                 AppStyles.apply_button_style() if w.style_type == 'apply' else
@@ -356,22 +409,12 @@ class ThemeManager(Singleton, QtCore.QObject):
             QtWidgets.QStatusBar: lambda w: AppStyles.statusbar_style(),
             QtWidgets.QTabWidget: lambda w: AppStyles.tab_widget_style(),
             QtWidgets.QToolButton: lambda w: (
-                None if hasattr(w, 'style_type')
+                None if (hasattr(w, 'style_type') or w.styleSheet())
                 else AppStyles.toolbar_button_style()
             ),
-            QtWidgets.QLineEdit: lambda w: (
-                AppStyles.common_line_edit_style()
-                if (not w.styleSheet() or 'common_line_edit' not in w.styleSheet())
-                else None
-            ),
-            QtWidgets.QComboBox: lambda w: (
-                AppStyles.common_combo_box_style()
-                if (not w.styleSheet() or 'common_combo' not in w.styleSheet())
-                else None
-            ),
-            QtWidgets.QLabel: lambda w: (
-                AppStyles.label_style() if hasattr(AppStyles, 'label_style') else None
-            ),
+            QtWidgets.QLineEdit: _line_edit_style,
+            QtWidgets.QComboBox: _combo_box_style,
+            QtWidgets.QLabel: _label_style,
             QtWidgets.QCheckBox: lambda w: AppStyles.common_check_box_style(),
             QtWidgets.QRadioButton: lambda w: (
                 AppStyles.common_radio_button_style()
@@ -399,6 +442,8 @@ class ThemeManager(Singleton, QtCore.QObject):
 
         all_widgets = parent.findChildren(QtWidgets.QWidget)
         for widget in all_widgets:
+            if widget.property('selfStyled'):
+                continue
             if self._is_in_managed_widget(widget):
                 continue
             widget_type = type(widget)

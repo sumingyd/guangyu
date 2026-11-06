@@ -7,12 +7,35 @@ from ui.styles import AppStyles, color_to_hex
 
 
 def _scaled_font(point_delta: int = 0) -> QFont:
-    """基于应用字体创建 DPI 感知字体，point_delta 为相对偏移"""
+    """基于应用字体创建 DPI 感知字体，point_delta 为相对偏移。
+
+    字号同时套用逻辑屏宽分级因子，并保底 8pt（小屏不再出现 6pt 的不可读字号）。
+    """
     base = QApplication.font() if QApplication.instance() else QFont()
     font = QFont(base)
     ps = base.pointSize() if base.pointSize() > 0 else 9
-    font.setPointSize(max(1, ps + point_delta))
+    try:
+        from utils.platform_utils import get_ui_scale
+        scale = get_ui_scale()
+    except Exception:
+        scale = 1.0
+    font.setPointSizeF(max(8.0, (ps + point_delta) * scale))
     return font
+
+
+def epg_metrics() -> Dict[str, int]:
+    """EPG 尺寸基线：时间刻度宽 / 行高 / 表头高 / 左栏宽，统一按逻辑屏宽分级。"""
+    try:
+        from utils.platform_utils import get_ui_scale
+        scale = get_ui_scale()
+    except Exception:
+        scale = 1.0
+    return {
+        'hour_width': max(96, int(round(120 * scale))),
+        'row_height': max(36, int(round(44 * scale))),
+        'header_height': max(28, int(round(32 * scale))),
+        'left_margin': max(96, int(round(120 * scale))),
+    }
 
 
 def _safe_color(color_val, fallback='#1e1e1e'):
@@ -37,6 +60,12 @@ class EpgTimelineWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # 实例尺寸按逻辑屏宽分级，避免小屏下字号与行高同步缩到不可读
+        metrics = epg_metrics()
+        self.HOUR_WIDTH = metrics['hour_width']
+        self.ROW_HEIGHT = metrics['row_height']
+        self.HEADER_HEIGHT = metrics['header_height']
+        self.LEFT_MARGIN = metrics['left_margin']
         self._channels: List[Dict[str, Any]] = []
         self._start_hour = 0
         self._hours = 24
@@ -127,8 +156,12 @@ class EpgTimelineWidget(QWidget):
         accent = _safe_color(c.get('accent', '#4a9eff'))
         border = _safe_color(c.get('player_line', c.get('mid', '#333333')))
         program_bg = _safe_color(c.get('alternate_base', '#2a2a2a'))
-        current_bg = _safe_color(c.get('highlight', '#264f78'))
-        hover_bg = _safe_color(c.get('table_hover', c.get('button', '#3a3a3a')))
+        # 当前节目：accent 半透明底 + accent 描边；hover：中性轻叠加。
+        # 二者不能再共用同一个 highlight/table_hover 色，否则无法区分。
+        current_bg = QColor(accent)
+        current_bg.setAlpha(44)
+        hover_bg = QColor(text)
+        hover_bg.setAlpha(22)
         style = AppStyles._visual_style
         list_r = AppStyles._get_scaled_radius('list_item')
 
@@ -202,6 +235,10 @@ class EpgTimelineWidget(QWidget):
                         elif style in ('frosted', 'win11'):
                             frosted_border = _safe_color(c.get('frosted_border', c.get('border_thin', c.get('mid', '#555555'))))
                             painter.setPen(QPen(frosted_border, 1))
+                            painter.setBrush(Qt.BrushStyle.NoBrush)
+                            painter.drawPath(prog_path)
+                        if is_current:
+                            painter.setPen(QPen(accent, 1))
                             painter.setBrush(Qt.BrushStyle.NoBrush)
                             painter.drawPath(prog_path)
                     else:
@@ -314,6 +351,12 @@ class EpgChannelHeaderWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # 与节目区共用同一套分级尺寸，保证左右并排滚动时逐行对齐
+        metrics = epg_metrics()
+        self.ROW_HEIGHT = metrics['row_height']
+        self.NUM_WIDTH = max(22, int(round(26 * metrics['row_height'] / 44)))
+        self.LOGO_WIDTH = max(28, int(round(34 * metrics['row_height'] / 44)))
+        self.LOGO_HEIGHT = max(20, int(round(26 * metrics['row_height'] / 44)))
         self._channels: List[Dict[str, Any]] = []
         self._current_channel = None
         self._logo_service = None
@@ -457,10 +500,13 @@ class EpgChannelHeaderWidget(QWidget):
 
 class EpgTimeHeaderWidget(QWidget):
     HOUR_WIDTH = 120
-    HEADER_HEIGHT = 28
+    HEADER_HEIGHT = 32
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        metrics = epg_metrics()
+        self.HOUR_WIDTH = metrics['hour_width']
+        self.HEADER_HEIGHT = metrics['header_height']
         self._start_hour = 0
         self._hours = 24
         self.setAutoFillBackground(False)

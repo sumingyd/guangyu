@@ -285,29 +285,6 @@ class StylesDialog(StylesBase):
             QDialog QTabBar {{
                 background-color: transparent;
             }}
-            QDialog QTabBar::tab {{
-                background-color: {dlg_colors['alternate_base']};
-                border: 1px solid {dlg_colors['mid']};
-                border-bottom: none;
-                border-radius: {r}px {r}px 0 0;
-                padding: 6px 16px;
-                margin-right: 4px;
-                margin-top: 4px;
-                font-size: 12px;
-                font-weight: 500;
-                color: {dlg_colors['window_text']};
-            }}
-            QDialog QTabBar::tab:selected {{
-                background-color: {dlg_colors['window']};
-                border-color: {dlg_colors['mid']};
-                border-bottom-color: {dlg_colors['window']};
-                color: {dlg_colors['accent']};
-                font-weight: 600;
-            }}
-            QDialog QTabBar::tab:hover:!selected {{
-                background-color: {dlg_colors['light']};
-                color: {dlg_colors['accent']};
-            }}
             QDialog QScrollArea {{
                 background-color: transparent;
                 border: none;
@@ -502,13 +479,12 @@ class StylesDialog(StylesBase):
                 border: {tab_border};
                 border-bottom: none;
                 border-radius: {tab_r}px {tab_r}px 0 0;
-                padding: 8px 16px;
+                padding: 6px 16px;
                 margin-right: 4px;
                 margin-top: 4px;
-                font-size: 13px;
+                font-size: 12px;
                 font-weight: 500;
                 color: {colors['window_text']};
-                opacity: 0.8;
             }}
             QTabBar::tab:selected {{
                 background-color: {tab_selected_bg};
@@ -516,13 +492,15 @@ class StylesDialog(StylesBase):
                 border-bottom-color: {colors['window']};
                 color: {colors['accent']};
                 font-weight: 600;
-                opacity: 1.0;
                 {tab_selected_dec}
             }}
             QTabBar::tab:hover:!selected {{
                 background-color: {colors['light']};
                 color: {colors['accent']};
-                opacity: 0.9;
+            }}
+            QTabBar::tab:focus {{
+                color: {colors['accent']};
+                border-color: {colors['accent']};
             }}
             QTabBar::tab:first {{
                 margin-left: 4px;

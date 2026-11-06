@@ -206,7 +206,7 @@ class LanguageManager(Singleton):
                 main_window.program_desc.setText(self.tr('open_playlist_or_import', 'Open a playlist file or import channels to start watching'))
             if hasattr(main_window, 'remain_label'):
                 main_window.remain_label.setText(self.tr('waiting_to_play', 'Waiting to play...'))
-            if hasattr(main_window, 'exit_catchup_button'):
+            if hasattr(main_window, '_set_exit_catchup_visible'):
                 main_window._set_exit_catchup_visible(
                     getattr(main_window, '_more_catchup_action', None) is not None
                     and main_window._more_catchup_action.isVisible(),

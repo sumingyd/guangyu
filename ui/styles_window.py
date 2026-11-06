@@ -46,7 +46,7 @@ class StylesWindow(StylesBase):
                 background-color: transparent;
                 color: {mw_colors['window_text']};
                 font-family: {ff};
-                font-size: 13px;
+                font-size: {AppStyles.fs('body')}px;
             }}
             QWidget#mainContainer {{
                 background-color: {container_bg};
@@ -67,7 +67,7 @@ class StylesWindow(StylesBase):
                 color: {mw_colors['window_text']};
                 padding: 6px 12px;
                 font-weight: 500;
-                font-size: 12px;
+                font-size: {AppStyles.fs('body')}px;
                 font-family: {ff};
                 {btn_dec}
             }}
@@ -86,7 +86,7 @@ class StylesWindow(StylesBase):
             QLineEdit {{
                 color: {mw_colors['window_text']};
                 padding: 6px;
-                font-size: 12px;
+                font-size: {AppStyles.fs('body')}px;
                 font-family: {ff};
                 {inp_dec}
             }}
@@ -97,7 +97,7 @@ class StylesWindow(StylesBase):
             QComboBox {{
                 color: {mw_colors['window_text']};
                 padding: 6px;
-                font-size: 12px;
+                font-size: {AppStyles.fs('body')}px;
                 font-family: {ff};
                 {inp_dec}
             }}
@@ -127,7 +127,7 @@ class StylesWindow(StylesBase):
                 selection-color: {mw_colors['table_selection_text']};
                 gridline-color: {mw_colors['table_grid']};
                 color: {mw_colors['window_text']};
-                font-size: 12px;
+                font-size: {AppStyles.fs('body')}px;
                 font-family: {ff};
             }}
             QTableView::item {{
@@ -149,7 +149,7 @@ class StylesWindow(StylesBase):
                 color: {mw_colors['window_text']};
                 padding: 8px 12px;
                 font-weight: 600;
-                font-size: 12px;
+                font-size: {AppStyles.fs('body')}px;
                 font-family: {ff};
                 border: none;
                 border-right: 1px solid {mw_colors['mid']};
@@ -197,16 +197,11 @@ class StylesWindow(StylesBase):
                 {dock_title_dec}
                 color: {mw_colors['window_text']};
             }}
-            QToolTip {{
-                {tooltip_dec}
-                color: {mw_colors.get('tooltip_text', mw_colors['window_text'])};
-                font-family: {ff};
-            }}
             QGroupBox {{
                 margin-top: 12px;
                 padding-top: 16px;
                 font-weight: 600;
-                font-size: 13px;
+                font-size: {AppStyles.fs('title')}px;
                 color: {mw_colors['window_text']};
                 font-family: {ff};
                 {grp_dec}
@@ -226,7 +221,7 @@ class StylesWindow(StylesBase):
             }}
             QCheckBox {{
                 color: {mw_colors['window_text']};
-                font-size: 13px;
+                font-size: {AppStyles.fs('body')}px;
                 font-family: {ff};
                 spacing: 8px;
             }}
@@ -266,7 +261,7 @@ class StylesWindow(StylesBase):
             QSpinBox {{
                 padding: 6px 10px;
                 padding-right: 32px;
-                font-size: 13px;
+                font-size: {AppStyles.fs('body')}px;
                 color: {mw_colors['window_text']};
                 {spinbox_border}
             }}

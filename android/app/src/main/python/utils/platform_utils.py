@@ -358,3 +358,31 @@ def get_touch_target_size():
     if is_android():
         return 48
     return 32
+
+
+def get_logical_screen_width() -> int:
+    """主屏逻辑宽度（已按 DPR 折算，不含缩放）；无 Qt 环境时回落 1920。"""
+    try:
+        if _HAS_QT:
+            app = QGuiApplication.instance()
+            screen = app.primaryScreen() if app else None
+            if screen:
+                return max(0, screen.availableGeometry().width())
+    except Exception:
+        pass
+    return 1920
+
+
+def get_ui_scale() -> float:
+    """按逻辑屏宽分级的界面尺寸因子，统一驱动按钮/行高/字号等。
+
+    < 1280 小屏 0.85；< 1920 常规 1.0；< 2560 大屏 1.15；其余超宽 1.3。
+    """
+    w = get_logical_screen_width()
+    if w < 1280:
+        return 0.85
+    if w < 1920:
+        return 1.0
+    if w < 2560:
+        return 1.15
+    return 1.3

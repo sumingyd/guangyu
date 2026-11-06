@@ -925,7 +925,6 @@ class UIController:
                     name_style = AppStyles.player_channel_list_name_style()
                     for i in range(cl.count()):
                         item = cl.item(i)
-                        item.setSizeHint(QSize(0, 40))
                         item_widget = cl.itemWidget(item)
                         if item_widget:
                             for label in item_widget.findChildren(QtWidgets.QLabel):
@@ -1029,7 +1028,7 @@ class UIController:
             def _resolve_icon_name(attr_name):
                 if attr_name == 'play_button':
                     is_paused = hasattr(self.window, 'player_controller') and getattr(self.window.player_controller, 'is_paused', False)
-                    return 'pause' if is_paused else 'play'
+                    return 'play' if is_paused else 'pause'
                 if attr_name == 'volume_button':
                     vol = self.window.volume_slider.value() if hasattr(self.window, 'volume_slider') else 80
                     return 'volume_mute' if vol == 0 else ('volume_low' if vol < 50 else 'volume')
@@ -1052,8 +1051,9 @@ class UIController:
                 icon_name = _resolve_icon_name(attr) or static_icon
                 if icon_name:
                     btn.setIcon(QIcon(AppStyles.get_icon(icon_name, btn_color)))
-            if hasattr(self.window, 'exit_catchup_button'):
-                self.window.exit_catchup_button.setStyleSheet(AppStyles.player_button_style())
+            exit_catchup_btn = getattr(self.window, 'exit_catchup_button', None)
+            if exit_catchup_btn is not None:
+                exit_catchup_btn.setStyleSheet(AppStyles.player_button_style())
             if hasattr(self.window, 'catchup_indicator'):
                 self.window.catchup_indicator.setStyleSheet(AppStyles.player_catchup_indicator_style())
             if hasattr(self.window, 'volume_slider'):

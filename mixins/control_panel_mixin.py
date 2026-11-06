@@ -9,8 +9,9 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QMenu
 
 from core.log_manager import global_logger as logger
+from ui.elided_label import ElidedLabel
 from ui.styles import AppStyles
-from utils.platform_utils import is_android
+from utils.platform_utils import is_android, get_ui_scale
 
 
 
@@ -145,6 +146,7 @@ class ControlPanelMixin:
     def _create_info_row(self):
         """创建节目信息行"""
         tr = self.language_manager.tr
+        ui_scale = get_ui_scale()
 
         info_layout = QHBoxLayout()
         info_layout.setSpacing(12)
@@ -163,10 +165,12 @@ class ControlPanelMixin:
 
         row1 = QHBoxLayout()
         row1.setSpacing(8)
-        self.channel_name = QLabel(tr("no_channel_selected", "No channel selected"))
+        self.channel_name = ElidedLabel(tr("no_channel_selected", "No channel selected"))
         self.channel_name.setStyleSheet(AppStyles.player_channel_name_style())
+        # 超长频道名省略显示并保留 tooltip，避免挤占节目名与时间
+        self.channel_name.setMaximumWidth(max(140, int(round(240 * ui_scale))))
         row1.addWidget(self.channel_name, 0)
-        self.current_program = QLabel("")
+        self.current_program = ElidedLabel("")
         self.current_program.setObjectName("current_program")
         self.current_program.setStyleSheet(AppStyles.player_program_style())
         self.current_program.setAutoFillBackground(False)
@@ -226,15 +230,19 @@ class ControlPanelMixin:
         self.control_row.setSpacing(8)
 
         btn_color = AppStyles.get_color('player_panel_text')
-        btn_icon_size = QSize(20, 20)
+        # 按逻辑屏宽分级的尺寸因子：按钮、图标与全屏精简模式统一套用
+        ui_scale = get_ui_scale()
+        btn_w = max(28, int(round(self.CTRL_BUTTON_WIDTH * ui_scale)))
+        btn_h = max(26, int(round(self.CTRL_BUTTON_HEIGHT * ui_scale)))
+        btn_icon_size = QSize(max(16, int(round(20 * ui_scale))), max(16, int(round(20 * ui_scale))))
         if is_android():
             btn_icon_size = QSize(28, 28)
-            self.CTRL_BUTTON_WIDTH = max(self.CTRL_BUTTON_WIDTH, 48)
-            self.CTRL_BUTTON_HEIGHT = max(self.CTRL_BUTTON_HEIGHT, 48)
+            btn_w = max(btn_w, 48)
+            btn_h = max(btn_h, 48)
         self.prev_ch_button = QToolButton()
         self.prev_ch_button.setIcon(QIcon(AppStyles.get_icon('prev', btn_color)))  # type: ignore[arg-type]
         self.prev_ch_button.setIconSize(btn_icon_size)
-        self.prev_ch_button.setFixedSize(self.CTRL_BUTTON_WIDTH, self.CTRL_BUTTON_HEIGHT)
+        self.prev_ch_button.setFixedSize(btn_w, btn_h)
         self.prev_ch_button.setStyleSheet(AppStyles.player_button_style())
         self.prev_ch_button.clicked.connect(lambda: self._switch_channel_safe(-1))
         self.prev_ch_button.setToolTip(tr("panel_prev_ch", "上一频道"))
@@ -243,7 +251,7 @@ class ControlPanelMixin:
         self.play_button = QToolButton()
         self.play_button.setIcon(QIcon(AppStyles.get_icon('play', btn_color)))  # type: ignore[arg-type]
         self.play_button.setIconSize(btn_icon_size)
-        self.play_button.setFixedSize(self.CTRL_BUTTON_WIDTH, self.CTRL_BUTTON_HEIGHT)
+        self.play_button.setFixedSize(btn_w, btn_h)
         self.play_button.setStyleSheet(AppStyles.player_button_style())
         self.play_button.clicked.connect(self.toggle_play)
         self.play_button.setToolTip(tr("panel_play", "播放/暂停"))
@@ -252,7 +260,7 @@ class ControlPanelMixin:
         self.next_ch_button = QToolButton()
         self.next_ch_button.setIcon(QIcon(AppStyles.get_icon('next', btn_color)))  # type: ignore[arg-type]
         self.next_ch_button.setIconSize(btn_icon_size)
-        self.next_ch_button.setFixedSize(self.CTRL_BUTTON_WIDTH, self.CTRL_BUTTON_HEIGHT)
+        self.next_ch_button.setFixedSize(btn_w, btn_h)
         self.next_ch_button.setStyleSheet(AppStyles.player_button_style())
         self.next_ch_button.clicked.connect(lambda: self._switch_channel_safe(1))
         self.next_ch_button.setToolTip(tr("panel_next_ch", "下一频道"))
@@ -261,7 +269,7 @@ class ControlPanelMixin:
         self.stop_button = QToolButton()
         self.stop_button.setIcon(QIcon(AppStyles.get_icon('stop', btn_color)))  # type: ignore[arg-type]
         self.stop_button.setIconSize(btn_icon_size)
-        self.stop_button.setFixedSize(self.CTRL_BUTTON_WIDTH, self.CTRL_BUTTON_HEIGHT)
+        self.stop_button.setFixedSize(btn_w, btn_h)
         self.stop_button.setStyleSheet(AppStyles.player_button_style())
         self.stop_button.clicked.connect(self.stop_playback)
         self.stop_button.setToolTip(tr("panel_stop", "停止"))
@@ -281,7 +289,7 @@ class ControlPanelMixin:
         self.program_progress.setSingleStep(1)
         self.program_progress.setPageStep(30)
         self.program_progress.setStyleSheet(AppStyles.player_slider_style())
-        self.program_progress.set_cache_color(AppStyles._get_colors().get('player_cache_bar', 'rgba(76,175,80,0.4)'))
+        self.program_progress.set_cache_color(AppStyles._get_colors().get('player_cache_bar', 'rgba(106,158,255,0.4)'))
         self.program_progress.set_tooltip_formatter(self._format_preview_text)
         self.program_progress.sliderReleased.connect(self.on_progress_slider_released)
         self.program_progress.sliderPressed.connect(self._on_progress_slider_pressed)
@@ -298,7 +306,7 @@ class ControlPanelMixin:
         self.volume_button = QToolButton()
         self.volume_button.setIcon(QIcon(AppStyles.get_icon('volume', btn_color)))  # type: ignore[arg-type]
         self.volume_button.setIconSize(btn_icon_size)
-        self.volume_button.setFixedSize(self.CTRL_BUTTON_WIDTH, self.CTRL_BUTTON_HEIGHT)
+        self.volume_button.setFixedSize(btn_w, btn_h)
         self.volume_button.setStyleSheet(AppStyles.player_button_style())
         self.volume_button.clicked.connect(self.toggle_mute)
         self.volume_button.setToolTip(tr("panel_volume", "音量"))
@@ -307,50 +315,21 @@ class ControlPanelMixin:
         self.volume_slider = QSlider(Qt.Orientation.Horizontal)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(80)
-        self.volume_slider.setFixedWidth(90)
+        self.volume_slider.setFixedWidth(max(64, int(round(90 * ui_scale))))
         self.volume_slider.setStyleSheet(AppStyles.player_volume_slider_style())
         self.volume_slider.setToolTip(tr("panel_volume_slider", "音量调节"))
         self.volume_slider.valueChanged.connect(self.set_volume)
         self.control_row.addWidget(self.volume_slider)
 
-        self.exit_catchup_button = QToolButton()
-        self.exit_catchup_button.setIcon(QIcon(AppStyles.get_icon('exit_catchup', btn_color)))  # type: ignore[arg-type]
-        self.exit_catchup_button.setIconSize(btn_icon_size)
-
-        self.exit_catchup_button.setFixedSize(self.CTRL_BUTTON_WIDTH, self.CTRL_BUTTON_HEIGHT)
-        self.exit_catchup_button.setStyleSheet(AppStyles.player_button_style())
-        self.exit_catchup_button.clicked.connect(self.exit_catchup)
-        self.exit_catchup_button.setToolTip(tr("panel_exit_catchup", "退出回看"))
-        self.exit_catchup_button.hide()
-        # 按钮保留为成员以兼容旧引用，但不单独上屏——统一收入“更多”菜单
-
-        self.speed_button = QToolButton()
-        self.speed_button.setIcon(QIcon(AppStyles.get_icon('speed', btn_color)))  # type: ignore[arg-type]
-        self.speed_button.setIconSize(btn_icon_size)
-        self.speed_button.setText("1.0x")
-        self.speed_button.setFixedSize(max(50, self.CTRL_BUTTON_WIDTH), self.CTRL_BUTTON_HEIGHT)
-        self.speed_button.setStyleSheet(AppStyles.player_button_style())
-        self.speed_button.clicked.connect(self.media_ctrl.show_speed_menu)
-        self.speed_button.setToolTip(tr("panel_speed", "播放速度"))
-
-        self.aspect_button = QToolButton()
-        self.aspect_button.setIcon(QIcon(AppStyles.get_icon('aspect', btn_color)))  # type: ignore[arg-type]
-        self.aspect_button.setIconSize(btn_icon_size)
-        self.aspect_button.setFixedSize(self.CTRL_BUTTON_WIDTH, self.CTRL_BUTTON_HEIGHT)
-        self.aspect_button.setStyleSheet(AppStyles.player_button_style())
-        self.aspect_button.clicked.connect(self.media_ctrl.show_aspect_menu)
-        self.aspect_button.setToolTip(tr("panel_aspect", "画面比例"))
-
-        # audio_track_button / sub_track_button / pip_button 已收入"更多"菜单
-        # （_create_more_menu 中 addAction 连接 show_audio_track_menu/show_sub_track_menu/pip_ctrl.toggle）
-        # 不再单独实例化，避免创建后未 addWidget 的死代码；类属性默认 None 保持兼容
+        # speed/aspect/exit_catchup 已全部收入“更多”菜单，不再实例化隐藏控件；
+        # 类属性保留为 None，旧引用按可选控件处理。
 
         self._create_more_menu()
 
         self.more_button = QToolButton()
         self.more_button.setIcon(QIcon(AppStyles.get_icon('more', btn_color)))  # type: ignore[arg-type]
         self.more_button.setIconSize(btn_icon_size)
-        self.more_button.setFixedSize(self.CTRL_BUTTON_WIDTH, self.CTRL_BUTTON_HEIGHT)
+        self.more_button.setFixedSize(btn_w, btn_h)
         self.more_button.setStyleSheet(AppStyles.player_button_style())
         self.more_button.clicked.connect(self._show_more_menu)
         self.more_button.setToolTip(tr("panel_more", "更多"))
@@ -359,13 +338,33 @@ class ControlPanelMixin:
         self.fullscreen_button = QToolButton()
         self.fullscreen_button.setIcon(QIcon(AppStyles.get_icon('fullscreen', btn_color)))  # type: ignore[arg-type]
         self.fullscreen_button.setIconSize(btn_icon_size)
-        self.fullscreen_button.setFixedSize(self.CTRL_BUTTON_WIDTH, self.CTRL_BUTTON_HEIGHT)
+        self.fullscreen_button.setFixedSize(btn_w, btn_h)
         self.fullscreen_button.setStyleSheet(AppStyles.player_button_style())
         self.fullscreen_button.clicked.connect(self.toggle_fullscreen)
         self.fullscreen_button.setToolTip(tr("panel_fullscreen", "全屏"))
         self.control_row.addWidget(self.fullscreen_button)
 
+        # 全屏精简模式只保留 播放/暂停、停止、全屏 三个控件；信息区不参与隐藏
+        self._fullscreen_hidden_controls = [
+            self.prev_ch_button, self.next_ch_button,
+            self.progress_start, self.program_progress, self.progress_end,
+            self.volume_button, self.volume_slider, self.more_button,
+        ]
+
         self.floating_layout.addLayout(self.control_row)
+
+    def _apply_control_panel_compact_mode(self, compact: bool):
+        """全屏时精简底栏（保留暂停/停止/全屏），退出全屏恢复完整控件集合。"""
+        for widget in getattr(self, '_fullscreen_hidden_controls', []):
+            if widget is not None:
+                widget.setVisible(not compact)
+        btn = getattr(self, 'fullscreen_button', None)
+        if btn is not None:
+            tr = self.language_manager.tr
+            if compact:
+                btn.setToolTip(tr("panel_exit_fullscreen", "返回分屏"))
+            else:
+                btn.setToolTip(tr("panel_fullscreen", "全屏"))
 
 
     def _switch_channel_safe(self, direction: int):
@@ -411,11 +410,9 @@ class ControlPanelMixin:
     def _set_exit_catchup_visible(self, visible: bool, text: str = None):
         """回看/时移模式切换时同步“更多”菜单中的退出项。
 
-        exit_catchup_button 保留为成员仅作状态/文案载体（旧引用兼容），
-        不再单独上屏；菜单项的可见性与文案以此为准。
+        退出回看已完全收入“更多”菜单（不再有独立按钮），
+        菜单项的可见性与文案是唯一事实来源。
         """
-        if text is not None and getattr(self, 'exit_catchup_button', None) is not None:
-            self.exit_catchup_button.setText(text)
         action = getattr(self, '_more_catchup_action', None)
         if action is not None:
             action.setVisible(visible)

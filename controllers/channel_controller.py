@@ -109,7 +109,10 @@ class ChannelController:
         skipped_count = 0
 
         from ui.styles import AppStyles
+        from ui.elided_label import ElidedLabel
+        from utils.platform_utils import get_ui_scale
         name_style = AppStyles.player_channel_list_name_style()
+        ui_scale = get_ui_scale()
 
         for idx, channel in enumerate(channels):
             try:
@@ -128,8 +131,9 @@ class ChannelController:
                     if is_grid:
                         item = QListWidgetItem()
                         item.setText(channel_name)
+                        item.setToolTip(channel_name)
                         item.setData(Qt.ItemDataRole.UserRole, idx)
-                        item.setSizeHint(QSize(220, 150))
+                        item.setSizeHint(QSize(int(round(220 * ui_scale)), int(round(150 * ui_scale))))
                         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
                         list_widget.addItem(item)
@@ -146,15 +150,14 @@ class ChannelController:
                         row_layout.setSpacing(8)
 
                         logo_label = QtWidgets.QLabel()
-                        logo_label.setFixedSize(44, 32)
+                        logo_label.setFixedSize(int(round(44 * ui_scale)), int(round(32 * ui_scale)))
                         logo_label.setStyleSheet(AppStyles.transparent_style())
                         logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                         logo_label.setObjectName("channel_logo_label")
 
-                        name_label = QtWidgets.QLabel(channel_name)
+                        name_label = ElidedLabel(channel_name)
                         name_label.setStyleSheet(name_style)
                         name_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-                        name_label.setWordWrap(False)
 
                         row_layout.addWidget(logo_label, 0, Qt.AlignmentFlag.AlignVCenter)
                         row_layout.addWidget(name_label, 1, Qt.AlignmentFlag.AlignVCenter)
@@ -181,7 +184,7 @@ class ChannelController:
                         outer_layout.addWidget(quality_bar, 0)
 
                         item = QListWidgetItem()
-                        item.setSizeHint(QSize(0, 46))
+                        item.setSizeHint(QSize(0, int(round(46 * ui_scale))))
                         item.setData(Qt.ItemDataRole.UserRole, idx)
 
                         list_widget.addItem(item)

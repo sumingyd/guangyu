@@ -16,7 +16,7 @@ from PySide6.QtCore import Qt, QDate, Signal, QThread, QTimer
 from PySide6.QtGui import QTextCharFormat, QColor, QFont, QIcon
 from ui.styles import AppStyles
 from ui.floating_dialog import FloatingDialog
-from ui.epg_timeline_widget import EpgTimelineWidget, EpgChannelHeaderWidget, EpgTimeHeaderWidget
+from ui.epg_timeline_widget import EpgTimelineWidget, EpgChannelHeaderWidget, EpgTimeHeaderWidget, epg_metrics
 from core.log_manager import global_logger as logger
 from utils.delay_constants import DelayMs
 from utils.thread_safety import safe_single_shot
@@ -290,17 +290,18 @@ class EpgTimelineDialog(FloatingDialog):
         top_row.setContentsMargins(0, 0, 0, 0)
         top_row.setSpacing(0)
 
+        metrics = epg_metrics()
         self._corner_widget = QWidget()
-        self._corner_widget.setFixedSize(EpgTimelineWidget.LEFT_MARGIN, EpgTimelineWidget.HEADER_HEIGHT)
+        self._corner_widget.setFixedSize(metrics['left_margin'], metrics['header_height'])
         top_row.addWidget(self._corner_widget)
 
         self.time_header_scroll = QScrollArea()
         self.time_header_scroll.setWidgetResizable(True)
-        self.time_header_scroll.setFixedHeight(EpgTimelineWidget.HEADER_HEIGHT)
+        self.time_header_scroll.setFixedHeight(metrics['header_height'])
         self.time_header_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.time_header_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.time_header = EpgTimeHeaderWidget()
-        self.time_header.setFixedHeight(EpgTimelineWidget.HEADER_HEIGHT)
+        self.time_header.setFixedHeight(metrics['header_height'])
         self.time_header_scroll.setWidget(self.time_header)
         top_row.addWidget(self.time_header_scroll, 1)
 
@@ -314,7 +315,7 @@ class EpgTimelineDialog(FloatingDialog):
         self.channel_scroll.setWidgetResizable(True)
         self.channel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.channel_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.channel_scroll.setFixedWidth(EpgTimelineWidget.LEFT_MARGIN)
+        self.channel_scroll.setFixedWidth(metrics['left_margin'])
         self.channel_header = EpgChannelHeaderWidget()
         self.channel_scroll.setWidget(self.channel_header)
         bottom_row.addWidget(self.channel_scroll)
