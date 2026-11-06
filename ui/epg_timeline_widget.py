@@ -31,7 +31,8 @@ class EpgTimelineWidget(QWidget):
     ROW_HEIGHT = 44
     HEADER_HEIGHT = 32
     LEFT_MARGIN = 120
-    channel_double_clicked = Signal(str)
+    # 携带原始频道对象（dict），避免同名频道按名称回查时匹配到错误频道
+    channel_double_clicked = Signal(object)
     program_hovered = Signal(str)
 
     def __init__(self, parent=None):
@@ -59,7 +60,8 @@ class EpgTimelineWidget(QWidget):
         n = len(self._channels)
         h = n * self.ROW_HEIGHT + 10
         self.setMinimumHeight(max(200, h))
-        self.setFixedWidth(self._hours * self.HOUR_WIDTH)
+        # 用最小宽度而非固定宽度：宽屏下由 QScrollArea 拉伸填满，避免右侧留白
+        self.setMinimumWidth(self._hours * self.HOUR_WIDTH)
         self._cache_valid = False
         self._build_cache()
         self.update()
@@ -295,19 +297,27 @@ class EpgTimelineWidget(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             ch, prog = self._get_program_at(event.position().toPoint() if hasattr(event, 'position') else event.pos())
             if ch:
-                ch_name = ch.get('name', '')
-                self.channel_double_clicked.emit(ch_name)
+                # 优先回传原始频道对象（含 url 等唯一信息），同名频道也能精确匹配
+                original = ch.get('channel')
+                self.channel_double_clicked.emit(original if original else {'name': ch.get('name', '')})
 
 
 class EpgChannelHeaderWidget(QWidget):
     # 频道列行高必须与节目区 EpgTimelineWidget.ROW_HEIGHT 一致，否则左右并排
     # 滚动时频道名与节目块逐行错位（两部件由对话框按同一滚动值同步）。
     ROW_HEIGHT = EpgTimelineWidget.ROW_HEIGHT
+    # 左侧台号宽度 / 台标盒宽度 / 内边距
+    NUM_WIDTH = 26
+    LOGO_WIDTH = 34
+    LOGO_HEIGHT = 26
+    PADDING = 4
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._channels: List[Dict[str, Any]] = []
-        self._current_channel_name = ''
+        self._current_channel = None
+        self._logo_service = None
+        self._logo_pixmaps: Dict[str, Any] = {}
         self.setAutoFillBackground(False)
 
     def set_data(self, channels: List[Dict[str, Any]]):
@@ -317,9 +327,70 @@ class EpgChannelHeaderWidget(QWidget):
         self.setFixedHeight(max(200, h))
         self.update()
 
-    def set_current_channel(self, name: str):
-        self._current_channel_name = name
+    def set_current_channel(self, channel):
+        """channel 可以是原始频道 dict（按对象身份匹配），也兼容传频道名。"""
+        self._current_channel = channel
         self.update()
+
+    def set_logo_service(self, service):
+        if service is self._logo_service:
+            return
+        self._logo_service = service
+        self._logo_pixmaps.clear()
+        if service is not None and hasattr(service, 'logo_loaded'):
+            try:
+                service.logo_loaded.connect(self._on_logo_loaded)
+            except (RuntimeError, TypeError):
+                pass
+        self.update()
+
+    def _on_logo_loaded(self, url, pixmap):
+        if not url or pixmap is None or pixmap.isNull():
+            return
+        self._logo_pixmaps[url] = self._scale_logo(pixmap)
+        self.update()
+
+    def _scale_logo(self, pixmap):
+        return pixmap.scaled(
+            self.LOGO_WIDTH, self.LOGO_HEIGHT,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+    def _is_current(self, ch_data):
+        if self._current_channel is None:
+            return False
+        original = ch_data.get('channel')
+        if isinstance(self._current_channel, dict):
+            if original is not None:
+                return original is self._current_channel or (
+                    original.get('url') and original.get('url') == self._current_channel.get('url')
+                )
+            return ch_data.get('name', '') == self._current_channel.get('name', '')
+        # 兼容旧调用：传的是频道名字符串
+        return ch_data.get('name', '') == self._current_channel
+
+    def _get_logo_pixmap(self, logo_url):
+        if not logo_url or self._logo_service is None:
+            return None
+        cached = self._logo_pixmaps.get(logo_url)
+        if cached is not None:
+            return cached if cached is not False else None
+        try:
+            pixmap = self._logo_service.get(logo_url)
+        except Exception:
+            pixmap = None
+        if pixmap is None or pixmap.isNull():
+            # 标记为缺失，并异步拉取（不阻塞绘制）
+            self._logo_pixmaps[logo_url] = False
+            try:
+                self._logo_service.fetch_async(logo_url)
+            except Exception:
+                pass
+            return None
+        scaled = self._scale_logo(pixmap)
+        self._logo_pixmaps[logo_url] = scaled
+        return scaled
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -335,23 +406,51 @@ class EpgChannelHeaderWidget(QWidget):
 
         pen = QPen(border, 1)
         font = _scaled_font(-1)
+        num_font = _scaled_font(-3)
         painter.setFont(font)
+        fm = QFontMetrics(font)
+
+        num_w = self.NUM_WIDTH
+        logo_w = self.LOGO_WIDTH if self._logo_service is not None else 0
+        name_x = self.PADDING + num_w + (logo_w + self.PADDING if logo_w else 0)
+        name_w = max(0, w - name_x - self.PADDING)
 
         first_row = max(0, clip.top() // self.ROW_HEIGHT)
         last_row = min(len(self._channels), clip.bottom() // self.ROW_HEIGHT + 1)
 
         for i in range(first_row, last_row):
             y = i * self.ROW_HEIGHT
-            ch_name = self._channels[i].get('name', '')
-            is_current = ch_name == self._current_channel_name
+            ch_data = self._channels[i]
+            ch_name = ch_data.get('name', '')
+            is_current = self._is_current(ch_data)
             if is_current:
                 painter.fillRect(0, y, w, self.ROW_HEIGHT, QColor(accent.red(), accent.green(), accent.blue(), 40))
             painter.setPen(pen)
             painter.drawLine(0, y + self.ROW_HEIGHT, w, y + self.ROW_HEIGHT)
+
+            # 台号
+            painter.setFont(num_font)
+            painter.setPen(QColor(text.red(), text.green(), text.blue(), 150))
+            painter.drawText(self.PADDING, y, num_w - self.PADDING, self.ROW_HEIGHT,
+                             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                             str(i + 1))
+
+            # 台标（有缓存/可加载时显示）
+            if logo_w:
+                pixmap = self._get_logo_pixmap(ch_data.get('logo', ''))
+                if pixmap is not None:
+                    lx = self.PADDING + num_w
+                    ly = y + (self.ROW_HEIGHT - self.LOGO_HEIGHT) // 2
+                    painter.drawPixmap(lx, ly, pixmap)
+
+            # 频道名（按剩余宽度省略，避免文字溢出压到节目区）
+            painter.setFont(font)
             painter.setPen(accent if is_current else text)
-            painter.drawText(4, y, w - 8, self.ROW_HEIGHT,
-                           Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                           ch_name)
+            if name_w > 0 and ch_name:
+                elided = fm.elidedText(ch_name, Qt.TextElideMode.ElideRight, name_w)
+                painter.drawText(name_x, y, name_w, self.ROW_HEIGHT,
+                                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                                 elided)
 
         painter.end()
 
@@ -368,7 +467,7 @@ class EpgTimeHeaderWidget(QWidget):
 
     def set_start_hour(self, start_hour):
         self._start_hour = start_hour
-        self.setFixedWidth(self._hours * self.HOUR_WIDTH)
+        self.setMinimumWidth(self._hours * self.HOUR_WIDTH)
         self.update()
 
     def paintEvent(self, event):

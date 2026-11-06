@@ -71,11 +71,25 @@ class ChannelController:
                 self.window.channel_logo.setText("")
                 self.window.channel_logo.setPixmap(None)
 
+    @staticmethod
+    def _set_list_bulk_mode(list_widget, enabled):
+        try:
+            list_widget.setUpdatesEnabled(enabled)
+            if enabled:
+                list_widget.update()
+        except RuntimeError:
+            pass
+
     def populate_channel_list_for(self, list_widget, channels, selected_group=''):
         w = self.window
         tr = w.language_manager.tr
 
         list_widget.clear()
+
+        # 批量重建期间关闭刷新，避免每 addItem/setItemWidget 都触发一次重绘
+        self._set_list_bulk_mode(list_widget, False)
+        # 兜底：即使中途异常，也在当前调用栈返回后恢复刷新
+        safe_single_shot(0, list_widget, lambda: self._set_list_bulk_mode(list_widget, True))
 
         if hasattr(w, '_icon_load_timer') and w._icon_load_timer:
             w._icon_load_timer.stop()
@@ -207,6 +221,7 @@ class ChannelController:
             logger.warning(f"populate_channel_list: 共 {skipped_count} 个频道被分组过滤跳过")
 
         logger.info(f"populate_channel_list: 填充完成，共 {list_widget.count()} 个频道项（实际添加: {added_count}, 跳过: {skipped_count}, 总数据: {len(channels)}）")
+        self._set_list_bulk_mode(list_widget, True)
         try:
             list_widget.verticalScrollBar().valueChanged.connect(w._on_channel_list_scrolled, Qt.ConnectionType.UniqueConnection)
         except TypeError:

@@ -33,12 +33,45 @@ class SettingsMixin:
         self.status_bar.setStyleSheet(AppStyles.statusbar_style())
 
     def _cancel_source_timeout(self):
-        if hasattr(self, '_source_timeout_timer') and self._source_timeout_timer:
-            self._source_timeout_timer.stop()
+        timer = getattr(self, '_source_timeout_timer', None)
+        if timer is None:
+            return
+        try:
+            timer.stop()
+        except RuntimeError:
+            # C++ 对象已销毁（退出流程），清掉引用避免反复报错
+            self._source_timeout_timer = None
 
-    def _on_source_timeout(self, channel):
-        if not self.player_controller or not self.player_controller.is_playing:
+    def _on_source_timeout(self, channel=None):
+        """loadfile 后 10 秒仍未出流时的兜底：走与 END_FILE(ERROR) 相同的失败分支。"""
+        pc = getattr(self, 'player_controller', None)
+        if pc is None or getattr(pc, '_user_stopped', False):
             return
-        if self.play_state.is_catchup_or_timeshift:
+        # FILE_LOADED 后已正常出流（定时器可能尚未取消），不判定失败
+        if getattr(pc, 'is_playing', False):
             return
-        logger.debug(f"源超时（无备用源可切换）: {channel.get('name', '')}")
+        if getattr(self, 'play_state', None) is not None and self.play_state.is_catchup_or_timeshift:
+            return
+        url = getattr(pc, 'current_url', '') or ''
+        if not url:
+            return
+        name = (channel or getattr(self, 'current_channel', None) or {}).get('name', '')
+        u = url.lower()
+        is_network = (u.startswith(('http://', 'https://', 'rtsp://', 'rtp://', 'udp://', 'rtmp://'))
+                      or pc._is_network_drive(url))
+        if not is_network:
+            logger.warning(f"源超时（本地/网络盘文件，不重连）: {name} url={url}")
+            return
+
+        logger.warning(f"源超时：loadfile 后 10 秒未出流，按失败重连: {name} url={url}")
+        # 与 mpv END_FILE(ERROR) 的失败分支保持一致：先切到停止态，再按次数重连
+        pc.is_playing = False
+        pc.is_paused = False
+        pc._safe_emit(pc.play_state_changed, False)
+        if pc._reconnect_count < pc._max_reconnect:
+            pc._reconnect_count += 1
+            logger.info(f"断线自动重连 ({pc._reconnect_count}/{pc._max_reconnect})")
+            pc._safe_emit(pc.reconnect_requested, url)
+        else:
+            logger.info("已达最大重连次数，停止重连")
+            pc._reconnect_count = 0

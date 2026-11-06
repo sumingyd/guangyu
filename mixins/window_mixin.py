@@ -1,11 +1,12 @@
 from PySide6.QtWidgets import QDialog
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QCheckBox, QMessageBox, QToolButton
 
 from core.log_manager import global_logger as logger
 from ui.styles import AppStyles
 from utils.platform_utils import wayland_move, wayland_set_geometry
+from utils.thread_safety import safe_single_shot
 
 
 class WindowMixin:
@@ -72,6 +73,11 @@ class WindowMixin:
         import time
         now = time.time()
         if hasattr(self, '_last_position_time') and now - self._last_position_time < 0.05:
+            # 节流期间不能直接丢弃请求，否则最后一次尺寸变化不会生效；
+            # 安排一个尾帧，保证最终位置与主窗口一致。
+            if not getattr(self, '_position_pending', False):
+                self._position_pending = True
+                safe_single_shot(50, self, self._flush_floating_position)
             return
         self._last_position_time = now
         if hasattr(self, '_main_container') and self._main_container.layout():
@@ -82,9 +88,11 @@ class WindowMixin:
             return
 
         mw_x, mw_y, mw_w, mw_h = mw.x(), mw.y(), mw.width(), mw.height()
+        is_fullscreen = getattr(self, 'is_fullscreen', False)
 
         gap = 8
-        title_bar_h = 32
+        # 全屏时标题栏已隐藏，不能再按 32px 预留，否则底栏整体上移出现空隙
+        title_bar_h = 0 if is_fullscreen else 32
         menu_bar_h = 28 if (hasattr(self, '_custom_menu_bar') and self._custom_menu_bar and self._custom_menu_bar.isVisible()) else 0
         floating_dock = self.floating_dock
         if floating_dock:
@@ -96,7 +104,8 @@ class WindowMixin:
         else:
             control_panel_h = 170
         sb = self.statusBar() if hasattr(self, 'statusBar') else None
-        status_bar_h = sb.height() if sb and sb.isVisible() else 25
+        # 全屏隐藏状态栏时按 0 计算，避免底栏被多顶起 25px
+        status_bar_h = sb.height() if sb and sb.isVisible() else (0 if is_fullscreen else 25)
 
         side_top = mw_y + title_bar_h + menu_bar_h + gap
         side_h = mw_h - title_bar_h - menu_bar_h - control_panel_h - status_bar_h - gap * 2
@@ -105,7 +114,7 @@ class WindowMixin:
             if not self.epg_dock.isFloating():
                 self.epg_dock.setFloating(True)
             wayland_move(self.epg_dock, mw_x + gap, side_top)
-            self.epg_dock.setMinimumHeight(max(150, side_h))
+            self.epg_dock.setMinimumHeight(max(0, side_h))
 
             # 宽度以当前值为基准固定：用户拖宽/拖窄后不被重置回首次捕获值
             epg_w = self.epg_dock.width()
@@ -121,19 +130,26 @@ class WindowMixin:
                 pl_w = getattr(self, '_playlist_dock_w', 0) or pl_w
             if pl_w > 0:
                 self._playlist_dock_w = pl_w
-            wayland_move(self.playlist_dock, mw_x + mw_w - pl_w - gap, side_top)
-            self.playlist_dock.setMinimumHeight(max(150, side_h))
-
-            self.playlist_dock.setFixedWidth(pl_w)
+                wayland_move(self.playlist_dock, mw_x + mw_w - pl_w - gap, side_top)
+                self.playlist_dock.setMinimumHeight(max(0, side_h))
+                self.playlist_dock.setFixedWidth(pl_w)
 
         if hasattr(self, 'floating_dock') and self.floating_dock:
             if not self.floating_dock.isFloating():
                 self.floating_dock.setFloating(True)
-            fl_w = min(mw_w - gap * 2, 1050)
-            self.floating_dock.setMinimumWidth(max(fl_w, 360))
+            avail_w = max(0, mw_w - gap * 2)
+            fl_w = min(avail_w, 1050)
+            if fl_w > 0:
+                self.floating_dock.setMinimumWidth(fl_w)
             fl_x = mw_x + (mw_w - self.floating_dock.width()) // 2
             fl_y = mw_y + mw_h - control_panel_h - status_bar_h - gap
             wayland_move(self.floating_dock, fl_x, fl_y)
+
+    def _flush_floating_position(self):
+        """节流窗口结束后的尾帧补算。"""
+        self._position_pending = False
+        self._last_position_time = 0
+        self._position_floating_docks()
 
     def toggle_dock_layout_lock(self):
         self._dock_layout_unlocked = not getattr(self, '_dock_layout_unlocked', False)
@@ -142,15 +158,49 @@ class WindowMixin:
 
     def _show_fullscreen_menu_button(self):
         if hasattr(self, '_fs_menu_btn') and self._fs_menu_btn:
+            self._position_fullscreen_menu_button()
+            self._fs_menu_btn.show()
             return
         self._fs_menu_btn = QToolButton(self)
         self._fs_menu_btn.setText('≡')
         self._fs_menu_btn.setFixedSize(28, 28)
+        self._fs_menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        # 独立顶层窗口是为了盖在原生视频 HWND 之上
         self._fs_menu_btn.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
-        self._fs_menu_btn.setStyleSheet("QToolButton { background: rgba(30,30,30,180); color: white; border: none; border-radius: 4px; font-size: 16px; } QToolButton:hover { background: rgba(60,60,60,220); }")
-        self._fs_menu_btn.move(4, 4)
+        self._apply_fullscreen_menu_button_style()
+        try:
+            from ui.theme_manager import get_theme_manager
+            get_theme_manager().theme_changed.connect(lambda *_: self._apply_fullscreen_menu_button_style())
+        except Exception as e:
+            logger.debug(f"全屏菜单按钮主题订阅失败: {e}")
+        self._position_fullscreen_menu_button()
         self._fs_menu_btn.show()
         self._fs_menu_btn.clicked.connect(self._toggle_fs_menu_bar)
+
+    def _apply_fullscreen_menu_button_style(self):
+        if not (hasattr(self, '_fs_menu_btn') and self._fs_menu_btn):
+            return
+        try:
+            colors = AppStyles._get_colors()
+            bg = colors.get('window', '#1e1e1e')
+            fg = colors.get('window_text', '#ffffff')
+            hover = colors.get('alternate_base', colors.get('mid', '#3c3c3c'))
+            self._fs_menu_btn.setStyleSheet(
+                "QToolButton {"
+                f" background: {bg}; color: {fg};"
+                " border: none; border-radius: 4px; font-size: 16px;"
+                " }"
+                f" QToolButton:hover {{ background: {hover}; }}"
+            )
+        except Exception as e:
+            logger.debug(f"_apply_fullscreen_menu_button_style: {e}")
+
+    def _position_fullscreen_menu_button(self):
+        """按主窗口左上角定位，避免多显示器/非 (0,0) 起点时按钮跑到主屏角落。"""
+        if not (hasattr(self, '_fs_menu_btn') and self._fs_menu_btn):
+            return
+        geo = self.geometry()
+        self._fs_menu_btn.move(geo.x() + 4, geo.y() + 4)
 
     def _hide_fullscreen_menu_button(self):
         if hasattr(self, '_fs_menu_btn') and self._fs_menu_btn:
@@ -199,6 +249,7 @@ class WindowMixin:
             if screen:
                 geo = screen.geometry()
                 wayland_set_geometry(self, geo.x(), geo.y(), geo.width(), geo.height())
+            self._position_fullscreen_menu_button()
             logger.debug(f"进入全屏后: geometry={self.geometry().getRect()}, isFullScreen={self.isFullScreen()}")
             self.unsetCursor()
             is_local = self._is_local_file() if hasattr(self, '_is_local_file') else False
@@ -207,8 +258,8 @@ class WindowMixin:
             self._restart_auto_hide_timer()
             # 全屏切换后布局异步重算，事件循环处理完再同步视频子控件几何，
             # 否则原生 HWND（WA_NativeWindow）停留在旧尺寸导致画面区域错位
-            QTimer.singleShot(0, self.update_floating_position)
-            QTimer.singleShot(150, self.update_floating_position)
+            safe_single_shot(0, self, self.update_floating_position)
+            safe_single_shot(150, self, self.update_floating_position)
         else:
             self._stop_auto_hide_timer()
             self.unsetCursor()
@@ -231,8 +282,8 @@ class WindowMixin:
             self._sync_panel_actions()
             self.update_floating_position()
             # showNormal/geometry 恢复后布局仍在异步重算，延迟补同步一次
-            QTimer.singleShot(0, self.update_floating_position)
-            QTimer.singleShot(150, self.update_floating_position)
+            safe_single_shot(0, self, self.update_floating_position)
+            safe_single_shot(150, self, self.update_floating_position)
 
     def refresh_ui(self):
         self.populate_channel_list(source='auto')

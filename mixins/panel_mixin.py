@@ -1,5 +1,6 @@
 from PySide6.QtCore import Qt, Slot
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, QPoint
+from PySide6.QtWidgets import QApplication
 from core.log_manager import global_logger as logger
 from core.application_state import app_state
 
@@ -82,6 +83,28 @@ class PanelMixin:
         self.panel_vis.auto_hide_all()
         self._sync_panel_actions()
 
+    def _is_pointer_on_floating_widgets(self):
+        """判断鼠标是否停在任意浮动面板/全屏菜单按钮上。"""
+        try:
+            cursor_pos = self.cursor().pos()
+        except RuntimeError:
+            return False
+        for attr in ('epg_dock', 'playlist_dock', 'floating_dock',
+                     'epg_panel', 'playlist_panel', 'floating_panel', '_fs_menu_btn'):
+            widget = getattr(self, attr, None)
+            if widget is None:
+                continue
+            try:
+                if not widget.isVisible():
+                    continue
+                rect = widget.rect()
+                rect.moveTopLeft(widget.mapToGlobal(QPoint(0, 0)))
+                if rect.contains(cursor_pos):
+                    return True
+            except RuntimeError:
+                continue
+        return False
+
     def _auto_hide_panels(self):
         if not getattr(self, 'is_fullscreen', False):
             return
@@ -90,9 +113,28 @@ class PanelMixin:
         if not self.panel_vis.is_auto_hide_visible:
             return
 
+        # 弹出菜单/模态对话框打开期间不隐藏面板，否则用户正在操作的控件会突然消失
+        app = QApplication.instance()
+        if app is not None and (app.activePopupWidget() is not None or app.activeModalWidget() is not None):
+            self._restart_auto_hide_timer()
+            return
+        # 鼠标停留在浮动面板或全屏菜单按钮上时同样保持显示
+        if self._is_pointer_on_floating_widgets():
+            self._restart_auto_hide_timer()
+            return
+
         self.panel_vis.auto_hide_all()
         self.setCursor(Qt.CursorShape.BlankCursor)
+        self._hide_fullscreen_menu_button_soft()
         self._sync_panel_actions()
+
+    def _hide_fullscreen_menu_button_soft(self):
+        btn = getattr(self, '_fs_menu_btn', None)
+        if btn is not None:
+            try:
+                btn.hide()
+            except RuntimeError:
+                pass
 
     def _auto_restore_panels(self):
         if not getattr(self, 'is_fullscreen', False):
@@ -107,6 +149,13 @@ class PanelMixin:
         is_local = self._is_local_file() if hasattr(self, '_is_local_file') else False
         self.panel_vis.restore_auto_hide_state(is_local_file=is_local)
         self.unsetCursor()
+        btn = getattr(self, '_fs_menu_btn', None)
+        if btn is not None:
+            try:
+                btn.show()
+                btn.raise_()
+            except RuntimeError:
+                pass
         self._sync_panel_actions()
         self._restart_auto_hide_timer()
         self._raise_child_dialogs()

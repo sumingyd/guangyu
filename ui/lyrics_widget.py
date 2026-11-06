@@ -58,12 +58,17 @@ def parse_plain_lyrics(text):
 
 
 class LyricsWidget(QWidget):
+    # 滚动动画刷新间隔（25fps）；必须显式设置，QTimer 默认 interval 为 0 会导致满帧重绘
+    REPAINT_INTERVAL_MS = 40
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._lines = []
         self._current_idx = -1
         self._scroll_y = 0.0
         self._target_y = 0.0
+        # 歌词来源：'embedded'（音频内嵌）/ 'external'（用户加载的 .lrc）/ ''（空）
+        self._lyrics_source = ''
         self._line_height = 52
         # 歌词显示配置（任务B）：位置 / 形式 / 字号，持久化到 ConfigManager
         self._position_mode = 'center'   # top / center / bottom
@@ -78,6 +83,7 @@ class LyricsWidget(QWidget):
         self._apply_font_scale()
 
         self._timer = QTimer(self)
+        self._timer.setInterval(self.REPAINT_INTERVAL_MS)
         self._timer.timeout.connect(self._tick)
 
     # ---- 歌词显示配置（任务B）：持久化 + setter/getter ----
@@ -157,9 +163,9 @@ class LyricsWidget(QWidget):
     def reapply_styles(self):
         """主题切换时刷新绘制"""
         self.update()
-        self._timer.setInterval(40)
+        self._timer.setInterval(self.REPAINT_INTERVAL_MS)
 
-    def set_lyrics(self, lrc_text, is_lrc=True):
+    def set_lyrics(self, lrc_text, is_lrc=True, source='embedded'):
         if is_lrc:
             parsed = parse_lrc(lrc_text)
             if not parsed:
@@ -167,10 +173,17 @@ class LyricsWidget(QWidget):
         else:
             parsed = parse_plain_lyrics(lrc_text)
         self._lines = parsed or []
+        self._lyrics_source = source if self._lines else ''
         self._current_idx = -1
         self._scroll_y = 0.0
         self._target_y = 0.0
         self.update()
+
+    def has_lyrics(self):
+        return bool(self._lines)
+
+    def get_lyrics_source(self):
+        return self._lyrics_source
 
     def update_time(self, time_sec):
         if not self._lines:
@@ -184,26 +197,34 @@ class LyricsWidget(QWidget):
         if new_idx != self._current_idx:
             self._current_idx = new_idx
             self._target_y = new_idx * self._line_height
-        self.update()
+            # 仅在当前行变化时请求重绘，滚动过程由 _tick 定时器驱动
+            self.update()
 
     def start(self):
-        self._timer.start()
+        self._timer.start(self.REPAINT_INTERVAL_MS)
 
     def stop(self):
         self._timer.stop()
 
     def _tick(self):
+        needs_repaint = False
         parent = self.parent()
         if parent:
             pw, ph = parent.width(), parent.height()
             if pw > 0 and ph > 0 and (self.width() != pw or self.height() != ph):
                 self.setGeometry(0, 0, pw, ph)
+                needs_repaint = True
         diff = self._target_y - self._scroll_y
-        if abs(diff) > 0.5:
-            self._scroll_y += diff * 0.15
-        else:
-            self._scroll_y = self._target_y
-        self.update()
+        if self._display_mode == 'multi':
+            if abs(diff) > 0.5:
+                self._scroll_y += diff * 0.15
+                needs_repaint = True
+            elif self._scroll_y != self._target_y:
+                self._scroll_y = self._target_y
+                needs_repaint = True
+        # 滚动已稳定时不再逐帧重绘，避免闲置时持续 25fps 重绘
+        if needs_repaint:
+            self.update()
 
     def paintEvent(self, event):
         if not self._lines:

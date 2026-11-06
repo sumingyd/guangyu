@@ -68,6 +68,8 @@ class MultiScreenCell(QWidget):
     volume_changed = Signal(int, int)
     audio_track_changed = Signal(int, int)
     clicked = Signal(int)
+    navigation_requested = Signal(int, int)
+    exit_requested = Signal()
 
     def __init__(self, index: int, parent=None):
         super().__init__(parent)
@@ -76,7 +78,10 @@ class MultiScreenCell(QWidget):
         self._player = None
         self._is_playing = False
         self._accepting_drop = True
+        self._volume_before_mute = 80
         self.setAcceptDrops(True)
+        # 单元格需要接收键盘，才能让方向键/空格作用在当前格而不是隐藏的主播放器
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._setup_ui()
 
     def _setup_ui(self):
@@ -186,6 +191,14 @@ class MultiScreenCell(QWidget):
     def is_playing(self):
         return self._is_playing
 
+    @property
+    def volume(self) -> int:
+        return self._volume_slider.value()
+
+    @property
+    def is_muted(self) -> bool:
+        return self._volume_slider.value() <= 0
+
     def set_channel(self, channel: dict):
         self._channel = channel
         self._is_playing = True
@@ -217,6 +230,18 @@ class MultiScreenCell(QWidget):
         self._volume_slider.blockSignals(False)
         self._volume_pct.setText(f"{vol}%")
 
+    def toggle_mute(self) -> bool:
+        """切换本单元格静音，返回切换后是否处于静音。"""
+        current = self._volume_slider.value()
+        if current > 0:
+            self._volume_before_mute = current
+            # 使用 setValue（不屏蔽信号），让 controller 同步设置播放器音量
+            self._volume_slider.setValue(0)
+            return True
+        restore = self._volume_before_mute or 80
+        self._volume_slider.setValue(restore)
+        return False
+
     def set_audio_tracks(self, tracks: list, tr=None):
         self._audio_combo.blockSignals(True)
         self._audio_combo.clear()
@@ -234,10 +259,45 @@ class MultiScreenCell(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            self.setFocus(Qt.FocusReason.MouseFocusReason)
             self.clicked.emit(self._index)
         elif event.button() == Qt.MouseButton.RightButton and self._is_playing:
             self._show_context_menu(event.globalPosition().toPoint())
         super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.setFocus(Qt.FocusReason.MouseFocusReason)
+            self.toggle_mute()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        if key in (Qt.Key.Key_Left, Qt.Key.Key_Right,
+                   Qt.Key.Key_Up, Qt.Key.Key_Down):
+            self.navigation_requested.emit(self._index, key)
+            event.accept()
+            return
+        if key in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            # 空格/确认：切换当前单元格静音
+            self.toggle_mute()
+            event.accept()
+            return
+        if key == Qt.Key.Key_Escape:
+            self.exit_requested.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        self.update()
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        self.update()
 
     def _show_context_menu(self, global_pos):
         from ui.styles import AppStyles
@@ -247,8 +307,7 @@ class MultiScreenCell(QWidget):
 
         menu.addAction(tr('ctx_close_cell', '关闭此单元格'), lambda: self.close_requested.emit(self._index))
         menu.addSeparator()
-        mute_action = menu.addAction(tr('ctx_mute', '静音/取消静音'))
-        mute_action.triggered.connect(lambda: self._mute_button.click() if hasattr(self, '_mute_button') else None)
+        menu.addAction(tr('ctx_mute', '静音/取消静音'), self.toggle_mute)
         menu.addAction(tr('ctx_screenshot', '截图'), lambda: self._take_screenshot())
         menu.exec(global_pos)
 
@@ -294,12 +353,13 @@ class MultiScreenCell(QWidget):
 
     def paintEvent(self, event):
         super().paintEvent(event)
-        if self._drag_highlight:
+        if self._drag_highlight or self.hasFocus():
             painter = QPainter(self)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             from ui.styles import AppStyles, color_to_qcolor
             colors = AppStyles._get_colors()
-            pen = QPen(color_to_qcolor(colors.get('accent', '#00aaff')), 3)
+            width = 3 if self._drag_highlight else 2
+            pen = QPen(color_to_qcolor(colors.get('accent', '#00aaff')), width)
             pen.setStyle(Qt.PenStyle.SolidLine)
             painter.setPen(pen)
             painter.drawRect(self.rect().adjusted(2, 2, -2, -2))
@@ -389,6 +449,8 @@ class MultiScreenWidget(QWidget):
     cell_volume_changed = Signal(int, int)
     cell_audio_track_changed = Signal(int, int)
     cell_clicked = Signal(int)
+    cell_navigation_requested = Signal(int, int)
+    exit_requested = Signal()
     global_mute_toggled = Signal(bool)
 
     LAYOUT_1x1 = 1
@@ -446,6 +508,8 @@ class MultiScreenWidget(QWidget):
     def set_layout(self, count: int):
         if count == self._grid_count:
             return
+        # 宫格数量变化会重建单元格，先保留每格音量与全局静音状态
+        saved_volumes = {cell.index: cell.volume for cell in self._cells}
         self._grid_count = count
         old_cells = list(self._cells)
         for cell in old_cells:
@@ -454,11 +518,20 @@ class MultiScreenWidget(QWidget):
             cell.setParent(None)
             cell.deleteLater()
         self._build_cells(count)
+        for cell in self._cells:
+            vol = saved_volumes.get(cell.index)
+            if vol is None:
+                vol = self._saved_volumes.get(cell.index, 80)
+            cell.set_volume(0 if self._global_muted else vol)
+            if self._global_muted:
+                # 静音状态下重建，补记每格静音前的目标音量，取消静音时才不会全部变成 0
+                self._saved_volumes.setdefault(cell.index, vol)
         self.layout_changed.emit(count)
 
     def _build_cells(self, count: int):
         cols = 1 if count == 1 else (2 if count == 4 else 3)
         rows = 1 if count == 1 else (2 if count == 4 else 3)
+        self._columns = cols
         self._cells = []
         for i in range(count):
             cell = MultiScreenCell(i, self)
@@ -467,9 +540,45 @@ class MultiScreenWidget(QWidget):
             cell.volume_changed.connect(self.cell_volume_changed.emit)
             cell.audio_track_changed.connect(self.cell_audio_track_changed.emit)
             cell.clicked.connect(self.cell_clicked.emit)
+            cell.navigation_requested.connect(self.cell_navigation_requested.emit)
+            cell.exit_requested.connect(self.exit_requested.emit)
             row, col = divmod(i, cols)
             self._grid_layout.addWidget(cell, row, col)
             self._cells.append(cell)
+
+    def cell_index_of(self, widget) -> int:
+        """返回某个控件所属单元格索引，未找到返回 -1。"""
+        while widget is not None:
+            if isinstance(widget, MultiScreenCell):
+                return widget.index
+            widget = widget.parent()
+        return -1
+
+    def move_focus(self, index: int, key) -> int:
+        """按方向键移动单元格焦点，返回新的单元格索引。"""
+        if not self._cells:
+            return -1
+        if index < 0 or index >= len(self._cells):
+            index = 0
+        cols = max(1, getattr(self, '_columns', 1))
+        total = len(self._cells)
+        target = index
+        if key == Qt.Key.Key_Left:
+            if index % cols > 0:
+                target = index - 1
+        elif key == Qt.Key.Key_Right:
+            if index % cols < cols - 1 and index + 1 < total:
+                target = index + 1
+        elif key == Qt.Key.Key_Up:
+            if index - cols >= 0:
+                target = index - cols
+        elif key == Qt.Key.Key_Down:
+            if index + cols < total:
+                target = index + cols
+        if 0 <= target < total:
+            self._cells[target].setFocus(Qt.FocusReason.OtherFocusReason)
+            return target
+        return index
 
     def get_cell(self, index: int) -> Optional[MultiScreenCell]:
         if 0 <= index < len(self._cells):

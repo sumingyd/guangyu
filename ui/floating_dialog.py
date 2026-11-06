@@ -7,6 +7,23 @@ import PySide6.QtCore as QtCore
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QPushButton
 from utils.platform_utils import is_windows, is_macos, is_android, is_linux, is_wayland, wayland_move
 from utils.delay_constants import DelayMs
+from utils.thread_safety import safe_single_shot
+
+
+def _notify_main_window_activity(widget):
+    """浮动面板/对话框是独立顶层窗口，鼠标活动不经过主窗口事件，需主动转发。
+
+    全屏下主窗口依赖该通知恢复面板并重置自动隐藏计时器。
+    """
+    try:
+        win = widget.parent()
+        if win is None or win is widget:
+            return
+        callback = getattr(win, '_on_mouse_activity', None)
+        if callable(callback):
+            callback()
+    except RuntimeError:
+        pass
 
 
 def _hide_from_taskbar(window):
@@ -228,7 +245,12 @@ class FloatingDockWidget(QDockWidget):
         }
         return cursors.get(edge, Qt.CursorShape.ArrowCursor)
 
+    def enterEvent(self, event):
+        _notify_main_window_activity(self)
+        super().enterEvent(event)
+
     def mousePressEvent(self, event):
+        _notify_main_window_activity(self)
         if event.button() == Qt.MouseButton.LeftButton:
             edge = self._hit_resize_edge(event.position().toPoint())
             if edge:
@@ -257,6 +279,7 @@ class FloatingDockWidget(QDockWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        _notify_main_window_activity(self)
         if self._resizing and self._resize_edge and self._resize_start_geo and self._resize_start_pos:
             delta = event.globalPosition().toPoint() - self._resize_start_pos
             geo = self._resize_start_geo.__class__(self._resize_start_geo)
@@ -525,11 +548,11 @@ class FloatingDialog(QDialog):
                 pass
         # 修复首次显示时文字重叠的问题（无边框透明窗口常见问题）
         # 延迟强制重新计算所有子布局并重绘
-        QtCore.QTimer.singleShot(DelayMs.NEXT_TICK, self._fix_first_paint)
+        safe_single_shot(DelayMs.NEXT_TICK, self, self._fix_first_paint)
         if is_windows():
             # Windows 分层窗口额外保险：再延迟一帧触发一次尺寸抖动，
             # 确保 QFormLayout + 嵌套 QWidget 容器的 sizeHint 完全生效
-            QtCore.QTimer.singleShot(DelayMs.UI_REFRESH, self._fix_first_paint)
+            safe_single_shot(DelayMs.UI_REFRESH, self, self._fix_first_paint)
         if is_linux() and self.parent():
             try:
                 parent_handle = self.parent().windowHandle()
@@ -623,7 +646,12 @@ class FloatingDialog(QDialog):
         except Exception:
             pass
 
+    def enterEvent(self, event):
+        _notify_main_window_activity(self)
+        super().enterEvent(event)
+
     def mousePressEvent(self, event):
+        _notify_main_window_activity(self)
         if event.button() == Qt.MouseButton.LeftButton:
             widget = QtWidgets.QApplication.widgetAt(event.globalPosition().toPoint())
             if widget:
@@ -657,6 +685,7 @@ class FloatingDialog(QDialog):
             self.offset = event.position().toPoint()
 
     def mouseMoveEvent(self, event):
+        _notify_main_window_activity(self)
         if self.dragging and self.offset is not None:
             new_position = event.globalPosition().toPoint() - self.offset
             self.move(new_position.x(), new_position.y())

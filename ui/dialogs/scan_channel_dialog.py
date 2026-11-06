@@ -2895,29 +2895,47 @@ class ScanChannelDialog(FloatingDialog):
 
         self._add_url_to_history(url)
 
-        self.model.clear()
-        self._invalidate_channels_cache()
-
         url_parser = URLRangeParser()
-        url_generator = url_parser.parse_url(url)
 
         batch_channels = []
         count = 0
         tr = self.language_manager.tr
         gen_name = tr("generated_channel", "Generated Channel")
         gen_group = tr("generated_group", "Generated")
-        for batch in url_generator:
-            for url in batch:
-                channel = {
-                    'name': f"{gen_name}-{count+1}",
-                    'group': gen_group,
-                    'url': url,
-                    'valid': False,
-                    'latency': 0,
-                    'status': tr("not_tested", "Not Tested")
-                }
-                batch_channels.append(channel)
-                count += 1
+        try:
+            # parse_url 是生成器，超限的 ValueError 在迭代时才抛出，因此调用与迭代都要包住
+            url_generator = url_parser.parse_url(url)
+            for batch in url_generator:
+                for item_url in batch:
+                    channel = {
+                        'name': f"{gen_name}-{count+1}",
+                        'group': gen_group,
+                        'url': item_url,
+                        'valid': False,
+                        'latency': 0,
+                        'status': tr("not_tested", "Not Tested")
+                    }
+                    batch_channels.append(channel)
+                    count += 1
+        except ValueError as e:
+            # 范围展开数量超过上限：给出可读提示，且不清空已有列表
+            self.logger.error(f"生成列表失败: {e}", exc_info=True)
+            estimated = '?'
+            try:
+                estimated = url_parser.estimate_url_count(url)
+            except Exception:
+                pass
+            self._show_input_warning(
+                self.ip_range_input,
+                tr(
+                    "generate_range_too_large",
+                    "范围过大：预计生成 {estimated} 个地址，单条上限 {max} 个，请缩小范围后重试"
+                ).format(estimated=estimated, max=getattr(url_parser, 'MAX_EXPAND_COUNT', 200000)),
+            )
+            return
+
+        self.model.clear()
+        self._invalidate_channels_cache()
 
         if hasattr(self.model, 'add_channels'):
             self.model.add_channels(batch_channels)

@@ -1458,9 +1458,44 @@ class ContextMenuController:
 
         menu.addSeparator()
         cover_menu = menu.addMenu(tr("cover_display_menu", "封面显示"))
-        cur_pos = widget.get_cover_pos() if widget else 'center'
-        cur_size = widget.get_cover_size() if widget else 'medium'
-        cur_shape = widget.get_cover_shape() if widget else 'card'
+        if widget:
+            cur_pos = widget.get_cover_pos()
+            cur_size = widget.get_cover_size()
+            cur_shape = widget.get_cover_shape()
+        else:
+            # 可视化控件尚未创建时，选项要回显已保存的配置而不是固定默认值
+            try:
+                from core.config_manager import ConfigManager
+                config = ConfigManager()
+                cur_pos = config.get_value('Player', 'cover_position', 'center')
+                cur_size = config.get_value('Player', 'cover_size', 'medium')
+                cur_shape = config.get_value('Player', 'cover_shape', 'card')
+            except Exception:
+                cur_pos, cur_size, cur_shape = 'center', 'medium', 'card'
+            if cur_pos not in ('center', 'left', 'right'):
+                cur_pos = 'center'
+            if cur_size not in ('small', 'medium', 'large'):
+                cur_size = 'medium'
+            if cur_shape not in ('card', 'circle', 'hidden'):
+                cur_shape = 'card'
+
+        def _apply_cover(key, value):
+            if widget:
+                setter = {
+                    'pos': widget.set_cover_pos,
+                    'size': widget.set_cover_size,
+                    'shape': widget.set_cover_shape,
+                }.get(key)
+                if setter:
+                    setter(value)
+                return
+            from services.audio_visual_service import AudioVisualWidget
+            AudioVisualWidget._save_cover_setting(key, value)
+            # 无控件时也要给出可感知的反馈，否则用户以为菜单点击无效
+            if hasattr(self._facade.window, '_show_osd_feedback'):
+                self._facade.window._show_osd_feedback(
+                    tr('cover_setting_saved', '封面设置已保存')
+                )
 
         pos_menu = cover_menu.addMenu(tr("cover_pos_menu", "位置"))
         for key, label_key, label_def in (
@@ -1471,11 +1506,7 @@ class ContextMenuController:
             label = tr(label_key, label_def)
             if cur_pos == key:
                 label += " ✓"
-            if widget:
-                pos_menu.addAction(label, lambda *a, k=key: widget.set_cover_pos(k))
-            else:
-                from services.audio_visual_service import AudioVisualWidget
-                pos_menu.addAction(label, lambda *a, k=key: AudioVisualWidget._save_cover_setting('pos', k))
+            pos_menu.addAction(label, lambda *a, k=key: _apply_cover('pos', k))
 
         size_menu = cover_menu.addMenu(tr("cover_size_menu", "大小"))
         for key, label_key, label_def in (
@@ -1486,11 +1517,7 @@ class ContextMenuController:
             label = tr(label_key, label_def)
             if cur_size == key:
                 label += " ✓"
-            if widget:
-                size_menu.addAction(label, lambda *a, k=key: widget.set_cover_size(k))
-            else:
-                from services.audio_visual_service import AudioVisualWidget
-                size_menu.addAction(label, lambda *a, k=key: AudioVisualWidget._save_cover_setting('size', k))
+            size_menu.addAction(label, lambda *a, k=key: _apply_cover('size', k))
 
         shape_menu = cover_menu.addMenu(tr("cover_shape_menu", "形式"))
         for key, label_key, label_def in (
@@ -1501,11 +1528,7 @@ class ContextMenuController:
             label = tr(label_key, label_def)
             if cur_shape == key:
                 label += " ✓"
-            if widget:
-                shape_menu.addAction(label, lambda *a, k=key: widget.set_cover_shape(k))
-            else:
-                from services.audio_visual_service import AudioVisualWidget
-                shape_menu.addAction(label, lambda *a, k=key: AudioVisualWidget._save_cover_setting('shape', k))
+            shape_menu.addAction(label, lambda *a, k=key: _apply_cover('shape', k))
 
     def _set_visual_style(self, style_key):
         pc = self._facade.window.player_controller

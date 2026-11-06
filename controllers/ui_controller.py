@@ -721,6 +721,7 @@ class UIController:
                                 start_str = start_time.strftime("%H:%M")
                                 end_str = end_time.strftime("%H:%M")
                                 self.window.progress_start.setText(start_str)
+                                self.window.progress_end.setText(end_str)
                                 self.window.time_label.setText(f"{start_str} - {end_str}")
                                 self.window.remain_label.setText(self.window.language_manager.tr("playing_label", "Playing..."))
                             except (ValueError, KeyError, TypeError):
@@ -728,6 +729,7 @@ class UIController:
                                 start_hour = current_time.strftime("%H:00")
                                 end_hour = (current_time.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)).strftime("%H:00")
                                 self.window.progress_start.setText(start_hour)
+                                self.window.progress_end.setText(end_hour)
                                 self.window.time_label.setText(f"{current_time.strftime('%H:%M')}")
                                 self.window.remain_label.setText(self.window.language_manager.tr("playing_label", "Playing..."))
                         else:
@@ -1086,7 +1088,7 @@ class UIController:
                             'video_info_icon', 'audio_info_icon', 'network_info_icon',
                             'catchup_indicator'):
                     continue
-                if label.pixmap() is not None:
+                if not label.pixmap().isNull():
                     continue
                 if label.text() == '' and not label.styleSheet():
                     continue
@@ -1229,9 +1231,12 @@ class UIController:
                 if undo_stack:
                     undo_stack.can_undo_changed.connect(undo_action.setEnabled)
                     undo_stack.can_redo_changed.connect(redo_action.setEnabled)
-                    # 也支持 Ctrl+Y 快捷键
-                    ctrl_y = QShortcut(QKeySequence("Ctrl+Y"), self.window)
-                    ctrl_y.activated.connect(lambda: undo_stack.redo() if undo_stack.can_redo() else None)
+                    # Ctrl+Y 快捷键只创建一次，避免每次重建菜单栏都新增一个重复快捷键
+                    if getattr(self.window, '_redo_shortcut', None) is None:
+                        ctrl_y = QShortcut(QKeySequence("Ctrl+Y"), self.window)
+                        ctrl_y.setContext(Qt.ShortcutContext.WindowShortcut)
+                        ctrl_y.activated.connect(self._redo_from_shortcut)
+                        self.window._redo_shortcut = ctrl_y
 
             playback_menu = menu_bar.addMenu(tr("menu_playback", "Playback"))
 
@@ -1608,26 +1613,30 @@ class UIController:
         self._register_global_shortcuts()
 
     def _register_global_shortcuts(self):
-        app = QApplication.instance()
-        if not app:
-            return
-
+        """全局快捷键统一由菜单 QAction 声明；这里只清理旧版本遗留的独立快捷键。"""
         old = getattr(self.window, '_global_search_shortcut', None)
-        if old:
+        if old is not None:
             try:
                 old.setEnabled(False)
                 old.deleteLater()
-            except Exception as e:
-                logger.debug(f"清理旧 widget 失败: {e}")
+            except RuntimeError as e:
+                logger.debug(f"清理旧快捷键失败: {e}")
+            self.window._global_search_shortcut = None
 
-
-
+    def _redo_from_shortcut(self):
+        undo_stack = getattr(self.window, 'undo_stack', None)
+        if undo_stack and undo_stack.can_redo():
+            undo_stack.redo()
 
     def _show_global_search(self):
         from ui.dialogs.unified_search_dialog import UnifiedSearchDialog
-        dialog = UnifiedSearchDialog(self.window, parent=self.window, search_epg=True, search_channel=True)
-        dialog.channel_selected.connect(self._on_global_search_channel_selected)
-        dialog.epg_program_selected.connect(self._on_epg_search_program_selected)
+        # 复用同一个对话框实例，避免每次打开都新建一个隐藏对话框常驻内存
+        dialog = getattr(self.window, '_unified_search_dialog', None)
+        if dialog is None:
+            dialog = UnifiedSearchDialog(self.window, parent=self.window, search_epg=True, search_channel=True)
+            dialog.channel_selected.connect(self._on_global_search_channel_selected)
+            dialog.epg_program_selected.connect(self._on_epg_search_program_selected)
+            self.window._unified_search_dialog = dialog
         dialog.show_and_focus()
 
     def _on_global_search_channel_selected(self, channel):
@@ -1656,9 +1665,20 @@ class UIController:
 
     def _show_epg_timeline(self):
         from ui.dialogs.epg_timeline_dialog import EpgTimelineDialog
-        dialog = EpgTimelineDialog(self.window, parent=self.window)
-        dialog.channel_selected.connect(self._on_global_search_channel_selected)
+        # 复用同一个对话框实例，避免每次打开都新建一个隐藏对话框常驻内存
+        dialog = getattr(self.window, '_epg_timeline_dialog', None)
+        created = False
+        if dialog is None:
+            dialog = EpgTimelineDialog(self.window, parent=self.window)
+            dialog.channel_selected.connect(self._on_global_search_channel_selected)
+            self.window._epg_timeline_dialog = dialog
+            created = True
         dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        if not created:
+            # 复用时重新加载当前日期数据；新建时构造函数已加载，避免重复启动线程
+            dialog.reload()
 
     def _show_reminder_manager(self):
         from ui.dialogs.reminder_manager_dialog import ReminderManagerDialog

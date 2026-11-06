@@ -11,6 +11,10 @@ class LyricsController:
 
     def __init__(self, facade):
         self._facade = facade
+        # 已抽取过内嵌歌词的频道 URL，避免每次显示歌词都重复同步抽取
+        self._embedded_loaded_url = ''
+        # 外部歌词对应的频道 URL：频道切换后外部歌词不再适用
+        self._external_lyrics_url = ''
 
     def _create_lyrics_widget(self):
         from ui.lyrics_widget import LyricsWidget
@@ -31,7 +35,11 @@ class LyricsController:
                 if not hasattr(self._facade.window, '_lyrics_widget') or not self._facade.window._lyrics_widget:
                     self._facade._create_lyrics_widget()
                 is_lrc = file_path.lower().endswith('.lrc') or '[' in lyrics
-                self._facade.window._lyrics_widget.set_lyrics(lyrics, is_lrc=is_lrc)
+                self._facade.window._lyrics_widget.set_lyrics(lyrics, is_lrc=is_lrc, source='external')
+                # 外部歌词优先，后续显示歌词时不再用内嵌歌词覆盖
+                self._embedded_loaded_url = ''
+                ch = getattr(self._facade.window, 'current_channel', None) or {}
+                self._external_lyrics_url = ch.get('url', '')
                 self._facade.window._lyrics_widget.show()
                 self._facade.window._lyrics_widget.raise_()
                 self._facade.window._lyrics_widget.start()
@@ -92,19 +100,33 @@ class LyricsController:
     def _refresh_lyrics(self):
         if not hasattr(self._facade.window, '_lyrics_widget') or not self._facade.window._lyrics_widget:
             return
+        lw = self._facade.window._lyrics_widget
         ch = self._facade.window.current_channel
         if not ch:
             return
         url = ch.get('url', '')
         if not url:
             return
+        # 用户显式加载的外部 .lrc 优先，重新显示歌词时不得被内嵌歌词覆盖；
+        # 但频道已切换时外部歌词不再适用，需要重新抽取。
+        if lw.get_lyrics_source() == 'external' and lw.has_lyrics():
+            if url == self._external_lyrics_url:
+                return
+            # 清除上一频道的外部歌词，避免新频道显示错误的歌词内容
+            lw.set_lyrics('', is_lrc=False, source='')
+            self._external_lyrics_url = ''
+        # 同一频道已抽取过就不再重复同步提取
+        if url == self._embedded_loaded_url and lw.has_lyrics():
+            return
         from services.audio_visual_service import extract_lyrics
         lyrics = extract_lyrics(url)
         if lyrics:
-            self._facade.window._lyrics_widget.set_lyrics(lyrics, is_lrc='[' in lyrics)
-        else:
+            lw.set_lyrics(lyrics, is_lrc='[' in lyrics, source='embedded')
+        elif not lw.has_lyrics():
+            # 仅在没有任何歌词时显示提示，避免覆盖已有内容
             tr = self._facade.window.language_manager.tr
-            self._facade.window._lyrics_widget.set_lyrics(tr("no_lyrics", "未找到内嵌歌词"), is_lrc=False)
+            lw.set_lyrics(tr("no_lyrics", "未找到内嵌歌词"), is_lrc=False, source='placeholder')
+        self._embedded_loaded_url = url
 
     def _toggle_lyrics(self, show):
         if not hasattr(self._facade.window, '_lyrics_widget') or not self._facade.window._lyrics_widget:

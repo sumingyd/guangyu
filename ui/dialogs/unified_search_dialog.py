@@ -87,6 +87,7 @@ class UnifiedSearchDialog(FloatingDialog):
         self._initial_search_epg = search_epg
         self._initial_search_channel = search_channel
         self._worker = None
+        self._retired_workers = []
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(250)
@@ -97,14 +98,39 @@ class UnifiedSearchDialog(FloatingDialog):
         from ui.theme_manager import safe_register_window
         safe_register_window(self)
 
-    def closeEvent(self, event):
-        if self._worker:
-            self._worker.requestInterruption()
-            self._worker.wait(3000)
-            self._worker.deleteLater()
+    def _retire_worker(self, worker):
+        """非阻塞停止搜索线程：中断请求发出后由 finished 信号负责销毁。"""
+        if worker is None:
+            return
+        try:
+            worker.results_ready.disconnect(self._on_epg_search_results)
+        except (RuntimeError, TypeError):
+            pass
+        worker.requestInterruption()
+        if worker.isRunning():
+            self._retired_workers.append(worker)
+        else:
+            worker.deleteLater()
+
+    def _on_worker_finished(self):
+        worker = self.sender()
+        if worker is None:
+            return
+        if worker is self._worker:
             self._worker = None
-        from ui.theme_manager import safe_unregister_window
-        safe_unregister_window(self)
+        try:
+            self._retired_workers.remove(worker)
+        except ValueError:
+            pass
+        worker.deleteLater()
+
+    def closeEvent(self, event):
+        if self._worker is not None:
+            self._retire_worker(self._worker)
+            self._worker = None
+        if hasattr(self, '_search_timer'):
+            self._search_timer.stop()
+        # 对话框实例会被复用，保持注册在 ThemeManager 中（销毁时自动注销）
         super().closeEvent(event)
 
     def reapply_styles(self):
@@ -226,11 +252,9 @@ class UnifiedSearchDialog(FloatingDialog):
             self._results.clear()
             self._result_channels.clear()
             self._epg_results.clear()
-            if self._worker and self._worker.isRunning():
-                self._worker.results_ready.disconnect(self._on_epg_search_results)
-                self._worker.requestInterruption()
-                self._worker.quit()
-                self._worker.wait(2000)
+            if self._worker is not None:
+                self._retire_worker(self._worker)
+                self._worker = None
             tr = self.window.language_manager.tr
             self.count_label.setText(tr('search_type_to_search', '输入关键词开始搜索'))
             return
@@ -274,15 +298,15 @@ class UnifiedSearchDialog(FloatingDialog):
         if search_epg:
             epg_parser = getattr(w, 'epg_parser', None)
             if epg_parser:
-                if self._worker and self._worker.isRunning():
-                    self._worker.results_ready.disconnect(self._on_epg_search_results)
-                    self._worker.requestInterruption()
-                    self._worker.quit()
-                    self._worker.wait(2000)
+                if self._worker is not None:
+                    self._retire_worker(self._worker)
+                    self._worker = None
                 channels = list(getattr(w, '_sub_channels', []))
-                self._worker = _EpgSearchWorker(epg_parser, channels, text)
-                self._worker.results_ready.connect(self._on_epg_search_results)
-                self._worker.start()
+                worker = _EpgSearchWorker(epg_parser, channels, text)
+                worker.results_ready.connect(self._on_epg_search_results)
+                worker.finished.connect(self._on_worker_finished)
+                self._worker = worker
+                worker.start()
             else:
                 self._render_results()
         else:

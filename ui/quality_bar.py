@@ -59,7 +59,14 @@ def _track_color() -> QColor:
 def _score_to_tooltip(score, grade) -> str:
     if score is None:
         return ""
-    return f"质量评分: {score:.1f} / 100  (等级: {grade})"
+    try:
+        from core.language_manager import LanguageManager
+        template = LanguageManager().tr(
+            "quality_score_tooltip", "质量评分: {score} / 100  (等级: {grade})"
+        )
+        return template.format(score=f"{score:.1f}", grade=grade)
+    except Exception:
+        return f"质量评分: {score:.1f} / 100  (等级: {grade})"
 
 
 class QualityBarWidget(QWidget):

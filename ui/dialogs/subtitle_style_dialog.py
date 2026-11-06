@@ -76,7 +76,12 @@ class ColorButton(QPushButton):
         )
 
     def _on_clicked(self):
-        c = QColorDialog.getColor(self._color, self, "选择颜色",
+        try:
+            from core.language_manager import LanguageManager
+            title = LanguageManager().tr('select_color', '选择颜色')
+        except Exception:
+            title = '选择颜色'
+        c = QColorDialog.getColor(self._color, self, title,
                                   QColorDialog.ColorDialogOption.ShowAlphaChannel)
         if c.isValid():
             self._color = c

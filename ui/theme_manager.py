@@ -68,10 +68,11 @@ class ThemeManager(Singleton, QtCore.QObject):
             self.theme_changed.emit(self._current_theme)
 
     def register_window(self, window: QtWidgets.QWidget):
+        # 可见性变化（对话框复用时会反复 show/close）不应重复连接 destroyed
         if window not in self._windows:
             self._windows.append(window)
             window.destroyed.connect(lambda _=None, w=window: self.unregister_window(w))
-            self._apply_theme_to_window(window)
+        self._apply_theme_to_window(window)
 
     def unregister_window(self, window: QtWidgets.QWidget):
         if window in self._windows:
@@ -97,7 +98,8 @@ class ThemeManager(Singleton, QtCore.QObject):
                     window.reapply_styles()
             window.setUpdatesEnabled(True)
             window.update()
-            QtWidgets.QApplication.processEvents()
+            # 不再调用 QApplication.processEvents()：主题应用期间强制派发事件
+            # 会重入正在进行的布局/绘制，导致主题切换闪烁甚至递归。
         except Exception as e:
             window.setUpdatesEnabled(True)
             logger.error(f"应用主题到窗口失败: {e}")

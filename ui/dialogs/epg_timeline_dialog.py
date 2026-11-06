@@ -1,5 +1,6 @@
 from typing import Dict, Any, List
 from datetime import datetime, date
+import time
 from PySide6.QtWidgets import (
     QPushButton,
     QDateEdit,
@@ -18,6 +19,7 @@ from ui.floating_dialog import FloatingDialog
 from ui.epg_timeline_widget import EpgTimelineWidget, EpgChannelHeaderWidget, EpgTimeHeaderWidget
 from core.log_manager import global_logger as logger
 from utils.delay_constants import DelayMs
+from utils.thread_safety import safe_single_shot
 
 
 class _ThemedCalendarWidget(QCalendarWidget):
@@ -43,7 +45,7 @@ class _ThemedCalendarWidget(QCalendarWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        QTimer.singleShot(DelayMs.UI_REFRESH, self._apply_nav_icons)
+        safe_single_shot(DelayMs.UI_REFRESH, self, self._apply_nav_icons)
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -99,6 +101,9 @@ class _TimelineLoadWorker(QThread):
 
             channels_data.append({
                 'name': ch_name,
+                # 保留原始频道对象，双击时按对象精确播台（同名频道不会串台）
+                'channel': ch,
+                'logo': ch.get('logo') or ch.get('logo_url') or all_tags.get('tvg-logo', ''),
                 'programs': programs,
             })
         self.data_ready.emit(channels_data, self._selected_date)
@@ -116,7 +121,10 @@ class EpgTimelineDialog(FloatingDialog):
         self.setMinimumSize(1000, 600)
         self._channels_data: List[Dict[str, Any]] = []
         self._load_worker = None
+        self._retired_workers = []
         self._selected_date_ref = None
+        self._epg_dates_cache = set()
+        self._epg_dates_cache_ts = 0.0
         self._setup_ui()
         self._apply_theme()
         self._load_data()
@@ -139,11 +147,16 @@ class EpgTimelineDialog(FloatingDialog):
             icon_path = AppStyles.get_icon('chevron_down', icon_color, 12)
             if icon_path:
                 safe_icon = icon_path.replace('\\', '/')
-                self.date_edit.setStyleSheet(self.date_edit.styleSheet() + f"""
-                    QDateEdit::drop-down {{
-                        image: url({safe_icon});
-                    }}
-                """)
+                # 每次整体覆盖而非累加，避免主题切换多次后 QSS 无限膨胀
+                self.date_edit.setStyleSheet(
+                    "QDateEdit::drop-down {"
+                    " border: none;"
+                    " width: 20px;"
+                    " subcontrol-origin: padding;"
+                    " subcontrol-position: center right;"
+                    f" image: url({safe_icon});"
+                    " }"
+                )
         except Exception as e:
             logger.debug(f"_update_date_edit_icon: {e}")
 
@@ -254,7 +267,7 @@ class EpgTimelineDialog(FloatingDialog):
         self.date_edit.setFixedSize(140, 30)
         toolbar.addWidget(self.date_edit)
 
-        QTimer.singleShot(DelayMs.NEXT_TICK, self._update_date_edit_icon)
+        safe_single_shot(DelayMs.NEXT_TICK, self, self._update_date_edit_icon)
 
         toolbar.addStretch(1)
 
@@ -372,9 +385,12 @@ class EpgTimelineDialog(FloatingDialog):
         self._load_data()
 
     def _get_epg_dates(self):
+        # 30 秒缓存：主题切换/重复打开时不必再次遍历全部 EPG 节目
+        if self._epg_dates_cache_ts and (time.time() - self._epg_dates_cache_ts) < 30:
+            return self._epg_dates_cache
         epg_parser = getattr(self.window, 'epg_parser', None)
         if not epg_parser:
-            return set()
+            return self._epg_dates_cache
         dates = set()
         try:
             if hasattr(epg_parser, 'get_epg_data_copy'):
@@ -382,8 +398,9 @@ class EpgTimelineDialog(FloatingDialog):
             else:
                 lock = getattr(epg_parser, '_epg_lock', None)
                 if lock:
-                    if not lock.acquire(timeout=2):
-                        return set()
+                    # 非阻塞尝试，避免 UI 线程最多卡 2 秒
+                    if not lock.acquire(blocking=False):
+                        return self._epg_dates_cache
                 try:
                     epg_data = dict(getattr(epg_parser, '_epg_data', {}))
                 finally:
@@ -400,7 +417,39 @@ class EpgTimelineDialog(FloatingDialog):
                         logger.debug(f"_get_epg_dates: {e}")
         except Exception as e:
             logger.debug(f"_get_epg_dates: {e}")
+        self._epg_dates_cache = dates
+        self._epg_dates_cache_ts = time.time()
         return dates
+
+    def _retire_worker(self, worker):
+        """不阻塞 UI 线程地停止 worker：断开信号后等线程自己结束后再销毁。"""
+        if worker is None:
+            return
+        try:
+            worker.data_ready.disconnect(self._on_data_loaded)
+        except (RuntimeError, TypeError):
+            pass
+        worker.abort()
+        if worker.isRunning():
+            self._retired_workers.append(worker)
+        else:
+            worker.deleteLater()
+
+    def _on_load_worker_finished(self):
+        worker = self.sender()
+        if worker is None:
+            return
+        if worker is self._load_worker:
+            self._load_worker = None
+        try:
+            self._retired_workers.remove(worker)
+        except ValueError:
+            pass
+        worker.deleteLater()
+
+    def reload(self):
+        """外部复用对话框时重新加载当前日期数据。"""
+        self._load_data()
 
     def _load_data(self):
         w = self.window
@@ -415,16 +464,18 @@ class EpgTimelineDialog(FloatingDialog):
         selected_date = date(qd.year(), qd.month(), qd.day())
         channels = list(getattr(w, '_sub_channels', [])) + list(getattr(w, '_local_channels', []))
 
-        if self._load_worker and self._load_worker.isRunning():
-            self._load_worker.data_ready.disconnect(self._on_data_loaded)
-            self._load_worker.abort()
-            self._load_worker.wait(2000)
+        # 旧任务只做协作式中止，不在这里 wait()，否则恢复 UI 线程卡顿
+        if self._load_worker is not None:
+            self._retire_worker(self._load_worker)
+            self._load_worker = None
 
         tr = self.window.language_manager.tr
         self._status_label.setText(tr('loading', '加载中...'))
-        self._load_worker = _TimelineLoadWorker(epg_parser, channels, selected_date)
-        self._load_worker.data_ready.connect(self._on_data_loaded)
-        self._load_worker.start()
+        worker = _TimelineLoadWorker(epg_parser, channels, selected_date)
+        worker.data_ready.connect(self._on_data_loaded)
+        worker.finished.connect(self._on_load_worker_finished)
+        self._load_worker = worker
+        worker.start()
 
     def _on_data_loaded(self, channels_data, selected_date):
         self._channels_data = channels_data
@@ -440,18 +491,19 @@ class EpgTimelineDialog(FloatingDialog):
 
         self.timeline_widget.set_data(channels_data, selected_date)
         self.channel_header.set_data(channels_data)
+        self.channel_header.set_logo_service(getattr(self.window, '_logo_cache_service', None))
         self.time_header.set_start_hour(self.timeline_widget._start_hour)
 
         current_ch = getattr(self.window, 'current_channel', None)
         if current_ch:
-            self.channel_header.set_current_channel(current_ch.get('name', ''))
+            self.channel_header.set_current_channel(current_ch)
 
         self._update_corner_widget()
 
         self._mark_calendar_dates()
-        QTimer.singleShot(DelayMs.STYLE_REAPPLY, self._update_calendar_nav_icons)
+        safe_single_shot(DelayMs.STYLE_REAPPLY, self, self._update_calendar_nav_icons)
 
-        QTimer.singleShot(DelayMs.LAYOUT_SETTLE, self._scroll_to_current_time)
+        safe_single_shot(DelayMs.LAYOUT_SETTLE, self, self._scroll_to_current_time)
 
     def _update_corner_widget(self):
         c = AppStyles._get_colors()
@@ -480,39 +532,56 @@ class EpgTimelineDialog(FloatingDialog):
             logger.debug(f"_mark_calendar_dates: {e}")
 
     def _scroll_to_current_time(self):
-        now_x = self.timeline_widget.get_current_time_x()
-        viewport_width = self.main_scroll.viewport().width()
-        target_x = int(now_x - viewport_width / 2)
-        if target_x < 0:
-            target_x = 0
-        self.main_scroll.horizontalScrollBar().setValue(target_x)
-
-    def _on_channel_double_clicked(self, channel_name: str):
-        w = self.window
-        channels = getattr(w, '_sub_channels', []) + getattr(w, '_local_channels', [])
-        for ch in channels:
-            if ch.get('name', '') == channel_name:
-                self.channel_selected.emit(ch)
-                w.current_channel = ch
-                if hasattr(w, 'update_channel_info_on_selection'):
-                    w.update_channel_info_on_selection()
-                if hasattr(w, 'play_channel'):
-                    w.play_channel(ch)
+        try:
+            selected = self._selected_date_ref
+            # 仅“今天”才需要定位到当前时间；历史/未来日期从 00:00 开始，避免被钳到最右端
+            if selected is not None and selected != date.today():
+                self.main_scroll.horizontalScrollBar().setValue(0)
                 return
+            now_x = self.timeline_widget.get_current_time_x()
+            viewport_width = self.main_scroll.viewport().width()
+            target_x = int(now_x - viewport_width / 2)
+            if target_x < 0:
+                target_x = 0
+            self.main_scroll.horizontalScrollBar().setValue(target_x)
+        except Exception as e:
+            logger.debug(f"_scroll_to_current_time: {e}")
+
+    def _on_channel_double_clicked(self, channel):
+        w = self.window
+        if not isinstance(channel, dict):
+            return
+        # 正常情况下收到的是原始频道对象，可直接播放；否则退化为按名称查找
+        target = channel if channel.get('url') else None
+        if target is None:
+            name = channel.get('name', '')
+            channels = getattr(w, '_sub_channels', []) + getattr(w, '_local_channels', [])
+            for ch in channels:
+                if ch.get('name', '') == name:
+                    target = ch
+                    break
+        if target is None:
+            return
+        self.channel_selected.emit(target)
+        w.current_channel = target
+        if hasattr(w, 'update_channel_info_on_selection'):
+            w.update_channel_info_on_selection()
+        if hasattr(w, 'play_channel'):
+            w.play_channel(target)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, '_now_timer') and not self._now_timer.isActive():
+            self._now_timer.start()
+        if self._channels_data:
+            # 复用时数据可能已加载，窗口可见后再定位一次（隐藏时 viewport 宽度为 0）
+            safe_single_shot(DelayMs.LAYOUT_SETTLE, self, self._scroll_to_current_time)
 
     def closeEvent(self, event):
-        if self._load_worker and self._load_worker.isRunning():
-            try:
-                self._load_worker.data_ready.disconnect(self._on_data_loaded)
-            except Exception as e:
-                logger.debug(f"closeEvent: {e}")
-            self._load_worker.abort()
-            self._load_worker.wait(3000)
-        if self._load_worker:
-            self._load_worker.deleteLater()
+        if self._load_worker is not None:
+            self._retire_worker(self._load_worker)
             self._load_worker = None
         if hasattr(self, '_now_timer'):
             self._now_timer.stop()
-        from ui.theme_manager import safe_unregister_window
-        safe_unregister_window(self)
+        # 对话框实例会被复用，保持注册在 ThemeManager 中（销毁时自动注销）
         super().closeEvent(event)
