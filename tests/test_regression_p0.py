@@ -5,6 +5,10 @@ from unittest.mock import MagicMock, patch, call
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from tests.qt_stub import ensure_qt_available
+
+ensure_qt_available()
+
 from tests.conftest import MockMainWindow
 
 

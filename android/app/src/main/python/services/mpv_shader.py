@@ -1,8 +1,33 @@
 """MpvShader — 从 MpvPlayerController 提取的子控制器。"""
 
 import os
+import sys
 
 from core.log_manager import global_logger as logger
+
+
+def _candidate_shader_dirs() -> list:
+    """返回按优先级排列的着色器目录候选。
+
+    打包后（PyInstaller onefile）内置资源在 sys._MEIPASS 下，
+    而用户可写的 shaders/ 通常放在可执行文件旁边；两者都要支持，
+    否则发布版会"找不到任何着色器"，用户手动放置也不会生效。
+    """
+    dirs = []
+    if getattr(sys, 'frozen', False):
+        dirs.append(os.path.join(os.path.dirname(os.path.abspath(sys.executable)), 'shaders'))
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        dirs.append(os.path.join(meipass, 'shaders'))
+    if not getattr(sys, 'frozen', False):
+        # 开发模式：项目根目录下的 shaders/
+        dirs.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'shaders'))
+
+    result = []
+    for d in dirs:
+        if d not in result:
+            result.append(d)
+    return result
 
 
 class MpvShader:
@@ -18,44 +43,48 @@ class MpvShader:
         """
         if preset == 'off':
             return []
-        shaders_dir = self._facade._get_shaders_dir()
-        if not os.path.isdir(shaders_dir):
+        shader_dirs = [d for d in _candidate_shader_dirs() if os.path.isdir(d)]
+        if not shader_dirs:
             return []
 
         # 1. 如果预设名在 _SHADER_PRESET_FILES 中，按精确文件名查找
         if preset in self._facade._SHADER_PRESET_FILES:
             paths = []
             for fname in self._facade._SHADER_PRESET_FILES[preset]:
-                path = os.path.join(shaders_dir, fname)
-                if os.path.isfile(path):
-                    paths.append(path)
+                for shaders_dir in shader_dirs:
+                    path = os.path.join(shaders_dir, fname)
+                    if os.path.isfile(path):
+                        paths.append(path)
+                        break
             if paths:
                 return paths
 
         # 2. 回退：前缀匹配查找单个文件
         extensions = ('.glsl', '.hook', '.glsl.hook')
-        for ext in extensions:
-            # 精确匹配：preset.ext
-            path = os.path.join(shaders_dir, f'{preset}{ext}')
-            if os.path.isfile(path):
-                return [path]
-            # 前缀匹配：preset_*.ext
-            for fname in os.listdir(shaders_dir):
-                if fname.lower().startswith(preset.lower()) and fname.lower().endswith(ext):
-                    return [os.path.join(shaders_dir, fname)]
+        for shaders_dir in shader_dirs:
+            for ext in extensions:
+                # 精确匹配：preset.ext
+                path = os.path.join(shaders_dir, f'{preset}{ext}')
+                if os.path.isfile(path):
+                    return [path]
+                # 前缀匹配：preset_*.ext
+                for fname in os.listdir(shaders_dir):
+                    if fname.lower().startswith(preset.lower()) and fname.lower().endswith(ext):
+                        return [os.path.join(shaders_dir, fname)]
         return []
 
     def _get_shaders_dir(self) -> str:
-        """获取着色器目录路径"""
-        # 优先使用程序目录下的 shaders/
-        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        shaders_dir = os.path.join(base, 'shaders')
-        if not os.path.isdir(shaders_dir):
-            try:
-                os.makedirs(shaders_dir, exist_ok=True)
-            except Exception:
-                pass
-        return shaders_dir
+        """获取着色器目录路径（优先已存在的目录，否则返回可写目录）"""
+        candidates = _candidate_shader_dirs()
+        for d in candidates:
+            if os.path.isdir(d):
+                return d
+        target = candidates[0]
+        try:
+            os.makedirs(target, exist_ok=True)
+        except OSError as _e:
+            logger.debug(f"无法创建着色器目录 {target}: {_e}")
+        return target
 
     def clear_motion_compensation(self) -> bool:
         """清除运动补偿滤镜"""
@@ -184,26 +213,30 @@ class MpvShader:
         :return: [{'preset': str, 'path': str, 'filename': str}]
         """
         result = []
-        shaders_dir = self._facade._get_shaders_dir()
-        if not os.path.isdir(shaders_dir):
-            return result
-        for fname in sorted(os.listdir(shaders_dir)):
-            if not fname.lower().endswith(('.glsl', '.hook')):
+        seen = set()
+        for shaders_dir in _candidate_shader_dirs():
+            if not os.path.isdir(shaders_dir):
                 continue
-            path = os.path.join(shaders_dir, fname)
-            if not os.path.isfile(path):
-                continue
-            # 从文件名提取预设名
-            name_base = fname
-            for ext in ('.glsl.hook', '.glsl', '.hook'):
-                if name_base.lower().endswith(ext):
-                    name_base = name_base[:-len(ext)]
-                    break
-            result.append({
-                'preset': name_base,
-                'path': path,
-                'filename': fname,
-            })
+            for fname in sorted(os.listdir(shaders_dir)):
+                if fname in seen:
+                    continue
+                if not fname.lower().endswith(('.glsl', '.hook')):
+                    continue
+                path = os.path.join(shaders_dir, fname)
+                if not os.path.isfile(path):
+                    continue
+                seen.add(fname)
+                # 从文件名提取预设名
+                name_base = fname
+                for ext in ('.glsl.hook', '.glsl', '.hook'):
+                    if name_base.lower().endswith(ext):
+                        name_base = name_base[:-len(ext)]
+                        break
+                result.append({
+                    'preset': name_base,
+                    'path': path,
+                    'filename': fname,
+                })
         return result
 
     def set_motion_compensation(self, strength: str, target_fps: int = 60) -> bool:

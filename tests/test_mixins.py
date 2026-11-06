@@ -1,9 +1,14 @@
-from PySide6.QtWidgets import QListWidget
 import os
 import sys
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from tests.qt_stub import ensure_qt_available
+
+ensure_qt_available()
+
+from PySide6.QtWidgets import QListWidget  # noqa: E402
 
 from mixins.server_mixin import ServerMixin  # noqa: E402
 from mixins.tray_mixin import TrayMixin  # noqa: E402
@@ -322,6 +327,9 @@ class TestFileOpsMixin:
 class TestPanelMixin:
     def setup_method(self):
         self.host = _PanelTestHost()
+        # MockMainWindow 不是 QObject，真实 QTimer(self) 会失败；
+        # 且魔改后的面板 mock 会让指针命中判断恒为真，导致走不到 auto_hide_all。
+        self.host._is_pointer_on_floating_widgets = MagicMock(return_value=False)
         self.host.panel_vis = MagicMock()
         self.host.panel_vis.is_auto_hidden = False
         self.host.panel_vis.manually_hidden = False

@@ -8,6 +8,11 @@ except 吞掉，表现为启动崩溃或点台无声。本测试不 mock Qt，�
 
 import pytest
 
+from tests.qt_stub import qt_is_stub
+
+if qt_is_stub():
+    pytest.skip("当前使用 PySide6 替身，跳过依赖真实 Qt 的冒烟测试", allow_module_level=True)
+
 pytest.importorskip("PySide6.QtWidgets")
 
 

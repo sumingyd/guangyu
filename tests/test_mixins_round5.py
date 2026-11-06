@@ -4,6 +4,10 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from tests.qt_stub import ensure_qt_available
+
+ensure_qt_available()
+
 from mixins.control_panel_mixin import ControlPanelMixin
 from mixins.playlist_panel_mixin import PlaylistPanelMixin
 from mixins.event_mixin import EventMixin

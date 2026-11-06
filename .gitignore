@@ -7,9 +7,15 @@ __pycache__/
 .arts/
 
 # C extensions
-*.so
+# 不全局忽略 *.so：Android 的 jniLibs 等生成目录在下方按路径显式忽略，
+# 既避免误伤需要跟踪的原生库，也让 git status 更可解释。
 
 # Android signing keys (NEVER commit)
+# 说明：android/app/release.keystore 目前仍被 Git 跟踪（历史遗留）。
+# .gitignore 只对未跟踪文件生效，必须由人工执行:
+#   git rm --cached android/app/release.keystore
+# 并把密钥轮换后存回 CI secret（KEYSTORE_PASSWORD / KEY_PASSWORD），
+# 否则任何能读到仓库历史的人都可以用它签名伪造更新包。
 *.keystore
 *.jks
 android/app/release.keystore
@@ -19,6 +25,8 @@ android/app/release.keystore
 build/
 develop-eggs/
 dist/
+dist.new/
+dist.prev/
 downloads/
 eggs/
 .eggs/
@@ -201,6 +209,7 @@ lan_admin_log*.txt
 
 # 截图
 screen.png
+.screenshots/
 
 # 配置文件
 *.ini
@@ -240,6 +249,16 @@ android/build_log*.txt
 android/local.properties
 android/app/build/
 android/apk-output/
+# 由 extract_mpv_native.py / CI 下载解压生成的 native 库
+android/app/src/main/jniLibs/
+# 校验/排查时解压出来的临时目录
+apk_check/
+android/mpv_check/
+# extract_mpv_native.py 的两阶段提取临时目录（正常会自清理，被强杀时可能残留）
+android/jni-*/
+android/avs-*/
+# APK 属于构建产物，不进仓库
+*.apk
 
 # mpv-android 提取脚本产物（CI 构建时重新下载提取，本地由
 # android/extract_mpv_native.py 生成；官方 mpv-*.apk 下载缓存同理）

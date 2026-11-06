@@ -6,8 +6,20 @@
     }
   ],
   "pythonVersion": "3.11",
-  "pythonPlatform": "Windows",
   "typeCheckingMode": "basic",
+  "exclude": [
+    "android/app/src/main/python",
+    "android/app/build",
+    "android/.gradle",
+    "android/mpv_check",
+    "apk_check",
+    "build",
+    "dist",
+    "dist.new",
+    "dist.prev",
+    ".venv",
+    "**/__pycache__"
+  ],
   "reportMissingTypeStubs": false,
   "reportUnknownMemberType": false,
   "reportUnknownParameterType": false,

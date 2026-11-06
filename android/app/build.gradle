@@ -14,28 +14,38 @@ if (localPropsFile.exists()) {
 }
 def buildPythonPath = localProps.getProperty("chaquopy.buildPython")
 
-// 从 PC 端 core/version.py 自动读取版本号，确保与 PC 端保持一致
+// 从 PC 端 core/version.py 自动读取版本号，确保与 PC 端保持一致（唯一真源）
 def versionFile = rootProject.file("../core/version.py")
-def versionNameStr = "0.0.0.0"
-if (versionFile.exists()) {
-    def versionContent = versionFile.text
-    def matcher = versionContent =~ /CURRENT_VERSION\s*=\s*"([^"]+)"/
-    if (matcher.find()) {
-        versionNameStr = matcher.group(1)
+if (!versionFile.exists()) {
+    throw new GradleException("未找到版本文件: ${versionFile}，无法确定 versionName/versionCode")
+}
+def versionMatcher = versionFile.text =~ /CURRENT_VERSION\s*(?::\s*str\s*)?=\s*["']([^"']+)["']/
+if (!versionMatcher.find()) {
+    throw new GradleException("core/version.py 中无法解析 CURRENT_VERSION，拒绝使用默认版本号构建")
+}
+def versionNameStr = versionMatcher.group(1)
+
+// versionCode 必须包含全部四段（含 build 段），否则仅第 4 段升级时
+// versionCode 不变，用户永远收不到更新。
+// 编码方式：major*1e7 + minor*1e5 + patch*1e2 + build（各段 0-99）
+def versionParts = versionNameStr.tokenize('.')
+if (versionParts.size() != 4) {
+    throw new GradleException("CURRENT_VERSION 必须是 major.minor.patch.build 四段: ${versionNameStr}")
+}
+versionParts.each { part ->
+    if (!(part ==~ /\d+/) || part.toInteger() > 99) {
+        throw new GradleException("版本号各段必须是 0-99 的整数: ${versionNameStr}")
     }
 }
-// versionCode 从版本号数字部分生成：取前两段作为主版本号
-// 例如 48.0.0.0 -> 48000000，确保每次版本升级 versionCode 递增
-def versionParts = versionNameStr.split("\\.")
-def versionCodeVal = 1
-if (versionParts.length >= 2) {
-    versionCodeVal = (versionParts[0].toInteger() * 1000000 + versionParts[1].toInteger() * 1000)
-    if (versionParts.length >= 3) {
-        versionCodeVal += versionParts[2].toInteger()
-    }
-    versionCodeVal += 100  // dev offset to ensure upgrade
-    versionCodeVal = Math.min(versionCodeVal, 2100000000)
+def (vMajor, vMinor, vPatch, vBuild) = versionParts.collect { it.toInteger() }
+if (vMajor > 209) {
+    throw new GradleException("主版本号过大，versionCode 将超出 Android 上限 2100000000: ${versionNameStr}")
 }
+def versionCodeVal = vMajor * 10000000 + vMinor * 100000 + vPatch * 100 + vBuild
+if (versionCodeVal > 2100000000) {
+    throw new GradleException("计算出的 versionCode 超出 Android 上限: ${versionCodeVal}")
+}
+
 
 android {
     namespace 'com.iptv.scanner.editor.pro'
@@ -72,6 +82,14 @@ android {
         ?: localProps.getProperty('keystorePassword') ?: ''
     def keyPwd = System.getenv('KEY_PASSWORD')
         ?: localProps.getProperty('keyPassword') ?: ''
+    if (keystorePwd && keyPwd && !file('release.keystore').exists()) {
+        throw new GradleException(
+            "release.keystore 不存在，无法签名 release 包；" +
+            "请把密钥材料从 CI secret 还原到 android/app/release.keystore")
+    }
+    if (!keystorePwd || !keyPwd) {
+        logger.warn("未配置 KEYSTORE_PASSWORD/KEY_PASSWORD，release 产物将不会被签名")
+    }
     signingConfigs {
         release {
             storeFile file('release.keystore')
@@ -98,12 +116,12 @@ android {
         }
     }
 
-    /* 自定义 APK 输出文件名：按 ABI 命名
+    /* 自定义 APK 输出文件名：包含版本号 + ABI，避免不同版本的产物同名
      *
      * 通过 -PtargetAbi=xxx 控制单 ABI 构建：
-     * - gradlew assembleRelease -PtargetAbi=arm64-v8a   → GuangYu-Android-arm64.apk
-     * - gradlew assembleRelease -PtargetAbi=armeabi-v7a → GuangYu-Android-arm32.apk
-     * - 不传参数 → GuangYu-Android-universal.apk（含两个 ABI）
+     * - gradlew assembleRelease -PtargetAbi=arm64-v8a   → GuangYu-Android-<version>-arm64.apk
+     * - gradlew assembleRelease -PtargetAbi=armeabi-v7a → GuangYu-Android-<version>-arm32.apk
+     * - 不传参数 → GuangYu-Android-<version>-universal.apk（含两个 ABI）
      *
      * versionCode 按 ABI 区分（确保各 ABI 的 versionCode 唯一）：
      * arm64-v8a: versionCode 不变（主版本）
@@ -123,7 +141,7 @@ android {
             } else {
                 abiSuffix = '-universal'
             }
-            output.outputFileName = "GuangYu-Android${abiSuffix}.apk"
+            output.outputFileName = "GuangYu-Android-${versionNameStr}${abiSuffix}.apk"
         }
     }
 
@@ -253,4 +271,35 @@ dependencies {
      * - 每次启动时开启后台 logcat 进程记录日志
      * - 下次启动检测上次是否异常退出，若是则保存 logcat 为崩溃报告 */
     implementation 'ch.acra:acra-core:5.9.7'
+}
+
+/* 构建前校验运行时资源：
+ * - assets/shaders 为空 → 发布包所有 GLSL 预设静默失效
+ * - jniLibs 为空     → 缺少 libmpv/AVS3，播放器直接不可用
+ * - model.bin 缺失   → AV3A/AVS3 音频解码静默不可用（仅警告，允许先出包）
+ * 这些资源由 android/extract_mpv_native.py 或 CI 生成，缺失时应尽早失败。 */
+tasks.register('checkRuntimeAssets') {
+    description = '校验 shaders / jniLibs / model.bin 是否齐全'
+    group = 'verification'
+    doLast {
+        def shaderDir = file('src/main/assets/shaders')
+        def shaderFiles = shaderDir.exists() ? (shaderDir.listFiles() ?: []).findAll { it.isFile() } : []
+        if (shaderFiles.isEmpty()) {
+            throw new GradleException("缺少着色器资源: ${shaderDir}，发布包的所有 GLSL 预设都会失效")
+        }
+        def jniLibsDir = file('src/main/jniLibs')
+        def abiDirs = jniLibsDir.exists() ? (jniLibsDir.listFiles() ?: []).findAll { it.isDirectory() } : []
+        if (abiDirs.isEmpty()) {
+            throw new GradleException("jniLibs 为空: ${jniLibsDir}，请先运行 python android/extract_mpv_native.py")
+        }
+        def modelFile = file('src/main/assets/model.bin')
+        if (!modelFile.exists()) {
+            logger.warn("警告: 缺少 ${modelFile}，AV3A/AVS3 音频解码将不可用；" +
+                "请先运行 python android/extract_mpv_native.py")
+        }
+    }
+}
+
+tasks.matching { it.name == 'preBuild' }.configureEach {
+    dependsOn 'checkRuntimeAssets'
 }

@@ -4,6 +4,10 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from tests.qt_stub import ensure_qt_available
+
+ensure_qt_available()
+
 from mixins.channel_mixin import ChannelMixin  # noqa: E402
 from mixins.settings_mixin import SettingsMixin  # noqa: E402
 from mixins.window_mixin import WindowMixin  # noqa: E402

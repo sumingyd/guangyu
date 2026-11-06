@@ -5,29 +5,42 @@ GuangYu 打包脚本
 支持 Windows (.exe) 和 macOS (.app)
 """
 
-import os
-import sys
-import shutil
-import plistlib
-import subprocess
 import hashlib
+import os
+import plistlib
+import shutil
+import subprocess
+import sys
+import urllib.request
 from pathlib import Path
 
 
-def _download(url, dest, expected_sha256=None):
+def _download(url, dest, expected_sha256):
+    """下载文件并强制校验 SHA256。
+
+    先写入 .part 临时文件，校验通过后才原子替换目标文件，
+    避免下载中断留下半截文件被后续步骤误用。
+    """
+    if not expected_sha256:
+        print("错误: 下载校验失败：未提供预期 SHA256，拒绝使用未校验的二进制")
+        sys.exit(1)
+    dest_path = Path(dest)
+    part_path = dest_path.with_name(dest_path.name + ".part")
     print(f"下载: {url}")
     print(f"保存到: {dest}")
-    urllib.request.urlretrieve(url, dest)
-    actual_hash = hashlib.sha256(Path(dest).read_bytes()).hexdigest()
-    print(f"SHA256: {actual_hash}")
-    if expected_sha256:
+    part_path.unlink(missing_ok=True)
+    try:
+        urllib.request.urlretrieve(url, str(part_path))
+        actual_hash = hashlib.sha256(part_path.read_bytes()).hexdigest()
+        print(f"SHA256: {actual_hash}")
         if actual_hash.lower() != expected_sha256.lower():
             print(f"错误: SHA256 校验失败！期望: {expected_sha256[:16]}... 实际: {actual_hash[:16]}...")
-            Path(dest).unlink(missing_ok=True)
+            part_path.unlink(missing_ok=True)
             sys.exit(1)
-        print("SHA256 校验通过")
-    else:
-        print("警告: 未提供预期 SHA256，跳过校验。建议首次下载后记录上述哈希值并填入代码。")
+        os.replace(part_path, dest_path)
+    finally:
+        part_path.unlink(missing_ok=True)
+    print("SHA256 校验通过")
     print(f"下载完成: {dest}")
 
 
@@ -36,49 +49,35 @@ def _run(cmd, **kwargs):
     return subprocess.run(cmd, **kwargs)
 
 
-print(f"当前 Python 版本: {sys.version}")
-print(f"当前工作目录: {os.getcwd()}")
-print(f"当前平台: {sys.platform}")
-
 PROJECT_ROOT = Path(__file__).parent
-print(f"项目根目录: {PROJECT_ROOT}")
 
-try:
-    import PyInstaller
-    print(f"PyInstaller 版本: {PyInstaller.__version__}")
-except ImportError:
-    print("错误: PyInstaller 未安装，请运行: pip install pyinstaller")
-    sys.exit(1)
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from core.version import CURRENT_VERSION  # noqa: E402
 
 IS_WINDOWS = sys.platform == 'win32'
 IS_MACOS = sys.platform == 'darwin'
-IS_ANDROID = getattr(sys, 'platform', '') == 'android' or 'ANDROID_ARGUMENT' in os.environ or 'ANDROID_ROOT' in os.environ
-IS_LINUX = sys.platform.startswith('linux') and not IS_ANDROID
+IS_LINUX = sys.platform.startswith('linux')
 
 APP_NAME = "GuangYu"
 BUNDLE_ID = "com.iptv-scanner-editor-pro.app"
 
-if IS_WINDOWS:
-    DATA_SEP = ';'
-    ICON_PATH = str(PROJECT_ROOT / "resources" / "logo.ico")
-elif IS_MACOS:
-    DATA_SEP = ':'
-    ICON_PATH = (
-        str(PROJECT_ROOT / "resources" / "logo.png")
-        if (PROJECT_ROOT / "resources" / "logo.png").exists() else None
-    )
-elif IS_ANDROID:
-    DATA_SEP = ':'
-    ICON_PATH = None
-elif IS_LINUX:
-    DATA_SEP = ':'
-    ICON_PATH = (
-        str(PROJECT_ROOT / "resources" / "logo.png")
-        if (PROJECT_ROOT / "resources" / "logo.png").exists() else None
-    )
-else:
-    DATA_SEP = ':'
-    ICON_PATH = None
+DATA_SEP = ';' if IS_WINDOWS else ':'
+
+# 构建先写入 dist.new，成功后再替换 dist：
+# 构建失败或中断时不会破坏已有的 dist/ 产物，可随时回退。
+DIST_DIR = PROJECT_ROOT / "dist"
+DIST_STAGING = PROJECT_ROOT / "dist.new"
+DIST_PREVIOUS = PROJECT_ROOT / "dist.prev"
+
+_PNG_ICON = PROJECT_ROOT / "resources" / "logo.png"
+ICO_ICON = PROJECT_ROOT / "resources" / "logo.ico"
+
+# 需要打包进产物的数据目录。shaders/ 缺失会导致所有 GLSL 预设静默失效，
+# 因此与 mpv/ffmpeg 一样在 _data_args() 中强制校验。
+DATA_DIRS = ["mpv", "ffmpeg", "resources", "i18n", "shaders"]
+
 
 HIDDEN_IMPORTS = [
     "PySide6.QtNetwork",
@@ -226,6 +225,108 @@ COLLECT_ALL = [
 ]
 
 
+def _log_environment():
+    print(f"当前 Python 版本: {sys.version}")
+    print(f"当前工作目录: {os.getcwd()}")
+    print(f"当前平台: {sys.platform}")
+    print(f"项目根目录: {PROJECT_ROOT}")
+
+
+def _check_pyinstaller():
+    try:
+        import PyInstaller
+    except ImportError:
+        print("错误: PyInstaller 未安装，请运行: pip install -r requirements.txt")
+        sys.exit(1)
+    print(f"PyInstaller 版本: {PyInstaller.__version__}")
+
+
+def _data_args():
+    """统一的 --add-data 清单，所有平台共用，避免各平台漏收集资源。"""
+    args = []
+    for name in DATA_DIRS:
+        src = PROJECT_ROOT / name
+        if not src.exists():
+            print(f"错误: 缺少打包资源目录: {src}")
+            sys.exit(1)
+        args.extend(["--add-data", f"{src}{DATA_SEP}{name}"])
+    return args
+
+
+def _hidden_import_args():
+    args = []
+    for imp in HIDDEN_IMPORTS:
+        args.extend(["--hidden-import", imp])
+    for pkg in COLLECT_ALL:
+        args.extend(["--collect-all", pkg])
+    return args
+
+
+def _pyinstaller_base(onefile: bool):
+    """所有平台共用的 PyInstaller 参数。
+
+    产物先写入 dist.new；只有构建成功后才提升为 dist/，
+    因此构建中断不会破坏上一次可用的发布产物。
+    """
+    cmd = [
+        sys.executable, "-m", "PyInstaller",
+        "--noconfirm",
+        "--name", APP_NAME,
+        "--distpath", str(DIST_STAGING),
+        "--workpath", str(PROJECT_ROOT / "build"),
+    ]
+    if onefile:
+        cmd.append("--onefile")
+    return cmd
+
+
+def _macos_icns_path():
+    """构建前从 AppIcon.iconset 生成 .icns，供 --icon 与 .app 内图标使用。"""
+    iconset = PROJECT_ROOT / "resources" / "AppIcon.iconset"
+    if not iconset.is_dir():
+        print("警告: resources/AppIcon.iconset 不存在，macOS 将使用默认图标")
+        return None
+    out_dir = PROJECT_ROOT / "build"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    icns = out_dir / "logo.icns"
+    try:
+        subprocess.run(
+            ["iconutil", "-c", "icns", "-o", str(icns), str(iconset)],
+            check=True, timeout=60,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"错误: 生成 macOS 图标失败（iconutil）: {e}")
+        sys.exit(1)
+    print(f"macOS 图标已生成: {icns}")
+    return icns
+
+
+def _staging_output_path():
+    if IS_MACOS:
+        return DIST_STAGING / f"{APP_NAME}.app"
+    if IS_WINDOWS:
+        return DIST_STAGING / f"{APP_NAME}.exe"
+    return DIST_STAGING / APP_NAME
+
+
+def _fail_build(message):
+    print(f"错误: {message}")
+    if DIST_STAGING.exists():
+        shutil.rmtree(DIST_STAGING, ignore_errors=True)
+    sys.exit(1)
+
+
+def _promote_staging():
+    """把 dist.new 提升为 dist/，上一版保留在 dist.prev/ 便于回退。"""
+    if DIST_PREVIOUS.exists():
+        shutil.rmtree(DIST_PREVIOUS)
+    if DIST_DIR.exists():
+        DIST_DIR.rename(DIST_PREVIOUS)
+        print(f"旧产物已备份到: {DIST_PREVIOUS}")
+    DIST_STAGING.rename(DIST_DIR)
+    print(f"新产物已就位: {DIST_DIR}")
+
+
 def _find_macos_libmpv():
     search_paths = [
         Path("/opt/homebrew/lib/libmpv.2.dylib"),
@@ -370,9 +471,19 @@ def prepare_macos_dependencies():
             else:
                 ffprobe_url = "https://www.osxexperts.net/ffprobe80intel.zip"
 
+            expected_hash = os.environ.get("FFPROBE_SHA256", "").strip()
+            if not expected_hash:
+                print("错误: 本机未安装 ffprobe，且未配置 FFPROBE_SHA256")
+                print("  为避免引入未经校验的第三方二进制，构建已中止。")
+                print("  处理方式（任选其一）:")
+                print("    1) brew install ffmpeg")
+                print("    2) 手动把 ffprobe 放到 ffmpeg/ffprobe")
+                print("    3) 首次人工下载后执行 shasum -a 256，再用 FFPROBE_SHA256=<hash> 重跑构建")
+                sys.exit(1)
+
             zip_path = PROJECT_ROOT / "_ffprobe_download.zip"
             try:
-                _download(ffprobe_url, str(zip_path))
+                _download(ffprobe_url, str(zip_path), expected_hash)
                 extract_dir = PROJECT_ROOT / "_ffprobe_extract"
                 extract_dir.mkdir(exist_ok=True)
                 _run(["unzip", "-o", str(zip_path), "-d", str(extract_dir)], check=True)
@@ -411,48 +522,30 @@ def prepare_windows_dependencies():
 
 def build_macos():
     prepare_macos_dependencies()
-    cmd = [
-        sys.executable, "-m", "PyInstaller",
-        "--windowed",
-        "--name", APP_NAME,
-        "--osx-bundle-identifier", BUNDLE_ID,
-    ]
-    if ICON_PATH and os.path.exists(ICON_PATH):
-        cmd.extend(["--icon", ICON_PATH])
+    cmd = _pyinstaller_base(onefile=False)
     cmd.extend([
-        "--add-data", f"{PROJECT_ROOT / 'mpv'}{DATA_SEP}mpv",
-        "--add-data", f"{PROJECT_ROOT / 'ffmpeg'}{DATA_SEP}ffmpeg",
-        "--add-data", f"{PROJECT_ROOT / 'resources'}{DATA_SEP}resources",
-        "--add-data", f"{PROJECT_ROOT / 'i18n'}{DATA_SEP}i18n",
+        "--windowed",
+        "--osx-bundle-identifier", BUNDLE_ID,
     ])
-    for imp in HIDDEN_IMPORTS:
-        cmd.extend(["--hidden-import", imp])
-    for pkg in COLLECT_ALL:
-        cmd.extend(["--collect-all", pkg])
+    icns = _macos_icns_path()
+    if icns:
+        cmd.extend(["--icon", str(icns)])
+    cmd.extend(_data_args())
+    cmd.extend(_hidden_import_args())
     cmd.append(str(PROJECT_ROOT / "main.py"))
     return cmd
 
 
 def build_windows():
     prepare_windows_dependencies()
-    cmd = [
-        sys.executable, "-m", "PyInstaller",
-        "--onefile",
-        "--windowed",
-        "--name", APP_NAME,
-    ]
-    if ICON_PATH and os.path.exists(ICON_PATH):
-        cmd.extend(["--icon", ICON_PATH])
-    cmd.extend([
-        "--add-data", f"{PROJECT_ROOT / 'mpv'}{DATA_SEP}mpv",
-        "--add-data", f"{PROJECT_ROOT / 'ffmpeg'}{DATA_SEP}ffmpeg",
-        "--add-data", f"{PROJECT_ROOT / 'resources'}{DATA_SEP}resources",
-        "--add-data", f"{PROJECT_ROOT / 'i18n'}{DATA_SEP}i18n",
-    ])
-    for imp in HIDDEN_IMPORTS:
-        cmd.extend(["--hidden-import", imp])
-    for pkg in COLLECT_ALL:
-        cmd.extend(["--collect-all", pkg])
+    cmd = _pyinstaller_base(onefile=True)
+    cmd.append("--windowed")
+    if ICO_ICON.exists():
+        cmd.extend(["--icon", str(ICO_ICON)])
+    else:
+        print(f"警告: 图标不存在，跳过: {ICO_ICON}")
+    cmd.extend(_data_args())
+    cmd.extend(_hidden_import_args())
     cmd.append(str(PROJECT_ROOT / "main.py"))
     return cmd
 
@@ -462,8 +555,14 @@ def prepare_linux_dependencies():
     mpv_dir.mkdir(exist_ok=True)
     has_mpv = any((mpv_dir / name).exists() for name in ['libmpv.so.2', 'libmpv.so.1', 'libmpv.so'])
     if not has_mpv:
-        print("提示: 未找到打包的libmpv，运行时将使用系统安装的libmpv")
-        print("  如需打包，请手动放置到 mpv/ 目录，或执行: sudo apt install libmpv-dev")
+        # 与 Windows 分支保持一致：缺少 libmpv 时产物根本无法播放，
+        # 不允许"构建成功但用户装上不能播"，必须显式失败。
+        print("错误: mpv/ 目录缺少 libmpv.so*，发布包将无法播放视频")
+        print("  请放置 libmpv 到 mpv/ 目录，或执行: sudo apt install libmpv-dev")
+        print("  仅调试打包流程时可设置 GUANGYU_ALLOW_SYSTEM_LIBMPV=1 跳过此检查")
+        if os.environ.get("GUANGYU_ALLOW_SYSTEM_LIBMPV") != "1":
+            sys.exit(1)
+        print("警告: 已按 GUANGYU_ALLOW_SYSTEM_LIBMPV=1 继续，产物依赖系统 libmpv")
     else:
         print(f"libmpv.so 已就绪: {mpv_dir}")
 
@@ -485,77 +584,29 @@ def prepare_linux_dependencies():
         shutil.copy2(xcb_cursor_src, xcb_cursor_dest)
         print(f"libxcb-cursor.so.0 已从 {xcb_cursor_src} 复制到 {xcb_cursor_dest}")
     else:
-        print("警告: 未找到 libxcb-cursor.so.0")
+        print("错误: 未找到 libxcb-cursor.so.0，Qt 在 Ubuntu 22.04+/Debian 12+ 上可能无法启动")
         print("  请安装: sudo apt install libxcb-cursor0")
-        print("  否则用户在 Ubuntu 22.04+/Debian 12+ 等系统上可能无法启动应用")
+        if os.environ.get("GUANGYU_ALLOW_SYSTEM_LIBMPV") != "1":
+            sys.exit(1)
+        print("警告: 已按 GUANGYU_ALLOW_SYSTEM_LIBMPV=1 继续，用户需自行安装 libxcb-cursor0")
 
 
 def build_linux():
     prepare_linux_dependencies()
-    cmd = [
-        sys.executable, "-m", "PyInstaller",
-        "--onefile",
-        "--windowed",
-        "--name", APP_NAME,
-    ]
-    if ICON_PATH and os.path.exists(ICON_PATH):
-        cmd.extend(["--icon", ICON_PATH])
-    cmd.extend([
-        "--add-data", f"{PROJECT_ROOT / 'mpv'}{DATA_SEP}mpv",
-        "--add-data", f"{PROJECT_ROOT / 'ffmpeg'}{DATA_SEP}ffmpeg",
-        "--add-data", f"{PROJECT_ROOT / 'resources'}{DATA_SEP}resources",
-        "--add-data", f"{PROJECT_ROOT / 'i18n'}{DATA_SEP}i18n",
-    ])
+    cmd = _pyinstaller_base(onefile=True)
+    cmd.append("--windowed")
+    if _PNG_ICON.exists():
+        cmd.extend(["--icon", str(_PNG_ICON)])
     # 将 libxcb-cursor.so.0 打包到解压后的根目录，
     # PyInstaller 运行时会把 _MEIPASS 加入 LD_LIBRARY_PATH，Qt 的 xcb 平台插件即可找到此库
     xcb_cursor_lib = PROJECT_ROOT / "libs" / "libxcb-cursor.so.0"
     if xcb_cursor_lib.exists():
         cmd.extend(["--add-binary", f"{xcb_cursor_lib}{DATA_SEP}."])
-    for imp in HIDDEN_IMPORTS:
-        cmd.extend(["--hidden-import", imp])
-    for pkg in COLLECT_ALL:
-        cmd.extend(["--collect-all", pkg])
+    cmd.extend(_data_args())
+    cmd.extend(_hidden_import_args())
     cmd.append(str(PROJECT_ROOT / "main.py"))
     return cmd
 
-
-def prepare_android_dependencies():
-    mpv_dir = PROJECT_ROOT / "mpv"
-    mpv_dir.mkdir(exist_ok=True)
-    has_mpv = any((mpv_dir / name).exists() for name in ['libmpv.so', 'libmpv.so.2', 'libmpv.so.1'])
-    if not has_mpv:
-        print("提示: 未找到打包的libmpv.so，运行时将使用系统安装的libmpv")
-    else:
-        print(f"libmpv.so 已就绪: {mpv_dir}")
-
-    ffmpeg_dir = PROJECT_ROOT / "ffmpeg"
-    ffmpeg_dir.mkdir(exist_ok=True)
-    if not (ffmpeg_dir / "ffprobe").exists():
-        print("提示: 未找到 ffmpeg/ffprobe，部分功能可能受限")
-    else:
-        print(f"ffprobe 已就绪: {ffmpeg_dir / 'ffprobe'}")
-
-
-def build_android():
-    prepare_android_dependencies()
-    cmd = [
-        sys.executable, "-m", "PyInstaller",
-        "--onefile",
-        "--windowed",
-        "--name", APP_NAME,
-    ]
-    cmd.extend([
-        "--add-data", f"{PROJECT_ROOT / 'mpv'}{DATA_SEP}mpv",
-        "--add-data", f"{PROJECT_ROOT / 'ffmpeg'}{DATA_SEP}ffmpeg",
-        "--add-data", f"{PROJECT_ROOT / 'resources'}{DATA_SEP}resources",
-        "--add-data", f"{PROJECT_ROOT / 'i18n'}{DATA_SEP}i18n",
-    ])
-    for imp in HIDDEN_IMPORTS:
-        cmd.extend(["--hidden-import", imp])
-    for pkg in COLLECT_ALL:
-        cmd.extend(["--collect-all", pkg])
-    cmd.append(str(PROJECT_ROOT / "main.py"))
-    return cmd
 
 
 def post_process_windows():
@@ -565,7 +616,7 @@ def post_process_windows():
     临时目录被清理等原因丢失 dll。find_libmpv_path() 会从 exe 同级目录的
     mpv/ 查找备用 dll，此函数确保备用 dll 就位。
     """
-    dist_dir = PROJECT_ROOT / "dist"
+    dist_dir = DIST_DIR
     exe_path = dist_dir / f"{APP_NAME}.exe"
     if not exe_path.exists():
         print(f"警告: 可执行文件未找到: {exe_path}")
@@ -595,7 +646,7 @@ def post_process_windows():
 
 
 def post_process_macos_app():
-    app_path = PROJECT_ROOT / "dist" / f"{APP_NAME}.app"
+    app_path = DIST_DIR / f"{APP_NAME}.app"
     if not app_path.exists():
         print(f"警告: .app 未找到: {app_path}")
         return
@@ -611,8 +662,8 @@ def post_process_macos_app():
         'CFBundleName': APP_NAME,
         'CFBundleDisplayName': APP_NAME,
         'CFBundleIdentifier': BUNDLE_ID,
-        'CFBundleVersion': __import__('core.version', fromlist=['CURRENT_VERSION']).CURRENT_VERSION,
-        'CFBundleShortVersionString': __import__('core.version', fromlist=['CURRENT_VERSION']).CURRENT_VERSION,
+        'CFBundleVersion': CURRENT_VERSION,
+        'CFBundleShortVersionString': CURRENT_VERSION,
         'CFBundlePackageType': 'APPL',
         'CFBundleInfoDictionaryVersion': '6.0',
         'LSMinimumSystemVersion': '10.15',
@@ -650,12 +701,15 @@ def post_process_macos_app():
 
     logo_png = PROJECT_ROOT / "resources" / "logo.png"
     if logo_png.exists():
-        import shutil as shutil_mod
-        shutil_mod.copy2(str(logo_png), str(resources_dir / "logo.png"))
+        shutil.copy2(str(logo_png), str(resources_dir / "logo.png"))
         print(f"图标已复制: {resources_dir / 'logo.png'}")
 
     iconset_dir = PROJECT_ROOT / "resources" / "AppIcon.iconset"
-    if iconset_dir.exists():
+    built_icns = PROJECT_ROOT / "build" / "logo.icns"
+    if built_icns.exists():
+        shutil.copy2(str(built_icns), str(resources_dir / "logo.icns"))
+        print(f"logo.icns 已复制: {resources_dir / 'logo.icns'}")
+    elif iconset_dir.exists():
         try:
             subprocess.run(
                 ['iconutil', '-c', 'icns', '-o', str(resources_dir / 'logo.icns'), str(iconset_dir)],
@@ -671,7 +725,7 @@ def post_process_macos_app():
 
 
 def post_process_linux():
-    dist_dir = PROJECT_ROOT / "dist"
+    dist_dir = DIST_DIR
     exe_path = dist_dir / APP_NAME
     if not exe_path.exists():
         print(f"警告: 可执行文件未找到: {exe_path}")
@@ -747,15 +801,18 @@ echo "安装完成! 可以从应用菜单启动 {APP_NAME}"
 
 
 def clean_build():
+    """清理中间产物，但保留 dist/ 作为可回退的上一版产物。"""
     print("清理之前的构建结果...")
     build_dir = PROJECT_ROOT / "build"
     if build_dir.exists():
         print(f"移除构建目录: {build_dir}")
         shutil.rmtree(build_dir)
-    dist_dir = PROJECT_ROOT / "dist"
-    if dist_dir.exists():
-        print(f"移除发布目录: {dist_dir}")
-        shutil.rmtree(dist_dir)
+    if DIST_STAGING.exists():
+        print(f"移除未完成产物: {DIST_STAGING}")
+        shutil.rmtree(DIST_STAGING)
+    if DIST_PREVIOUS.exists():
+        print(f"移除旧备份: {DIST_PREVIOUS}")
+        shutil.rmtree(DIST_PREVIOUS)
     spec_file = PROJECT_ROOT / f"{APP_NAME}.spec"
     if spec_file.exists():
         print(f"移除 spec 文件: {spec_file}")
@@ -766,8 +823,6 @@ def clean_build():
 def run_build():
     if IS_MACOS:
         cmd = build_macos()
-    elif IS_ANDROID:
-        cmd = build_android()
     elif IS_LINUX:
         cmd = build_linux()
     else:
@@ -776,62 +831,47 @@ def run_build():
     print("开始打包...")
     print(f"执行命令: {' '.join(cmd)}")
 
+    # 直接继承 stdout/stderr：长时间打包时可以看到实时进度，
+    # 也不会因为 300 秒超时把正常构建误判为失败。
+    result = subprocess.run(cmd, cwd=PROJECT_ROOT)
+
+    print(f"返回码: {result.returncode}")
+    if result.returncode != 0:
+        _fail_build("打包失败，dist/ 中保留的仍是上一次可用产物")
+
+    expected = _staging_output_path()
+    if not expected.exists():
+        _fail_build(f"打包命令返回成功但未找到产物: {expected}")
+
+    _promote_staging()
+
+    if IS_MACOS:
+        post_process_macos_app()
+        print(f"打包完成! .app 位于: dist/{APP_NAME}.app")
+    elif IS_LINUX:
+        post_process_linux()
+        print(f"打包完成! 可执行文件位于: dist/{APP_NAME}")
+    else:
+        post_process_windows()
+        print(f"打包完成! 可执行文件位于: dist/{APP_NAME}.exe")
+
+
+def main():
+    print("=== GuangYu 打包脚本 ===")
+    _log_environment()
+    _check_pyinstaller()
+    clean_build()
     try:
-        import subprocess
-        result = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=300)
-
-        print(f"返回码: {result.returncode}")
-
-        if result.stdout:
-            print("标准输出:")
-            print(result.stdout)
-
-        if result.stderr:
-            print("标准错误:")
-            print(result.stderr)
-
-        if result.returncode != 0:
-            print("打包失败!")
-            sys.exit(1)
-
-        print("打包成功!")
-
-        dist_dir = PROJECT_ROOT / "dist"
-        if dist_dir.exists():
-            config_file = PROJECT_ROOT / "config.ini"
-            if config_file.exists():
-                if IS_MACOS:
-                    app_resources = dist_dir / f"{APP_NAME}.app" / "Contents" / "Resources"
-                    app_resources.mkdir(parents=True, exist_ok=True)
-                    dest_config = app_resources / "config.ini"
-                else:
-                    dest_config = dist_dir / "config.ini"
-                print(f"复制配置文件到: {dest_config}")
-                shutil.copy2(config_file, dest_config)
-            else:
-                print("警告: config.ini 文件不存在")
-
-        if IS_MACOS:
-            post_process_macos_app()
-            print(f"打包完成! .app 位于: dist/{APP_NAME}.app")
-        elif IS_ANDROID:
-            print(f"打包完成! 可执行文件位于: dist/{APP_NAME}")
-        elif IS_LINUX:
-            post_process_linux()
-            print(f"打包完成! 可执行文件位于: dist/{APP_NAME}")
-        else:
-            post_process_windows()
-            print(f"打包完成! 可执行文件位于: dist/{APP_NAME}.exe")
-
+        run_build()
     except Exception as e:
         print(f"打包过程中发生错误: {e}")
         import traceback
         traceback.print_exc()
+        if DIST_STAGING.exists():
+            shutil.rmtree(DIST_STAGING, ignore_errors=True)
         sys.exit(1)
+    print("=== 打包脚本执行完成 ===")
 
 
 if __name__ == "__main__":
-    print("=== GuangYu 打包脚本 ===")
-    clean_build()
-    run_build()
-    print("=== 打包脚本执行完成 ===")
+    main()

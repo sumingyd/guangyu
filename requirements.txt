@@ -1,43 +1,38 @@
 # GuangYu 依赖声明
 # 使用 pip install -r requirements.txt 安装所有依赖
+#
+# 全部锁定精确版本：构建产物（PyInstaller / Android Chaquopy）对环境敏感，
+# 浮动版本会让同一份源码在不同时间打出不同产物，也容易把 CI 突然打红。
+# 升级依赖时请同步修改此处并在本地/CI 各平台验证。
 
 # 核心GUI框架
-PySide6>=6.4.0
+PySide6==6.7.1
 
 # 网络请求和流媒体处理
-requests>=2.28.0
-urllib3>=1.26.0
-aiohttp>=3.8.0
+requests==2.34.2
+urllib3==2.7.0
+aiohttp==3.14.3
 
 # 图像处理
-Pillow>=9.0.0
-
-# 配置管理
-configparser>=5.3.0
-
-# 类型提示支持
-typing-extensions>=4.4.0
+Pillow==12.3.0
 
 # Excel文件处理
-openpyxl>=3.1.0
+openpyxl==3.1.5
 
 # 拼音排序支持
-pypinyin>=0.50.0
+pypinyin==0.55.0
 
 # 音频可视化FFT
-numpy>=1.24.0
+numpy==2.4.6
 
 # 音频元数据(封面/歌词)提取
-mutagen>=1.46.0
+mutagen==1.48.1
 
 # 系统监控（扫描器性能优化）
-psutil>=5.9.0
+psutil==7.2.2
 
 # 打包工具
-pyinstaller>=6.0.0
+pyinstaller==6.22.3
 
-# 开发工具（可选）
-# black>=22.0.0
-# flake8>=5.0.0
-# mypy>=0.991
-# pytest>=7.2.0
+# 开发/CI 测试
+pytest==9.1.1

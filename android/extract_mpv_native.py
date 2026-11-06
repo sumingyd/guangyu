@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 提取 mpv-android 的 native 库到 jniLibs 目录。
-与 CI 工作流 .github/workflows/build.yml 的步骤一致。
 
 libmpv 来源（2026-10 起，安卓端切换到 AVS 支持版）：
   1. 官方 mpv-android APK（基座）：提供 libplayer.so（mpv-android 的 JNI 层，
@@ -18,13 +17,18 @@ libmpv 来源（2026-10 起，安卓端切换到 AVS 支持版）：
 CI 下载 URL:
   https://github.com/mpv-android/mpv-android/releases/download/2026-04-25/app-default-{arch}-release.apk
   https://github.com/sggc/mpv-android-avs/releases/download/libmpv-cavs-dynamic-v003/libmpv-cavs-android-dynamic.tar.gz
+
+注意：下载文件先写入 .part 临时文件并做完整性校验，校验通过后才原子替换；
+提取过程也先写临时目录，成功后再原子移动到 jniLibs，避免中断后留下
+"半新半旧" 的 native 库导致后续 Gradle 打包出损坏产物。
 """
 import os
+import shutil
 import sys
 import tarfile
-import zipfile
+import tempfile
 import urllib.request
-import shutil
+import zipfile
 
 ANDROID_DIR = os.path.dirname(os.path.abspath(__file__))
 OFFICIAL_BASE_URL = "https://github.com/mpv-android/mpv-android/releases/download/2026-04-25"
@@ -40,54 +44,64 @@ AVS_ARCHS = ["arm64-v8a", "armeabi-v7a"]
 
 JNILIBS_DIR = os.path.join(ANDROID_DIR, "app", "src", "main", "jniLibs")
 ASSETS_DIR = os.path.join(ANDROID_DIR, "app", "src", "main", "assets")
+SHADERS_DIR = os.path.join(ASSETS_DIR, "shaders")
 
-# 本地已有的 APK 文件名映射
-LOCAL_APK_MAP = {
-    "arm64-v8a": "mpv-arm64.apk",
-    "x86_64": "mpv-x86_64.apk",
-}
+
+def _validate_archive(path):
+    """轻量校验归档文件是否完整可读（能打开并读到条目即视为有效）。"""
+    try:
+        if path.endswith(".apk") or path.endswith(".zip"):
+            with zipfile.ZipFile(path) as z:
+                return len(z.infolist()) > 0
+        with tarfile.open(path, "r:gz") as t:
+            return t.next() is not None
+    except Exception:
+        return False
 
 
 def download_file(url, dest):
-    """下载文件到指定路径（已存在则复用缓存）"""
+    """下载文件到指定路径；校验通过才落盘，损坏缓存会被自动重建。"""
     if os.path.exists(dest):
-        print(f"  使用已下载缓存: {os.path.basename(dest)}")
-        return dest
-    print(f"  下载: {url}")
-    try:
-        urllib.request.urlretrieve(url, dest)
-        size_mb = os.path.getsize(dest) / (1024 * 1024)
-        print(f"  下载完成: {size_mb:.1f} MB")
-        return dest
-    except Exception as e:
-        print(f"  下载失败: {e}")
-        return None
+        if _validate_archive(dest):
+            print(f"  使用已下载缓存: {os.path.basename(dest)}")
+            return dest
+        print(f"  缓存损坏，重新下载: {os.path.basename(dest)}")
+        os.remove(dest)
+
+    part = dest + ".part"
+    for attempt in (1, 2):
+        print(f"  下载: {url} (第 {attempt} 次)")
+        try:
+            urllib.request.urlretrieve(url, part)
+            if not _validate_archive(part):
+                raise ValueError("下载内容校验失败（可能被截断或返回了错误页面）")
+            os.replace(part, dest)
+            size_mb = os.path.getsize(dest) / (1024 * 1024)
+            print(f"  下载完成: {size_mb:.1f} MB")
+            return dest
+        except Exception as e:
+            print(f"  下载失败: {e}")
+            if os.path.exists(part):
+                os.remove(part)
+    return None
 
 
 def download_apk(arch):
     """下载指定架构的官方 mpv-android APK"""
     apk_name = f"mpv-{arch}.apk"
     apk_path = os.path.join(ANDROID_DIR, apk_name)
-    local_name = LOCAL_APK_MAP.get(arch)
-
-    # 如果本地已有重命名的 APK，直接使用
-    if local_name and os.path.exists(os.path.join(ANDROID_DIR, local_name)):
-        print(f"[{arch}] 使用本地已有 APK: {local_name}")
-        return os.path.join(ANDROID_DIR, local_name)
-
     print(f"[{arch}] 官方 mpv-android 基座库")
     return download_file(f"{OFFICIAL_BASE_URL}/app-default-{arch}-release.apk", apk_path)
 
 
 def extract_apk_so(apk_path, arch):
-    """从 APK 中提取 .so 文件到 jniLibs/{arch}/"""
+    """从 APK 中提取 .so 文件到 jniLibs/{arch}/（先写临时目录再整体替换）"""
     if not apk_path or not os.path.exists(apk_path):
         print(f"[{arch}] APK 不存在，跳过")
         return False
 
     target_dir = os.path.join(JNILIBS_DIR, arch)
-    os.makedirs(target_dir, exist_ok=True)
-
+    staging = tempfile.mkdtemp(prefix=f"jni-{arch}-", dir=ANDROID_DIR)
     try:
         with zipfile.ZipFile(apk_path, 'r') as z:
             # APK 中的 .so 路径: lib/{arch}/*.so
@@ -99,16 +113,21 @@ def extract_apk_so(apk_path, arch):
 
             for name in so_files:
                 filename = os.path.basename(name)
-                target_path = os.path.join(target_dir, filename)
-                with z.open(name) as src, open(target_path, 'wb') as dst:
+                staged_path = os.path.join(staging, filename)
+                with z.open(name) as src, open(staged_path, 'wb') as dst:
                     shutil.copyfileobj(src, dst)
-                size_kb = os.path.getsize(target_path) / 1024
-                print(f"[{arch}] 提取: {filename} ({size_kb:.0f} KB)")
 
-            return True
+        os.makedirs(target_dir, exist_ok=True)
+        for filename in sorted(os.listdir(staging)):
+            os.replace(os.path.join(staging, filename), os.path.join(target_dir, filename))
+            size_kb = os.path.getsize(os.path.join(target_dir, filename)) / 1024
+            print(f"[{arch}] 提取: {filename} ({size_kb:.0f} KB)")
+        return True
     except Exception as e:
         print(f"[{arch}] 提取失败: {e}")
         return False
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def extract_avs_libs():
@@ -118,47 +137,53 @@ def extract_avs_libs():
     if not downloaded:
         return False
 
+    staging = tempfile.mkdtemp(prefix="avs-", dir=ANDROID_DIR)
     try:
         with tarfile.open(tar_path, 'r:gz') as t:
             members = t.getmembers()
 
-            # 1) 覆盖 jniLibs/{arch}/*.so（libmpv/ffmpeg/davs2/uavs3d/avs3a_decoder 等）
+            # 第一阶段：先把所有需要的内容解到临时目录，任一缺失则整体放弃，
+            # 避免出现 arm64 已覆盖、arm32 仍旧版（或 model.bin 缺失）的半成品状态。
+            plan = []
             for arch in AVS_ARCHS:
-                target_dir = os.path.join(JNILIBS_DIR, arch)
-                os.makedirs(target_dir, exist_ok=True)
                 prefix = f"jniLibs/{arch}/"
-                count = 0
-                for m in members:
-                    if m.isfile() and m.name.startswith(prefix) and m.name.endswith('.so'):
-                        filename = os.path.basename(m.name)
-                        target_path = os.path.join(target_dir, filename)
-                        with t.extractfile(m) as src, open(target_path, 'wb') as dst:
-                            shutil.copyfileobj(src, dst)
-                        size_kb = os.path.getsize(target_path) / 1024
-                        print(f"[{arch}] AVS 覆盖: {filename} ({size_kb:.0f} KB)")
-                        count += 1
-                if count == 0:
+                arch_members = [
+                    m for m in members
+                    if m.isfile() and m.name.startswith(prefix) and m.name.endswith('.so')
+                ]
+                if not arch_members:
                     print(f"[{arch}] AVS 包中未找到 {prefix}*.so")
                     return False
-
-            # 2) 提取 assets/model.bin（AV3A 解码器运行时模型）
-            os.makedirs(ASSETS_DIR, exist_ok=True)
-            for m in members:
-                if m.isfile() and m.name == "assets/model.bin":
-                    target_path = os.path.join(ASSETS_DIR, "model.bin")
-                    with t.extractfile(m) as src, open(target_path, 'wb') as dst:
+                arch_staging = os.path.join(staging, arch)
+                os.makedirs(arch_staging, exist_ok=True)
+                for m in arch_members:
+                    filename = os.path.basename(m.name)
+                    staged_path = os.path.join(arch_staging, filename)
+                    with t.extractfile(m) as src, open(staged_path, 'wb') as dst:
                         shutil.copyfileobj(src, dst)
-                    size_kb = os.path.getsize(target_path) / 1024
-                    print(f"[assets] 提取: model.bin ({size_kb:.0f} KB)")
-                    break
-            else:
+                    plan.append((staged_path, os.path.join(JNILIBS_DIR, arch, filename)))
+
+            model_member = next((m for m in members if m.isfile() and m.name == "assets/model.bin"), None)
+            if model_member is None:
                 print("[assets] AVS 包中未找到 model.bin")
                 return False
+            model_staged = os.path.join(staging, "model.bin")
+            with t.extractfile(model_member) as src, open(model_staged, 'wb') as dst:
+                shutil.copyfileobj(src, dst)
+            plan.append((model_staged, os.path.join(ASSETS_DIR, "model.bin")))
 
+        # 第二阶段：全部校验通过后再原子移动到目标位置
+        for staged_path, target_path in plan:
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            os.replace(staged_path, target_path)
+            size_kb = os.path.getsize(target_path) / 1024
+            print(f"AVS 覆盖: {os.path.relpath(target_path, ANDROID_DIR)} ({size_kb:.0f} KB)")
         return True
     except Exception as e:
         print(f"AVS 库提取失败: {e}")
         return False
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def main():
@@ -180,10 +205,18 @@ def main():
     print("覆盖 AVS 支持版解码库（CAVS/AVS2/AVS3/AV3A）")
     avs_ok = extract_avs_libs()
 
+    shaders_ok = False
+    if os.path.isdir(SHADERS_DIR):
+        shaders_ok = any(
+            name.lower().endswith((".glsl", ".hook"))
+            for name in os.listdir(SHADERS_DIR)
+        )
+
     print()
     print("=" * 60)
     print(f"完成: 官方基座 {success_count}/{len(ARCHS)} 架构, "
-          f"AVS 覆盖 {'成功' if avs_ok else '失败'}")
+          f"AVS 覆盖 {'成功' if avs_ok else '失败'}, "
+          f"着色器 {'就绪' if shaders_ok else '缺失'}")
 
     # 列出最终结果
     if os.path.exists(JNILIBS_DIR):
@@ -199,9 +232,11 @@ def main():
         print("\nassets/model.bin: 已就位")
     else:
         print("\nassets/model.bin: 缺失（AV3A 音频将无法解码）")
+    if not shaders_ok:
+        print(f"\n警告: {SHADERS_DIR} 中没有着色器文件，发布包所有 GLSL 预设将失效")
     print("=" * 60)
 
-    return 0 if (success_count == len(ARCHS) and avs_ok) else 1
+    return 0 if (success_count == len(ARCHS) and avs_ok and shaders_ok) else 1
 
 
 if __name__ == "__main__":
