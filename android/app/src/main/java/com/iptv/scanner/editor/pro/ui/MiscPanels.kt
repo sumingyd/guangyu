@@ -157,7 +157,7 @@ fun OpenUrlDialog(viewModel: AppViewModel) {
                         onValueChange = { url = it },
                         placeholder = { Text("https://example.com/stream.m3u8") },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().tvTextField()
                     )
                     Spacer(modifier = Modifier.height(24.dp))
                     Row(

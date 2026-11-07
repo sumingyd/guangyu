@@ -71,6 +71,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -108,6 +109,13 @@ import com.iptv.scanner.editor.pro.player.ProgressHelper
 import com.iptv.scanner.editor.pro.ui.ChannelTab
 import com.iptv.scanner.editor.pro.ui.theme.PlayerOverlayColors
 import com.iptv.scanner.editor.pro.ui.theme.rememberPlayerOverlayColors
+import com.iptv.scanner.editor.pro.ui.theme.tvFocusBorder
+import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalView
 import androidx.media3.ui.PlayerView
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -231,6 +239,28 @@ internal fun ReminderPopup(
     onDismiss: () -> Unit
 ) {
     val isAptv = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
+    // 定时自动弹出的提醒必须接管遥控器焦点：出现时把焦点请求到主按钮，并把整个弹窗设为焦点组，
+    // 否则焦点仍留在背后的列表上，方向键会在背景里移动且看不到焦点框。
+    val acceptFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        delay(50)
+        runCatching { acceptFocusRequester.requestFocus() }
+    }
+    // 弹窗关闭后焦点随弹窗节点一起被移除，需要把焦点交还给下层第一个可聚焦元素，否则焦点框消失。
+    val focusManager = LocalFocusManager.current
+    val popupHostView = LocalView.current
+    DisposableEffect(Unit) {
+        onDispose {
+            popupHostView.post {
+                val moved = runCatching {
+                    focusManager.moveFocus(FocusDirection.Next)
+                }.getOrDefault(false)
+                if (!moved) {
+                    runCatching { focusManager.moveFocus(FocusDirection.Down) }
+                }
+            }
+        }
+    }
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -244,7 +274,7 @@ internal fun ReminderPopup(
             modifier = Modifier.fillMaxWidth(0.85f)
         ) {
             Column(
-                modifier = Modifier.padding(20.dp),
+                modifier = Modifier.padding(20.dp).focusGroup(),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 // 顶部图标
@@ -313,13 +343,13 @@ internal fun ReminderPopup(
                 ) {
                     OutlinedButton(
                         onClick = onDismiss,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f).tvFocusBorder()
                     ) {
                         Text("稍后", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Button(
                         onClick = onAccept,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f).tvFocusBorder().focusRequester(acceptFocusRequester)
                     ) {
                         Text("切换频道", color = if (isAptv) Color.White else MaterialTheme.colorScheme.onSecondary)
                     }

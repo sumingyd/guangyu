@@ -1047,7 +1047,7 @@ fun ClipExportPanel(viewModel: AppViewModel) {
                     value = startTimeText,
                     onValueChange = { startTimeText = it.filter { c -> c.isDigit() || c == '.' } },
                     placeholder = { Text("${timePos.toInt()}") },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).tvTextField(),
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                 )
@@ -1065,7 +1065,7 @@ fun ClipExportPanel(viewModel: AppViewModel) {
             OutlinedTextField(
                 value = durationText,
                 onValueChange = { durationText = it.filter { c -> c.isDigit() || c == '.' } },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().tvTextField(),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
             )

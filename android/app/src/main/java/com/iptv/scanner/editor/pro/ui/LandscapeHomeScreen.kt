@@ -51,6 +51,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.res.stringResource
@@ -309,16 +310,24 @@ private fun LandscapeChannelSplitContent(viewModel: AppViewModel) {
         if (selectedGroup.isEmpty()) filteredChannels
         else filteredChannels.filter { it.group == selectedGroup }
     }
-    // TV 遥控器初始焦点：进入首页（或切分组/搜索导致列表重建）后请求到宫格第一张卡。
-    // 延迟等待宫格首帧组合完成；列表为空时 FocusRequester 未附加，静默忽略。
+    // TV 遥控器初始焦点：只在「首次进入首页宫格」且当前焦点树上确实没有任何焦点时，才请求到第一张卡。
+    // - 用一次性标记代替 Boolean key：频道列表从空变非空不再重新触发，避免在播放/其它区域时焦点被拽走；
+    // - 600ms 内用户可能已把焦点移到别的卡片或面板，请求前先确认宫格焦点树没有焦点，有则不抢。
     val firstCardFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val initialFocusApplied = remember { mutableStateOf(false) }
+    // 宫格区域是否已持有焦点（Root Row 的 onFocusChanged 同步维护），用于判断是否还需要初始抢焦点
+    var gridTreeHasFocus by remember { mutableStateOf(false) }
     LaunchedEffect(displayChannels.isNotEmpty()) {
-        if (displayChannels.isNotEmpty()) {
-            kotlinx.coroutines.delay(600)
-            try {
-                firstCardFocus.requestFocus()
-            } catch (_: IllegalStateException) {
-            }
+        if (displayChannels.isEmpty() || initialFocusApplied.value) return@LaunchedEffect
+        kotlinx.coroutines.delay(600)
+        if (gridTreeHasFocus) {
+            initialFocusApplied.value = true
+            return@LaunchedEffect
+        }
+        try {
+            firstCardFocus.requestFocus()
+            initialFocusApplied.value = true
+        } catch (_: IllegalStateException) {
         }
     }
     var searchQuery by remember { mutableStateOf("") }
@@ -327,7 +336,12 @@ private fun LandscapeChannelSplitContent(viewModel: AppViewModel) {
         else displayChannels.filter { it.name.contains(searchQuery.trim(), ignoreCase = true) }
     }
 
-    Row(modifier = Modifier.fillMaxSize()) {
+    // onFocusChanged 只用于判断宫格区域是否已有焦点：用户在 600ms 内移走焦点时不再强行拽回第一张卡
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .onFocusChanged { gridTreeHasFocus = it.hasFocus }
+    ) {
         // ==================== 左列（约1/3）：宫格频道 ====================
         Column(
             modifier = Modifier

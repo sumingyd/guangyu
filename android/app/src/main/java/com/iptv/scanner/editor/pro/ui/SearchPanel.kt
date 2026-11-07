@@ -288,7 +288,8 @@ private fun SearchPanelAptv(viewModel: AppViewModel) {
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .tvTextField(),
                 shape = RoundedCornerShape(10.dp),
                 singleLine = true
             )

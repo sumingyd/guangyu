@@ -200,6 +200,8 @@ fun TvPlayerLayout(
     val channelNumDisplay by viewModel.channelNumDisplay.collectAsState()
     val osdShowTime by viewModel.osdShowTime.collectAsState()
     val osdShowNetSpeed by viewModel.osdShowNetSpeed.collectAsState()
+    // 面板是否打开：用于底栏焦点归还（面板关闭时重新把焦点落回底栏，见 TvBottomBar 的 grabFocus）
+    val anyPanelOpen by viewModel.anyPanelOpenFlow.collectAsState()
 
     val currentProgram = remember(currentEpg) {
         ProgressHelper.findCurrentProgram(currentEpg, System.currentTimeMillis())
@@ -313,7 +315,7 @@ fun TvPlayerLayout(
                     currentProgram = currentProgram,
                     epgList = currentEpg,
                     style = stylePreview ?: bottomBarStyle,
-                    grabFocus = stylePreview == null && !stylePickerOpen
+                    grabFocus = stylePreview == null && !stylePickerOpen && !anyPanelOpen
                 )
             }
         }
@@ -443,7 +445,8 @@ private fun TvBottomBar(
 ) {
     // 底栏呼出时把焦点落到播放/暂停键：DPAD 直接在底栏内移动焦点（Activity dispatchKeyEvent 已放行），
     // 不再需要 TAB 键临时导航。AnimatedVisibility 内每次呼出都是新组合，effect 重新执行。
-    // grabFocus=false（样式弹窗预览态）时跳过：预览底栏一旦抢焦点会破坏菜单面板的弹窗按键路由
+    // grabFocus=false（样式弹窗预览态 / 面板打开态）时跳过：面板打开时底栏一旦抢焦点会破坏面板按键路由；
+    // 面板关闭后 grabFocus 由 false 变回 true，effect 重新执行，把焦点从已关闭的面板归还到底栏。
     val barFocus = remember { FocusRequester() }
     LaunchedEffect(grabFocus) {
         if (grabFocus) {

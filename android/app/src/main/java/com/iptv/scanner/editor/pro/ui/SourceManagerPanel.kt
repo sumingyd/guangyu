@@ -464,14 +464,14 @@ private fun SourceItem(
                     value = editUrl, onValueChange = { editUrl = it },
                     label = { Text("URL") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().tvTextField()
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 OutlinedTextField(
                     value = editName, onValueChange = { editName = it },
                     label = { Text("名称") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().tvTextField()
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -540,14 +540,14 @@ private fun EpgSourceItem(
                     value = editUrl, onValueChange = { editUrl = it },
                     label = { Text("URL") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().tvTextField()
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 OutlinedTextField(
                     value = editName, onValueChange = { editName = it },
                     label = { Text("名称") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().tvTextField()
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

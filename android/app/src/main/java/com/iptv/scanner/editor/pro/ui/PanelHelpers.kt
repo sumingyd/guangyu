@@ -84,6 +84,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -94,12 +95,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -153,6 +157,23 @@ val aptvStyle = LocalAptvStyle.current
     val closeFocusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) {
         runCatching { closeFocusRequester.requestFocus() }
+    }
+    // 面板关闭后焦点会随面板节点一起从焦点树移除，遥控器焦点框直接消失。
+    // TV 内联弹窗与主界面同处一棵 Compose 焦点树，系统不会自动把焦点还给下层，
+    // 因此等本帧节点真正摘除后，把焦点交还给下层第一个可聚焦元素。
+    val focusManager = LocalFocusManager.current
+    val rootView = LocalView.current
+    DisposableEffect(Unit) {
+        onDispose {
+            rootView.post {
+                val moved = runCatching {
+                    focusManager.moveFocus(FocusDirection.Next)
+                }.getOrDefault(false)
+                if (!moved) {
+                    runCatching { focusManager.moveFocus(FocusDirection.Down) }
+                }
+            }
+        }
     }
     Surface(
         color = Color.Transparent,
