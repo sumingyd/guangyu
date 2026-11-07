@@ -210,6 +210,8 @@ lan_admin_log*.txt
 # 截图
 screen.png
 .screenshots/
+# 现场勘察临时产物：设备截图 + 控件树（可能含输入法联想词等隐私信息），禁止入库
+capture/
 
 # 配置文件
 *.ini
