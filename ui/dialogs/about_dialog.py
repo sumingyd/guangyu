@@ -248,21 +248,9 @@ class AboutDialog(FloatingDialog):
             pass
 
     def _is_newer_version(self, current_version, latest_version):
-        """比较版本号，判断最新版本是否比当前版本新"""
-        try:
-            current_parts = list(map(int, current_version.split('.')))
-            latest_parts = list(map(int, latest_version.split('.')))
-            max_length = max(len(current_parts), len(latest_parts))
-            current_parts.extend([0] * (max_length - len(current_parts)))
-            latest_parts.extend([0] * (max_length - len(latest_parts)))
-            for i in range(max_length):
-                if latest_parts[i] > current_parts[i]:
-                    return True
-                elif latest_parts[i] < current_parts[i]:
-                    return False
-            return False
-        except (ValueError, AttributeError):
-            return False
+        """比较版本号，判断最新版本是否比当前版本新（与主更新器共用同一实现）"""
+        from controllers.update_controller import is_newer_version
+        return is_newer_version(current_version, latest_version)
 
     def _on_update_clicked(self):
         """点击"在线更新"按钮"""

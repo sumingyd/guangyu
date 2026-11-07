@@ -123,6 +123,12 @@ jobs:
           }
           Move-Item "dist/GuangYu.exe" "dist/GuangYu-Windows-x86_64.exe" -Force
 
+      - name: Generate checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash "dist/GuangYu-Windows-x86_64.exe" -Algorithm SHA256).Hash.ToLower()
+          "$hash  GuangYu-Windows-x86_64.exe" | Out-File -Encoding ascii "dist/GuangYu-Windows-x86_64.exe.sha256"
+
       - name: Package libmpv fallback
         shell: pwsh
         run: |
@@ -141,6 +147,7 @@ jobs:
           tag_name: ${{ inputs.release_tag }}
           files: |
             dist/GuangYu-Windows-x86_64.exe
+            dist/GuangYu-Windows-x86_64.exe.sha256
             dist/libmpv-fallback-windows.zip
           fail_on_unmatched_files: true
           overwrite_files: true
@@ -227,11 +234,18 @@ jobs:
           cd dist
           zip -r "GuangYu-macOS-ARM64.zip" "GuangYu.app"
 
+      - name: Generate checksum
+        run: |
+          cd dist
+          shasum -a 256 "GuangYu-macOS-ARM64.zip" | awk '{print $1"  GuangYu-macOS-ARM64.zip"}' > "GuangYu-macOS-ARM64.zip.sha256"
+
       - name: Upload .app to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
-          files: dist/GuangYu-macOS-ARM64.zip
+          files: |
+            dist/GuangYu-macOS-ARM64.zip
+            dist/GuangYu-macOS-ARM64.zip.sha256
           fail_on_unmatched_files: true
           overwrite_files: true
         env:
@@ -309,11 +323,18 @@ jobs:
           cd dist
           tar czf "GuangYu-Linux-x86_64.tar.gz" "GuangYu" "icons" "GuangYu.desktop" "install.sh"
 
+      - name: Generate checksum
+        run: |
+          cd dist
+          sha256sum "GuangYu-Linux-x86_64.tar.gz" > "GuangYu-Linux-x86_64.tar.gz.sha256"
+
       - name: Upload executable to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
-          files: dist/GuangYu-Linux-x86_64.tar.gz
+          files: |
+            dist/GuangYu-Linux-x86_64.tar.gz
+            dist/GuangYu-Linux-x86_64.tar.gz.sha256
           fail_on_unmatched_files: true
           overwrite_files: true
         env:
@@ -410,11 +431,18 @@ jobs:
           cd dist
           tar czf "GuangYu-Linux-ARM64.tar.gz" "GuangYu" "icons" "GuangYu.desktop" "install.sh"
 
+      - name: Generate checksum
+        run: |
+          cd dist
+          sha256sum "GuangYu-Linux-ARM64.tar.gz" > "GuangYu-Linux-ARM64.tar.gz.sha256"
+
       - name: Upload executable to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
-          files: dist/GuangYu-Linux-ARM64.tar.gz
+          files: |
+            dist/GuangYu-Linux-ARM64.tar.gz
+            dist/GuangYu-Linux-ARM64.tar.gz.sha256
           fail_on_unmatched_files: true
           overwrite_files: true
         env:
