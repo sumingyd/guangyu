@@ -280,13 +280,8 @@ class EPGController:
             label.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
             self.window.epg_empty_action = None
         label.show()
-        label.adjustSize()
-        cw = self.window.epg_content.width()
-        ch = self.window.epg_content.height()
-        lw = label.width()
-        lh = label.height()
-        label.setGeometry((cw - lw) // 2, (ch - lh) // 2, lw, lh)
-        label.raise_()
+        # 定位交给 EmptyStateLabel 随列表尺寸自动居中，避免面板变宽后不重排
+        label.relayout()
 
     def populate_epg_list(self):
         """填充EPG列表"""
@@ -380,13 +375,7 @@ class EPGController:
                     self.window.epg_content.clear()
                     self.window.epg_content.show()
                     self.window.epg_empty_label.show()
-                    self.window.epg_empty_label.adjustSize()
-                    cw = self.window.epg_content.width()
-                    ch = self.window.epg_content.height()
-                    lw = self.window.epg_empty_label.width()
-                    lh = self.window.epg_empty_label.height()
-                    self.window.epg_empty_label.setGeometry((cw - lw) // 2, (ch - lh) // 2, lw, lh)
-                    self.window.epg_empty_label.raise_()
+                    self.window.epg_empty_label.relayout()
 
             tr = self.tr
 

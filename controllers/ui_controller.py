@@ -911,7 +911,7 @@ class UIController:
             if hasattr(self.window, 'epg_content'):
                 self.window.epg_content.setStyleSheet(AppStyles.player_list_style())
             if hasattr(self.window, 'epg_empty_label'):
-                self.window.epg_empty_label.setStyleSheet(AppStyles.player_empty_label_style())
+                self.window.epg_empty_label.refresh_style()
             if hasattr(self.window, 'sub_group_combo'):
                 self.window.sub_group_combo.setStyleSheet(AppStyles.player_group_combo_style())
             if hasattr(self.window, 'local_group_combo'):
@@ -935,7 +935,7 @@ class UIController:
             for empty_attr in ['sub_empty_label', 'local_empty_label', 'fav_empty_label', 'history_empty_label']:
                 el = getattr(self.window, empty_attr, None)
                 if el:
-                    el.setStyleSheet(AppStyles.player_empty_label_style())
+                    el.refresh_style()
             for search_attr in ['sub_search_input', 'local_search_input']:
                 si = getattr(self.window, search_attr, None)
                 if si:
@@ -1027,8 +1027,11 @@ class UIController:
 
             def _resolve_icon_name(attr_name):
                 if attr_name == 'play_button':
-                    is_paused = hasattr(self.window, 'player_controller') and getattr(self.window.player_controller, 'is_paused', False)
-                    return 'play' if is_paused else 'pause'
+                    pc = getattr(self.window, 'player_controller', None)
+                    return AppStyles.play_icon_name(
+                        getattr(pc, 'is_playing', False),
+                        getattr(pc, 'is_paused', False),
+                    )
                 if attr_name == 'volume_button':
                     vol = self.window.volume_slider.value() if hasattr(self.window, 'volume_slider') else 80
                     return 'volume_mute' if vol == 0 else ('volume_low' if vol < 50 else 'volume')

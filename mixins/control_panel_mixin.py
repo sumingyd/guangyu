@@ -249,7 +249,7 @@ class ControlPanelMixin:
         self.control_row.addWidget(self.prev_ch_button)
 
         self.play_button = QToolButton()
-        self.play_button.setIcon(QIcon(AppStyles.get_icon('play', btn_color)))  # type: ignore[arg-type]
+        self.play_button.setIcon(QIcon(AppStyles.get_icon(AppStyles.play_icon_name(False, False), btn_color)))  # type: ignore[arg-type]
         self.play_button.setIconSize(btn_icon_size)
         self.play_button.setFixedSize(btn_w, btn_h)
         self.play_button.setStyleSheet(AppStyles.player_button_style())

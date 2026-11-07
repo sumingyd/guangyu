@@ -99,7 +99,7 @@ class PlaybackController:
 
     def _reset_ui_to_initial_state(self):
         ui_elements = {
-            'play_button': ("play", "setIcon_name"),
+            'play_button': (AppStyles.play_icon_name(False, False), "setIcon_name"),
             'channel_name': ("no_channel_selected,No Channel Selected", "setText_tr"),
             'current_program': ("select_channel_to_play,Select a channel to play", "setText_tr"),
             'channel_logo': (None, "clear_pixmap"),
@@ -436,10 +436,13 @@ class PlaybackController:
         w = self.window
         tr = w.language_manager.tr
         btn_color = AppStyles.get_color('player_panel_text')
+        pc = getattr(w, 'player_controller', None)
+        # 图标与状态同源：只有在真正播放且未暂停时才显示暂停图标
+        play_icon = AppStyles.play_icon_name(is_playing, getattr(pc, 'is_paused', False))
+        play_icon_path = AppStyles.get_icon(play_icon, btn_color)
+        if play_icon_path:
+            w.play_button.setIcon(QIcon(play_icon_path))
         if is_playing:
-            pause_path = AppStyles.get_icon('pause', btn_color)
-            if pause_path:
-                w.play_button.setIcon(QIcon(pause_path))
             w.pip_ctrl._update_play_btn()
             w._cancel_source_timeout()
             for btn in ('stop_button', 'speed_button', 'aspect_button',
@@ -494,9 +497,6 @@ class PlaybackController:
             # END_FILE / stop / 暂停都会走到这里；源超时看门狗只在加载阶段有意义
             if hasattr(w, '_cancel_source_timeout'):
                 w._cancel_source_timeout()
-            play_path = AppStyles.get_icon('play', btn_color)
-            if play_path:
-                w.play_button.setIcon(QIcon(play_path))
             w.pip_ctrl._update_play_btn()
             if w.update_timer:
                 w.update_timer.stop()

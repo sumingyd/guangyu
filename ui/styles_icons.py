@@ -107,6 +107,16 @@ class StylesIcons(StylesBase):
         return cls._get_svg_image(cls._spindown_cache, f'spin_down_{color.lstrip("#")}', svg)
 
     @classmethod
+    def play_icon_name(cls, is_playing, is_paused) -> str:
+        """播放/暂停按钮图标的唯一取值口径。
+
+        图标表示"点击后执行的动作"：只有真正在播放（且未暂停）时显示暂停图标，
+        空闲 / 停止 / 暂停 / 未知状态一律显示播放图标。初始创建、播放状态同步、
+        主题重刷都从这里取值，避免各路径各写一份反向判断。
+        """
+        return 'pause' if (bool(is_playing) and not bool(is_paused)) else 'play'
+
+    @classmethod
     def get_icon(cls, name: str, color: Optional[str] = None, size: int = 16) -> str:
         if color is None:
             color = cls._get_colors().get('window_text', cls._safe_fallback('window_text'))

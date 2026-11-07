@@ -13,6 +13,7 @@ except ImportError:
 
 from core.log_manager import global_logger as logger
 from ui.styles import AppStyles
+from ui.empty_state import EmptyStateLabel
 from utils.delay_constants import DelayMs
 
 
@@ -96,10 +97,9 @@ class PlaylistPanelMixin:
         self.epg_content.customContextMenuRequested.connect(self._on_epg_context_menu)
         self.epg_layout.addWidget(self.epg_content, 1)
 
-        self.epg_empty_label = QLabel(tr("no_epg_data", "No program information"), self.epg_content)
-        self.epg_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.epg_empty_label.setStyleSheet(AppStyles.player_empty_label_style())
-        self.epg_empty_label.hide()
+        self.epg_empty_label = EmptyStateLabel(
+            self.epg_content, tr("no_epg_data", "No program information")
+        )
         # 空态 CTA：动作由 EPG 控制器按空态原因设置（无订阅源/无频道/无节目）
         self.epg_empty_action = 'open_playlist'
         self.epg_empty_label.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -325,10 +325,9 @@ class PlaylistPanelMixin:
         self.sub_channel_list.setToolTip(tr('sub_channel_list_tooltip', '订阅频道列表，双击播放，右键打开菜单'))
         sub_layout.addWidget(self.sub_channel_list, 1)
 
-        self.sub_empty_label = QLabel(tr("no_channels", "No channels"))
-        self.sub_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.sub_empty_label.setStyleSheet(AppStyles.player_empty_label_style())
-        sub_layout.addWidget(self.sub_empty_label)
+        self.sub_empty_label = EmptyStateLabel(
+            self.sub_channel_list, tr("no_channels", "No channels")
+        )
 
         return sub_tab
 
@@ -358,10 +357,9 @@ class PlaylistPanelMixin:
         self.local_channel_list.setToolTip(tr('local_channel_list_tooltip', '本地频道列表，双击播放，右键打开菜单'))
         local_layout.addWidget(self.local_channel_list, 1)
 
-        self.local_empty_label = QLabel(tr("no_channels", "No channels"))
-        self.local_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.local_empty_label.setStyleSheet(AppStyles.player_empty_label_style())
-        local_layout.addWidget(self.local_empty_label)
+        self.local_empty_label = EmptyStateLabel(
+            self.local_channel_list, tr("no_channels", "No channels")
+        )
 
         return local_tab
 
@@ -378,10 +376,9 @@ class PlaylistPanelMixin:
         self.fav_channel_list.setToolTip(tr('fav_channel_list_tooltip', '收藏频道列表，双击播放，右键管理收藏'))
         fav_layout.addWidget(self.fav_channel_list, 1)
 
-        self.fav_empty_label = QLabel(tr("no_favorites", "No favorites"))
-        self.fav_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.fav_empty_label.setStyleSheet(AppStyles.player_empty_label_style())
-        fav_layout.addWidget(self.fav_empty_label)
+        self.fav_empty_label = EmptyStateLabel(
+            self.fav_channel_list, tr("no_favorites", "No favorites")
+        )
 
         return fav_tab
 
@@ -398,10 +395,9 @@ class PlaylistPanelMixin:
         self.history_channel_list.setToolTip(tr('history_channel_list_tooltip', '播放历史列表，双击播放，右键管理历史'))
         history_layout.addWidget(self.history_channel_list, 1)
 
-        self.history_empty_label = QLabel(tr("no_history", "No play history"))
-        self.history_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.history_empty_label.setStyleSheet(AppStyles.player_empty_label_style())
-        history_layout.addWidget(self.history_empty_label)
+        self.history_empty_label = EmptyStateLabel(
+            self.history_channel_list, tr("no_history", "No play history")
+        )
 
         return history_tab
 

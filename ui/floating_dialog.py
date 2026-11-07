@@ -91,6 +91,8 @@ class _GlassSurfaceMixin:
         self._backdrop = None
         self._backdrop_offset = QtCore.QPoint(0, 0)
         self._capturing_backdrop = False
+        self._mask_key = None
+        self._dwm_blur_checked = False
         self._glass_timer = QtCore.QTimer(self)
         self._glass_timer.setSingleShot(True)
         self._glass_timer.setInterval(180)
@@ -113,15 +115,21 @@ class _GlassSurfaceMixin:
         return 168
 
     def _update_glass_mask(self):
+        """统一卡面圆角裁切：dock 与 dialog、玻璃与非玻璃风格使用同一套 mask。
+
+        非玻璃风格过去直接 clearMask()，矩形内部控件（列表/页签）会溢出卡面的
+        圆角，看起来就成了"直角实心块"；现在所有风格都按同一圆角裁切。
+        """
         from ui.styles import AppStyles
         try:
-            if not AppStyles.is_glass_style():
-                self.clearMask()
-                return
             size = self.size()
             if size.width() <= 0 or size.height() <= 0:
                 return
             corner_r = AppStyles._get_style_border_radius()
+            mask_key = (size.width(), size.height(), corner_r)
+            if mask_key == getattr(self, '_mask_key', None):
+                return
+            self._mask_key = mask_key
             bitmap = QBitmap(size)
             bitmap.fill(QtCore.Qt.GlobalColor.color0)
             p = QPainter(bitmap)
@@ -140,6 +148,7 @@ class _GlassSurfaceMixin:
         try:
             from ui.styles import AppStyles
             from utils.mac_blur_helper import MacBlurHelper
+            self._dwm_blur_checked = True
             if not self._glass_active():
                 self._dwm_blur_enabled = False
                 MacBlurHelper.remove(self)
@@ -165,22 +174,28 @@ class _GlassSurfaceMixin:
                 if self._dwm_blur_enabled:
                     self._disable_dwm_blur()
                 self._dwm_blur_enabled = False
-                self.clearMask()
+                self._dwm_blur_checked = True
+                self._update_glass_mask()
                 return
-            if self._dwm_blur_enabled:
+            if self._dwm_blur_enabled or self._dwm_blur_checked:
                 return
-            self._dwm_blur_enabled = True
+            # 只有系统真模糊设置成功才算启用；否则必须让 _capture_backdrop
+            # 走快照模糊兜底，避免"半透明纯色但没有任何模糊"的假玻璃。
+            blur_ok = False
             try:
                 hwnd = int(self.winId())
                 DWMWA_SYSTEMBACKDROP_TYPE = 38
                 DWMSBT_MAINVIEW = 2
                 value = ctypes.c_int(DWMSBT_MAINVIEW)
-                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
                     hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
                     ctypes.byref(value), ctypes.sizeof(value)
                 )
+                blur_ok = (result == 0)
             except Exception:
-                pass
+                blur_ok = False
+            self._dwm_blur_enabled = blur_ok
+            self._dwm_blur_checked = True
             self._update_glass_mask()
         except Exception:
             pass
@@ -248,7 +263,10 @@ class _GlassSurfaceMixin:
         self._cached_frosted_theme = None
         self._backdrop = None
         self._dwm_blur_enabled = False
+        self._mask_key = None
+        self._dwm_blur_checked = False
         self._try_enable_dwm_blur()
+        self._update_glass_mask()
         self._glass_timer.start()
         self.update()
 
@@ -336,13 +354,14 @@ class FloatingDockWidget(_GlassSurfaceMixin, QDockWidget):
             flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
             if self.parent() and (self.parent().windowFlags() & Qt.WindowType.WindowStaysOnTopHint):
                 flags |= Qt.WindowType.WindowStaysOnTopHint
-            from ui.styles import AppStyles
-            is_glass = AppStyles.is_glass_style()
-            if is_glass:
-                self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+            # dock 与 dialog 统一：始终透明底，卡面圆角由 _paint_card + mask 负责，
+            # 不再按玻璃/非玻璃分叉透明策略。
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
             self.setWindowFlags(flags)
-            if is_glass:
-                self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+            # 重建原生窗口会丢弃 mask，重置缓存以便 show() 重新裁切圆角
+            self._mask_key = None
+            self._dwm_blur_checked = False
             if is_linux():
                 self._set_transient_parent()
             self.show()
@@ -350,7 +369,10 @@ class FloatingDockWidget(_GlassSurfaceMixin, QDockWidget):
     def show(self):
         super().show()
         _hide_from_taskbar(self)
+        self._mask_key = None
+        self._dwm_blur_checked = False
         self._try_enable_dwm_blur()
+        self._update_glass_mask()
         if hasattr(self, '_glass_timer'):
             self._glass_timer.start()
 
@@ -767,23 +789,9 @@ class FloatingDialog(_GlassSurfaceMixin, QDialog):
         except Exception:
             pass
 
-    def _try_enable_macos_blur(self):
-        try:
-            from ui.styles import AppStyles
-            if AppStyles._visual_style != 'frosted':
-                if self._dwm_blur_enabled:
-                    self._dwm_blur_enabled = False
-                from utils.mac_blur_helper import MacBlurHelper
-                MacBlurHelper.remove(self)
-                return
-            if self._dwm_blur_enabled:
-                return
-            self._dwm_blur_enabled = True
-            from utils.mac_blur_helper import MacBlurHelper
-            if not MacBlurHelper.apply(self, material="menu"):
-                self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        except Exception:
-            pass
+    # 说明：macOS 模糊统一走 _GlassSurfaceMixin._try_enable_macos_blur。
+    # 这里曾有一份只认 frosted 的覆写，导致 dock 与 dialog 对 win11/mac/ios
+    # 三种玻璃风格解析不一致，已删除。
 
     def enterEvent(self, event):
         _notify_main_window_activity(self)
