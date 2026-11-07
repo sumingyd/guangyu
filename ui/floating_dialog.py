@@ -141,6 +141,10 @@ class _GlassSurfaceMixin:
             p.drawPath(path)
             p.end()
             self.setMask(bitmap)
+            # 实测：窗口尺寸变化后 setMask 会重建窗口区域，但不会触发重绘，
+            # 逐像素半透明的顶层窗口此时没有新的 layer 内容，会露出后面的视频，
+            # 表现为"卡面整块消失、只剩原始画面"。这里主动标脏整窗补一次绘制。
+            self.update()
         except Exception:
             pass
 
@@ -171,19 +175,24 @@ class _GlassSurfaceMixin:
             import ctypes
             from ui.styles import AppStyles
             if not self._glass_active():
-                if self._dwm_blur_enabled:
-                    self._disable_dwm_blur()
+                # 非玻璃风格同样要"确保关闭"，否则外部设过的 Mica 会一直留着。
+                self._disable_dwm_blur()
                 self._dwm_blur_enabled = False
                 self._dwm_blur_checked = True
                 self._update_glass_mask()
                 return
-            if self._dwm_blur_enabled or self._dwm_blur_checked:
+            if self._dwm_blur_checked and not self._dwm_blur_enabled:
                 return
             # Windows 上不再使用 DWMWA_SYSTEMBACKDROP_TYPE（Mica）。
             # 实测：Mica 启用后窗口背景变成基于壁纸的系统材质，是实心不透明的，
             # 窗后面的视频永远不会参与合成（红/蓝棋盘两点采样完全相同）；
             # 逐像素 alpha 本身是正常的（同一探针去掉 Mica 后两点分别透出红/蓝）。
             # 因此这里保持逐像素半透明，由 paintEvent 的卡片色叠到真实背景上。
+            #
+            # 注意：这里必须真正下发 DWMSBT_NONE，而不是只把 _dwm_blur_checked
+            # 置 True 就早退——Mica 可能已被外部（ThemeManager）设到同一个 hwnd 上，
+            # 只置标志位会让已有的 Mica 永久保留，面板就永远透不出视频。
+            self._disable_dwm_blur()
             self._dwm_blur_enabled = False
             self._dwm_blur_checked = True
             self._update_glass_mask()
@@ -200,16 +209,24 @@ class _GlassSurfaceMixin:
             return
         try:
             import ctypes
+            from core.log_manager import global_logger as logger
             hwnd = int(self.winId())
             DWMWA_SYSTEMBACKDROP_TYPE = 38
             DWMSBT_NONE = 1
             value = ctypes.c_int(DWMSBT_NONE)
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hr = ctypes.windll.dwmapi.DwmSetWindowAttribute(
                 hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
                 ctypes.byref(value), ctypes.sizeof(value)
             )
-        except Exception:
-            pass
+            logger.debug(
+                f"_disable_dwm_blur: backdrop=NONE hwnd={hwnd} hr=0x{hr & 0xffffffff:08X}"
+            )
+        except Exception as e:
+            try:
+                from core.log_manager import global_logger as logger
+                logger.debug(f"_disable_dwm_blur: {e}")
+            except Exception:
+                pass
 
     def _capture_backdrop(self):
         """抓取窗口背后区域的快照并模糊；只在没有系统模糊时使用。
@@ -287,6 +304,13 @@ class _GlassSurfaceMixin:
 
         r, g, b = _parse_hex_color(colors.get(self._bg_color_key, '#333333'))
         painter.fillPath(path, QColor(r, g, b, self._card_alpha()))
+
+        # 面板背后是任意亮度的视频画面，固定 51% 的深色卡面叠在亮画面（天空、白墙）
+        # 上时对比度会掉到 1~3:1，文字看起来"发虚"。Windows 上拿不到真实背景亮度，
+        # 所以统一补一层 25% 黑 scrim，把最坏情况的底色压暗，文字回到可读区间。
+        # 浅色主题不加，避免把浅色卡片压灰。
+        if glass and AppStyles._get_effective_color_mode() == 'dark':
+            painter.fillPath(path, QColor(0, 0, 0, 64))
 
         lr, lg, lb = _parse_hex_color(colors.get(self._border_color_key, '#646464'))
         if AppStyles.is_neumorphic():

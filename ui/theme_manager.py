@@ -135,7 +135,10 @@ class ThemeManager(Singleton, QtCore.QObject):
             if isinstance(window, QtWidgets.QMainWindow):
                 if is_glass:
                     window.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
-                    self._enable_dwm_blur(window)
+                    # 主窗口内含 mpv 的 wid 原生子窗口：系统材质（Mica）只采样壁纸，
+                    # 不参与窗后视频合成，且本身不透明。这里保留逐像素 alpha，
+                    # 但必须显式关闭系统材质，否则视频区永远被 Mica 挡住。
+                    self._disable_dwm_blur(window)
                 else:
                     window.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, False)
                     self._disable_dwm_blur(window)
@@ -155,10 +158,10 @@ class ThemeManager(Singleton, QtCore.QObject):
                         refresh = getattr(dock, 'refresh_glass_surface', None)
                         if callable(refresh):
                             refresh()
-                        if is_glass:
-                            self._enable_dwm_blur(dock)
-                        else:
-                            self._disable_dwm_blur(dock)
+                        # 悬浮面板是独立的逐像素 alpha 顶层窗口，由 DWM 把它叠在
+                        # mpv 原生子窗口表面之上。Mica 是不透明的壁纸材质，一旦
+                        # 叠上去就永远看不到视频，所以这里必须确保系统材质是关闭的。
+                        self._disable_dwm_blur(dock)
         except Exception as e:
             logger.error(f"设置窗口背景模糊失败: {e}")
 
@@ -179,20 +182,22 @@ class ThemeManager(Singleton, QtCore.QObject):
             try:
                 DWMWA_USE_IMMERSIVE_DARK_MODE = 20
                 dark = ctypes.c_int(1 if AppStyles._get_effective_color_mode() == 'dark' else 0)
-                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hr = ctypes.windll.dwmapi.DwmSetWindowAttribute(
                     hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
                     ctypes.byref(dark), ctypes.sizeof(dark)
                 )
+                logger.debug(f"_enable_dwm_blur: dark_mode={dark.value} hwnd={hwnd} hr=0x{hr & 0xffffffff:08X}")
             except Exception as e:
                 logger.debug(f"_enable_dwm_blur: {e}")
             try:
                 DWMWA_SYSTEMBACKDROP_TYPE = 38
                 DWMSBT_MAINVIEW = 2
                 value = ctypes.c_int(DWMSBT_MAINVIEW)
-                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hr = ctypes.windll.dwmapi.DwmSetWindowAttribute(
                     hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
                     ctypes.byref(value), ctypes.sizeof(value)
                 )
+                logger.debug(f"_enable_dwm_blur: backdrop=Mica hwnd={hwnd} hr=0x{hr & 0xffffffff:08X}")
             except Exception as e:
                 logger.debug(f"_enable_dwm_blur: {e}")
         except Exception as e:
@@ -214,10 +219,11 @@ class ThemeManager(Singleton, QtCore.QObject):
                 DWMWA_SYSTEMBACKDROP_TYPE = 38
                 DWMSBT_NONE = 1
                 value = ctypes.c_int(DWMSBT_NONE)
-                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hr = ctypes.windll.dwmapi.DwmSetWindowAttribute(
                     hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
                     ctypes.byref(value), ctypes.sizeof(value)
                 )
+                logger.debug(f"_disable_dwm_blur: backdrop=NONE hwnd={hwnd} hr=0x{hr & 0xffffffff:08X}")
             except Exception as e:
                 logger.debug(f"_disable_dwm_blur: {e}")
             try:

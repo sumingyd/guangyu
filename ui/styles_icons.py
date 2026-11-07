@@ -365,7 +365,7 @@ class StylesIcons(StylesBase):
             'player_panel_text': '#ffffff',
             'player_panel_secondary': '#aaaaaa',
             'player_panel_disabled': '#8a8a8a',
-            'player_panel_hint': '#9a9a9a',
+            'player_panel_hint': '#c8c8c8',
             'player_button': 'rgba(60, 60, 60, 0.9)',
             'player_combo': 'rgba(45, 45, 45, 0.8)',
             'player_line': '#555555',
