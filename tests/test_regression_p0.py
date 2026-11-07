@@ -209,3 +209,67 @@ class TestP0_2_DeadButtonCleanup:
         host._create_bottom_panel()
         assert not hasattr(host, 'pip_button'), \
             "pip_button should not be created (dead button removed in T1.2)"
+
+
+class TestBatch2PlaybackChain:
+    """批次二 PC 播放链修复的回归断言。"""
+
+    def test_set_track_no_uses_string_property(self):
+        """关闭字幕走字符串属性，不能因 int('no') 抛异常而被吞掉"""
+        from services.mpv_playback import MpvPlayback
+        facade = MagicMock()
+        facade._terminated = False
+        facade.mpv_handle = object()
+        facade.get_current_track.return_value = None
+        facade._set_mpv_string.return_value = 0
+
+        playback = MpvPlayback(facade)
+        assert playback.set_track('sub', 'no') is True
+        facade._set_mpv_string.assert_called_once_with('sub-track', 'no')
+
+    def test_source_timeout_uses_network_timeout(self):
+        """看门狗超时取真实网络超时配置"""
+        from controllers.playback_controller import PlaybackController
+        window = MockMainWindow()
+        window.player_controller._playback_settings = {'network_timeout_sec': 30}
+
+        ctrl = object.__new__(PlaybackController)
+        ctrl.window = window
+        assert ctrl._source_timeout_ms() == 30000
+
+    def test_source_timeout_falls_back_to_default(self):
+        """缺少网络超时配置时回退默认值"""
+        from controllers.playback_controller import PlaybackController
+        window = MockMainWindow()
+        window.player_controller._playback_settings = {}
+
+        ctrl = object.__new__(PlaybackController)
+        ctrl.window = window
+        assert ctrl._source_timeout_ms() == PlaybackController.SOURCE_TIMEOUT_MS
+
+    def test_subtitle_redownload_overwrites_existing_file(self, tmp_path):
+        """重复下载同一字幕时必须覆盖旧文件，且不残留临时文件"""
+        from services import subtitle_download_service as module
+
+        payload = b'1\n00:00:01,000 --> 00:00:02,000\nhello\n'
+        final_path = tmp_path / 'movie.srt'
+        final_path.write_bytes(b'old subtitle')
+
+        class _Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return payload
+
+        with patch.object(module, '_urlopen', return_value=_Response()):
+            service = module.SubtitleDownloadService()
+            result = service._download_opensubtitles(
+                'http://example.com/sub.gz', str(tmp_path), 'movie.srt')
+
+        assert result == str(final_path)
+        assert final_path.read_bytes() == payload
+        assert not (tmp_path / 'movie.srt.gz').exists()

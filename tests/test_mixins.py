@@ -526,11 +526,12 @@ class TestPlaybackMixin:
         self.host.play_channel(ch)
         self.host.playback_ctrl.play_channel.assert_called_once_with(ch)
 
-    def test_play_channel_switching(self):
+    def test_play_channel_during_switching_delegates_to_controller(self):
+        # 入口不再拦截切换窗口内的请求，统一交给控制器排队（最后一次请求生效）
         self.host.playback_ctrl._is_switching = True
         ch = {'name': 'ch1', 'url': 'http://x.com'}
         self.host.play_channel(ch)
-        self.host.playback_ctrl.play_channel.assert_not_called()
+        self.host.playback_ctrl.play_channel.assert_called_once_with(ch)
 
     def test_on_play_error(self):
         self.host.on_play_error("test error")

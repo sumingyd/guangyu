@@ -1029,6 +1029,7 @@
   "raw_name": "Raw Name",
   "raw_name_placeholder": "Enter raw channel name",
   "ready": "Ready",
+  "reconnect_failed": "Reconnect failed. Check your network or switch channel",
   "reconnecting": "Reconnecting",
   "redo": "Redo",
   "referer": "Referer",

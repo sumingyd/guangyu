@@ -448,8 +448,8 @@ class SubtitleDownloadService:
                     out.write(gz.read())
                 os.remove(tmp_path)
             except Exception:
-                # 若不是 gzip，直接重命名
-                os.rename(tmp_path, final_path)
+                # 若不是 gzip，原子替换（Windows 上 os.rename 目标已存在会失败）
+                os.replace(tmp_path, final_path)
             return final_path
         except Exception as e:
             self.last_error = f'下载字幕失败: {type(e).__name__}: {e}'

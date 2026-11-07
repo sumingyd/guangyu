@@ -12,7 +12,7 @@ from utils.delay_constants import DelayMs
 
 class PlaybackController:
 
-    # loadfile 之后等待 FILE_LOADED 的最长时间，超时判定为该源拉流失败
+    # loadfile 之后等待 FILE_LOADED 的兜底超时；优先取播放设置中的真实网络超时
     SOURCE_TIMEOUT_MS = 10000
 
     def __init__(self, main_window: MainWindowProtocol):
@@ -290,7 +290,7 @@ class PlaybackController:
 
         self.current_channel = channel
         self.window.play_state.set_live()
-        # loadfile 后启动看门狗：10 秒内没有 FILE_LOADED 即判定拉流失败
+        # loadfile 后启动看门狗：超过网络超时仍未 FILE_LOADED 即判定拉流失败
         self._start_source_timeout(channel)
 
         # 重置媒体信息缓存，确保新频道的媒体信息和质量评分被重新计算
@@ -299,6 +299,19 @@ class PlaybackController:
         self.window._last_media_info = {}
 
         self._prefetch_adjacent_channels(channel)
+
+    def _source_timeout_ms(self) -> int:
+        """看门狗超时与真实网络超时保持一致，未配置时回退默认值。"""
+        try:
+            settings = getattr(
+                getattr(self.window, 'player_controller', None),
+                '_playback_settings', None) or {}
+            net_to = float(settings.get('network_timeout_sec', 0) or 0)
+            if net_to > 0:
+                return int(net_to * 1000)
+        except (TypeError, ValueError):
+            pass
+        return self.SOURCE_TIMEOUT_MS
 
     def _start_source_timeout(self, channel: Dict[str, Any]):
         """loadfile 后启动源超时看门狗（FILE_LOADED / END_FILE / stop 时取消）。"""
@@ -319,7 +332,7 @@ class PlaybackController:
             except (RuntimeError, TypeError):
                 pass
         timer.timeout.connect(lambda ch=channel: w._on_source_timeout(ch))
-        timer.start(self.SOURCE_TIMEOUT_MS)
+        timer.start(self._source_timeout_ms())
 
     def _exit_catchup_mode(self):
         catchup_ctrl = getattr(self.window, 'catchup_ctrl', None)

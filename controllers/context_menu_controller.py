@@ -326,10 +326,15 @@ class ContextMenuController:
         if not pc:
             return
         if track_id == 0:
-            pc.set_track('sub', 'no')
+            tr = self._facade.window.language_manager.tr
+            # 关闭字幕也必须确认 mpv 真正执行成功，不能无条件勾选并提示成功
+            if not pc.set_track('sub', 'no'):
+                osd_text = tr('osd_sub_track_failed', 'Subtitle track switch failed')
+                if hasattr(self._facade.window, '_show_osd_feedback'):
+                    self._facade.window._show_osd_feedback(osd_text)
+                return
             for act, tid, _ in actions:
                 act.setChecked(tid == 0)
-            tr = self._facade.window.language_manager.tr
             osd_text = tr('osd_subtitle_track', 'Subtitle: {}').format(label)
             if hasattr(self._facade.window, '_show_osd_feedback'):
                 self._facade.window._show_osd_feedback(osd_text)

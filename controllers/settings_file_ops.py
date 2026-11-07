@@ -885,7 +885,8 @@ class SettingsFileOperations:
                     # HDR 变化需要重新初始化 mpv（会中断当前播放并恢复）
                     if old_hdr != new_hdr and hasattr(pc, 'reinit_for_hdr_change'):
                         pc.reinit_for_hdr_change(new_hdr)
-                        return
+                        # HDR 重建完成后继续应用同一次保存中的其余运行时参数，
+                        # 不能提前返回导致后者被静默跳过
 
                     # 即时应用可运行时修改的参数（无需重启 mpv）
                     self._apply_runtime_playback_params(pc, old_playback, new_playback)

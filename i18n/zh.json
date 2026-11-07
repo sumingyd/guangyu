@@ -1029,6 +1029,7 @@
   "raw_name": "原始名称",
   "raw_name_placeholder": "输入原始频道名称",
   "ready": "就绪",
+  "reconnect_failed": "重连失败，请检查网络或更换频道",
   "reconnecting": "重连中",
   "redo": "重做",
   "referer": "Referer",

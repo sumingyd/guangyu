@@ -39,8 +39,7 @@ class PlaybackMixin:
             self.player_controller.show_osd(text, 2000)
 
     def play_channel(self, channel):
-        if self.playback_ctrl._is_switching:
-            return
+        # 快速连点换台不在这里拦截：切换窗口内的请求由控制器排队，最后一次请求生效
         self.playback_ctrl.play_channel(channel)
         if channel and channel.get('url'):
             self.favorites_ctrl.on_channel_played(channel)

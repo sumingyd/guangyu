@@ -14,6 +14,8 @@ class CatchupController:
     }
 
     URL_REBUILD_COOLDOWN = 3.0
+    # 节目结束时间距"现在"不超过该阈值即视为已追到直播边缘
+    LIVE_EDGE_TOLERANCE_SECONDS = 30
 
     def __init__(self, main_window: MainWindowProtocol):
         self.window: MainWindowProtocol = main_window
@@ -385,7 +387,8 @@ class CatchupController:
             if hasattr(self.window, 'update_channel_info_on_selection'):
                 self.window.update_channel_info_on_selection()
 
-        self._clear_catchup_state()
+        # 退出回看后已切回直播，不能清成空闲态，否则播放中按暂停会禁用整排控制按钮
+        self._clear_catchup_state(set_state='live')
 
     def show_exit_timeshift_button(self):
 
@@ -422,7 +425,8 @@ class CatchupController:
             if url:
                 self.window.player_controller.play(url, channel_name)
 
-        self._clear_catchup_state()
+        # 退出时移后已切回直播，保持直播态而非空闲态
+        self._clear_catchup_state(set_state='live')
 
     def _set_progress_value(self, seconds):
         if hasattr(self.window, '_set_progress_value'):
@@ -744,6 +748,20 @@ class CatchupController:
         now = datetime.now()
         channel_name = self.original_channel.get('name', '')
 
+        # 时移进度会持续把节目结束时间推进到"现在"。EOF 时若已贴近直播边缘，
+        # 再拼回看 URL 只会得到起止时间都在未来的窗口，直接回直播。
+        if program_end >= now - timedelta(seconds=self.LIVE_EDGE_TOLERANCE_SECONDS):
+            logger.info(f"时移/回看已追到直播边缘，切回直播: {channel_name}")
+            live_channel = self.original_channel
+            self._clear_catchup_state(set_state='live')
+            w._pending_catchup_progress = None
+            w.current_channel = live_channel
+            if hasattr(w, 'play_channel'):
+                w.play_channel(live_channel)
+            elif w.player_controller and live_channel.get('url'):
+                w.player_controller.play(live_channel.get('url', ''), channel_name)
+            return
+
         next_program = None
         try:
             ch_name, tvg_id, tvg_name, comma_name = w._get_epg_match_params()
@@ -758,6 +776,15 @@ class CatchupController:
                     continue
         except Exception as ex:
             logger.warning(f"获取下一节目失败: {ex}")
+
+        # 尚未开播的节目不能作为回看窗口（起止时间会落在未来），退回当前节目续播
+        if next_program:
+            try:
+                if datetime.fromisoformat(next_program['start']) >= now:
+                    logger.info("下一节目尚未开播，改用当前节目位置续播")
+                    next_program = None
+            except (ValueError, KeyError):
+                next_program = None
 
         if next_program:
             next_start = datetime.fromisoformat(next_program['start'])
