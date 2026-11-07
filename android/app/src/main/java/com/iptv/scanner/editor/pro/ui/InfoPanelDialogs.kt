@@ -181,15 +181,16 @@ import java.io.File
 internal fun OsdView(
     title: String,
     subtitle: String,
-    extra: String
+    extra: String,
+    modifier: Modifier = Modifier
+        .statusBarsPadding()
+        .padding(top = 48.dp)
+        .padding(horizontal = 16.dp)
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
         shape = RoundedCornerShape(8.dp),
-        modifier = Modifier
-            .statusBarsPadding()
-            .padding(top = 48.dp)
-            .padding(horizontal = 16.dp)
+        modifier = modifier
     ) {
         Column(
             modifier = Modifier

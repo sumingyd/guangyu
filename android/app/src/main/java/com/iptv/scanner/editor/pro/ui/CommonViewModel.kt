@@ -744,9 +744,24 @@ internal fun AppViewModel.stopBurstScreenshot() {
     showOsd("连拍截图", "已停止（已拍 ${_burstCount.value} 张）")
 }
 
+/** 是否处于「没有任何频道」状态：后端无频道且本地列表为空、且不在加载订阅源 */
+internal fun AppViewModel.isZeroChannelState(): Boolean {
+    val status = _iptvStatus.value ?: return false
+    return status.inited && !status.sourceLoading && status.channelsTotal == 0 && _channels.value.isEmpty()
+}
+
+/** 零频道播放页按 OK：直接打开订阅源管理面板，并把初始焦点放到 URL 输入框 */
+internal fun AppViewModel.openSourceManagerForAdd() {
+    if (!_sourceManagerOpen.value) toggleSourceManager()
+    // toggleSourceManager 打开时会重置为默认焦点，这里再置为直达 URL 输入框
+    _sourceManagerFocusUrl.value = true
+}
+
 internal fun AppViewModel.toggleSourceManager() {
     _sourceManagerOpen.value = !_sourceManagerOpen.value
     if (_sourceManagerOpen.value) {
+        // 普通入口（统一面板等）保持默认初始焦点
+        _sourceManagerFocusUrl.value = false
         loadSources()
         loadEpgSources()
         // 刷新频道列表：用户可能通过局域网管理页面在电脑端添加了订阅源，
@@ -754,7 +769,9 @@ internal fun AppViewModel.toggleSourceManager() {
         loadChannels()
         refreshAdminServerStatus()
     } else {
-        // 关闭面板时自动显示控制层
+        // 关闭面板时自动显示控制层；并清掉「直达 URL 输入框」标记，
+        // 避免下次从统一面板进入时继承该初始焦点
+        _sourceManagerFocusUrl.value = false
         showControlsAutoHide()
     }
 }

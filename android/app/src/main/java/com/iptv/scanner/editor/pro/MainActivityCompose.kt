@@ -424,6 +424,13 @@ class MainActivityCompose : ComponentActivity() {
                     }
                     // 统一侧边栏仅全屏播放页可呼出；分屏模式 OK 键交给 Compose 焦点系统
                     if (!viewModel.anyPanelOpen && isFullscreenPlayback()) {
+                        // 零频道：OK 直达订阅源管理面板（初始焦点在 URL 输入框），
+                        // 免去先进统一面板再逐项导航；有频道时行为保持不变
+                        if (viewModel.isZeroChannelState()) {
+                            viewModel.openSourceManagerForAdd()
+                            Log.i(TAG, "dispatchKeyEvent: zero-channel DPAD_CENTER open source manager")
+                            return true
+                        }
                         viewModel.setLandscapeSidebarVisible(true)
                         Log.i(TAG, "dispatchKeyEvent: DPAD_CENTER open sidebar")
                         return true

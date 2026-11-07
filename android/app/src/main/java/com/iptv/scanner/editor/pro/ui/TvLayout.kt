@@ -203,6 +203,12 @@ fun TvPlayerLayout(
     // 面板是否打开：用于底栏焦点归还（面板关闭时重新把焦点落回底栏，见 TvBottomBar 的 grabFocus）
     val anyPanelOpen by viewModel.anyPanelOpenFlow.collectAsState()
 
+    // 零频道提示条件：后端无频道、本地频道列表为空、且不在加载订阅源
+    val iptvStatusHint by viewModel.iptvStatus.collectAsState()
+    val allChannels by viewModel.channels.collectAsState()
+    val zeroChannels = iptvStatusHint?.let { it.inited && !it.sourceLoading && it.channelsTotal == 0 } == true &&
+        allChannels.isEmpty()
+
     val currentProgram = remember(currentEpg) {
         ProgressHelper.findCurrentProgram(currentEpg, System.currentTimeMillis())
     }
@@ -316,6 +322,18 @@ fun TvPlayerLayout(
                     epgList = currentEpg,
                     style = stylePreview ?: bottomBarStyle,
                     grabFocus = stylePreview == null && !stylePickerOpen && !anyPanelOpen
+                )
+            }
+        }
+
+        // 零频道提示：无频道且无面板打开时，在播放页中央提示添加订阅源（沿用 OSD 卡片样式）
+        if (zeroChannels && !anyPanelOpen) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                OsdView(
+                    title = "还没有频道",
+                    subtitle = "按 OK 添加订阅源",
+                    extra = "",
+                    modifier = Modifier
                 )
             }
         }

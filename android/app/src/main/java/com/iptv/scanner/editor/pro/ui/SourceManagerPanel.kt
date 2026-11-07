@@ -81,7 +81,7 @@ import com.iptv.scanner.editor.pro.ui.theme.tvTextField
  * - 重载后自动轮询加载状态，完成后刷新频道列表
  */
 @Composable
-fun SourceManagerPanel(viewModel: AppViewModel) {
+fun SourceManagerPanel(viewModel: AppViewModel, focusUrlInput: Boolean = false) {
     if (LocalAptvStyle.current) {
         SourceManagerPanelAptv(viewModel)
         return
@@ -102,10 +102,14 @@ fun SourceManagerPanel(viewModel: AppViewModel) {
         if (adminRunning) showQrCode = true
     }
 
-    // 面板打开时主动抢焦点，避免焦点回落到下层统一面板的菜单项
+    // 面板打开时主动抢焦点，避免焦点回落到下层统一面板的菜单项。
+    // 默认落到右上关闭按钮；focusUrlInput=true（零频道播放页直达）时落到 URL 输入框
     val closeFocusRequester = remember { FocusRequester() }
+    val urlFocusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) {
-        runCatching { closeFocusRequester.requestFocus() }
+        runCatching {
+            if (focusUrlInput) urlFocusRequester.requestFocus() else closeFocusRequester.requestFocus()
+        }
     }
 
     Surface(
@@ -293,13 +297,15 @@ fun SourceManagerPanel(viewModel: AppViewModel) {
                 SourceTab.PLAYLIST -> {
                     AddSourceRow(
                         placeholder = "输入 M3U 订阅源 URL",
-                        onAdd = { url, name -> viewModel.addSource(url, name) }
+                        onAdd = { url, name -> viewModel.addSource(url, name) },
+                        urlFocusRequester = urlFocusRequester
                     )
                 }
                 SourceTab.EPG -> {
                     AddSourceRow(
                         placeholder = "输入 EPG 订阅源 URL（XMLTV）",
-                        onAdd = { url, name -> viewModel.addEpgSource(url, name) }
+                        onAdd = { url, name -> viewModel.addEpgSource(url, name) },
+                        urlFocusRequester = urlFocusRequester
                     )
                 }
             }
@@ -357,7 +363,11 @@ fun SourceManagerPanel(viewModel: AppViewModel) {
  * 添加订阅源输入行
  */
 @Composable
-private fun AddSourceRow(placeholder: String, onAdd: (url: String, name: String) -> Unit) {
+private fun AddSourceRow(
+    placeholder: String,
+    onAdd: (url: String, name: String) -> Unit,
+    urlFocusRequester: FocusRequester? = null
+) {
     var url by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
 
@@ -369,7 +379,9 @@ private fun AddSourceRow(placeholder: String, onAdd: (url: String, name: String)
             value = url,
             onValueChange = { url = it },
             placeholder = { Text(placeholder, color = MaterialTheme.colorScheme.onSurfaceVariant) },
-            modifier = Modifier.fillMaxWidth().tvTextField(),
+            modifier = Modifier.fillMaxWidth().tvTextField().then(
+                if (urlFocusRequester != null) Modifier.focusRequester(urlFocusRequester) else Modifier
+            ),
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
             shape = RoundedCornerShape(8.dp)

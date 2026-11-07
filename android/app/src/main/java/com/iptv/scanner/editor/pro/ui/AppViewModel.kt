@@ -490,6 +490,10 @@ internal var switchPlayJob: Job? = null
     internal val _sourceManagerOpen = MutableStateFlow(false)
     val sourceManagerOpen: StateFlow<Boolean> = _sourceManagerOpen.asStateFlow()
 
+    /** 订阅源管理面板初始焦点是否直接落到 URL 输入框（仅零频道播放页直达时为 true） */
+    internal val _sourceManagerFocusUrl = MutableStateFlow(false)
+    val sourceManagerFocusUrl: StateFlow<Boolean> = _sourceManagerFocusUrl.asStateFlow()
+
     // EPG 订阅源
     internal val _epgSources = MutableStateFlow<List<IptvEpgSource>>(emptyList())
     val epgSources: StateFlow<List<IptvEpgSource>> = _epgSources.asStateFlow()

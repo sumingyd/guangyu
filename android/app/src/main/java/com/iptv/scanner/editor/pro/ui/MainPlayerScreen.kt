@@ -238,6 +238,8 @@ fun MainPlayerScreen(viewModel: AppViewModel) {
     val updateDialogOpen by viewModel.updateDialogOpen.collectAsState()
     val triggeredReminder by viewModel.triggeredReminder.collectAsState()
     val osd by viewModel.osd.collectAsState()
+    // 零频道播放页直达订阅源管理时，让面板初始焦点落到 URL 输入框
+    val sourceManagerFocusUrl by viewModel.sourceManagerFocusUrl.collectAsState()
 
     val player = viewModel.mpv  // 当前 Player 实例（类型为 Player 接口）
     val paused by player.paused.collectAsState()
@@ -1069,7 +1071,7 @@ viewModel.mpv.setMute(savedMute)
         // 订阅源管理
         if (sourceManagerOpen) {
             PortraitPanelDialog(onDismiss = { viewModel.toggleSourceManager() }) {
-                SourceManagerPanel(viewModel = viewModel)
+                SourceManagerPanel(viewModel = viewModel, focusUrlInput = sourceManagerFocusUrl)
             }
         }
 

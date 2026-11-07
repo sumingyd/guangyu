@@ -964,6 +964,7 @@ internal fun AppViewModel.resetAllPanelStates() {
         _tvUnifiedPanelOpen.value = false
         _fileBrowserOpen.value = false
         _sourceManagerOpen.value = false
+        _sourceManagerFocusUrl.value = false
         _playerSettingsOpen.value = false
         _videoSettingsOpen.value = false
         _audioSettingsOpen.value = false
