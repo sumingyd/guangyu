@@ -36,6 +36,13 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
     var pendingEndFileError: Runnable? = null
 
     fun playFile(url: String) {
+        // 核心已终止（shutdown 后无法重建）：不再静默 return，
+        // 交给上层向界面暴露错误并降级到备用内核
+        if (host.isCoreDead()) {
+            Log.e(TAG, "playFile: mpv core is dead, cannot load $url")
+            host.notifyPlaybackUnavailable()
+            return
+        }
         pendingEndFileError?.let { host.getMpvView()?.asView()?.removeCallbacks(it) }
         pendingEndFileError = null
         loadingUrl = url
@@ -93,8 +100,12 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
         }
     }
 
-    fun stop() = host.postOnUiThread {
-        host.getMpvView()?.stop()
+    fun stop() {
+        // 停止播放时清理切换标志，否则下次换台失败时错误会被永久抑制
+        clearSwitchingState()
+        host.postOnUiThread {
+            host.getMpvView()?.stop()
+        }
     }
 
     fun togglePause() = host.postOnUiThread { MPVLib.command(arrayOf("cycle", "pause")) }
@@ -142,8 +153,22 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
         }
     }
 
-    fun addSubtitleFile(path: String) =
+    /**
+     * 加载外挂字幕。
+     * @return false 表示核心不可用或当前没有加载文件，此时 sub-add 不会生效，调用方不得谎报成功
+     */
+    fun addSubtitleFile(path: String): Boolean {
+        if (host.isCoreDead()) {
+            Log.w(TAG, "addSubtitleFile: mpv core is dead, skip sub-add $path")
+            return false
+        }
+        if (!host.isFileLoaded()) {
+            Log.w(TAG, "addSubtitleFile: no file loaded, skip sub-add $path")
+            return false
+        }
         host.postOnUiThread { MPVLib.command(arrayOf("sub-add", path, "select")) }
+        return true
+    }
 
     fun setChapter(idx: Int): Boolean {
         host.postOnUiThread {
@@ -228,6 +253,19 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
     /** 由 event() 在 END_FILE 事件中调用 */
     fun onEndFile() {
         loadingUrl = ""
+    }
+
+    /**
+     * 清理换台/加载态标志。
+     *
+     * 换台失败时 END_FILE 不会走到 FILE_LOADED，如果不显式清理，
+     * switchingChannel 会永久为 true，导致后续所有错误回调被当作
+     * 「换台中」静默吞掉，只能等超时换源。
+     */
+    fun clearSwitchingState() {
+        switchingChannel = false
+        loadingUrl = ""
+        pendingLoadUrl = ""
     }
 
     private fun setupProtocolOptions(url: String) {

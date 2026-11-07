@@ -77,6 +77,9 @@ interface BasicPlayer {
     val muted: StateFlow<Boolean>
     val mediaTitle: StateFlow<String>
     val trackListJson: StateFlow<String>
+
+    /** 播放器内核是否已不可用（mpv 核心终止等，需上层提示并降级到其他内核） */
+    fun isCoreDead(): Boolean = false
     val eofReached: StateFlow<Boolean>
     val fileLoaded: StateFlow<Boolean>
     val videoWidth: StateFlow<Int>
@@ -105,7 +108,11 @@ interface BasicPlayer {
     fun cycleSub()
     fun setAudioTrack(id: Int)
     fun setSubTrack(id: Int)
-    fun addSubtitleFile(path: String)
+    /**
+     * 加载外挂字幕文件。
+     * @return true 表示命令已成功提交给播放器；false 表示播放器不可用/未在播放，调用方不得提示「已加载」
+     */
+    fun addSubtitleFile(path: String): Boolean
     fun setSubVisibility(v: Boolean)
     fun toggleSubVisibility()
     fun setSubDelay(delaySec: Double)

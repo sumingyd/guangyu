@@ -82,13 +82,23 @@ android {
         ?: localProps.getProperty('keystorePassword') ?: ''
     def keyPwd = System.getenv('KEY_PASSWORD')
         ?: localProps.getProperty('keyPassword') ?: ''
+    // release 任务缺少签名材料时必须阻断，不能静默产出未签名（无法安装/无法覆盖升级）的包
+    def releaseTaskRequested = gradle.startParameter.taskNames.any {
+        it.toLowerCase().contains('release')
+    }
+    if (!keystorePwd || !keyPwd) {
+        if (releaseTaskRequested) {
+            throw new GradleException(
+                "release 构建缺少签名密钥密码：请配置环境变量 KEYSTORE_PASSWORD/KEY_PASSWORD，" +
+                "或在 local.properties 中设置 keystorePassword/keyPassword；" +
+                "未签名 release 包无法安装，构建已中止")
+        }
+        logger.warn("未配置 KEYSTORE_PASSWORD/KEY_PASSWORD，非 release 构建不受影响")
+    }
     if (keystorePwd && keyPwd && !file('release.keystore').exists()) {
         throw new GradleException(
             "release.keystore 不存在，无法签名 release 包；" +
             "请把密钥材料从 CI secret 还原到 android/app/release.keystore")
-    }
-    if (!keystorePwd || !keyPwd) {
-        logger.warn("未配置 KEYSTORE_PASSWORD/KEY_PASSWORD，release 产物将不会被签名")
     }
     signingConfigs {
         release {
@@ -291,6 +301,30 @@ tasks.register('checkRuntimeAssets') {
         def abiDirs = jniLibsDir.exists() ? (jniLibsDir.listFiles() ?: []).findAll { it.isDirectory() } : []
         if (abiDirs.isEmpty()) {
             throw new GradleException("jniLibs 为空: ${jniLibsDir}，请先运行 python android/extract_mpv_native.py")
+        }
+        // 只检查「存在任意 ABI 目录」不够：目标 ABI 目录可能存在但没有 native 库，
+        // 打包出来的 APK 装上去直接无法播放。这里按目标 ABI 逐个校验必需库。
+        def requiredLibs = ['libmpv.so', 'libplayer.so']
+        def targetAbiProp = project.findProperty('targetAbi')
+        if (targetAbiProp != null) {
+            targetAbiProp.split(',').each { abi ->
+                def abiName = abi.trim()
+                requiredLibs.each { lib ->
+                    def libFile = new File(jniLibsDir, "${abiName}/${lib}")
+                    if (!libFile.exists()) {
+                        throw new GradleException("目标 ABI ${abiName} 缺少 ${lib}: ${libFile}，" +
+                            "该 APK 安装后播放器不可用；请重新运行 python android/extract_mpv_native.py 或检查构建产物")
+                    }
+                }
+            }
+        } else {
+            def hasUsableAbi = ['arm64-v8a', 'armeabi-v7a'].any { abi ->
+                requiredLibs.every { lib -> new File(jniLibsDir, "${abi}/${lib}").exists() }
+            }
+            if (!hasUsableAbi) {
+                throw new GradleException("arm64-v8a / armeabi-v7a 均缺少 libmpv.so 或 libplayer.so，" +
+                    "通用包安装后播放器不可用；请先运行 python android/extract_mpv_native.py")
+            }
         }
         def modelFile = file('src/main/assets/model.bin')
         if (!modelFile.exists()) {

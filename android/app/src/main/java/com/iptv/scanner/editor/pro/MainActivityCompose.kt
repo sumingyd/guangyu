@@ -966,11 +966,18 @@ class MainActivityCompose : ComponentActivity() {
         } catch (e: Throwable) {
             Log.w(TAG, "MpvController cleanup failed: ${e.message}")
         }
-        // 标记正常退出（NativeCrashLogger 据此判断下次启动是否需要保存崩溃日志）
-        try {
-            NativeCrashLogger.markCleanExit(application)
-        } catch (e: Throwable) {
-            Log.w(TAG, "NativeCrashLogger markCleanExit failed: ${e.message}")
+        // 标记正常退出（NativeCrashLogger 据此判断下次启动是否需要保存崩溃日志）。
+        // 仅当 Activity 真正结束且不是配置变化时才标记：深浅色/语言/字体缩放/密度变化
+        // 也会走到 onDestroy，但进程仍然存活，此时标记会让同进程内后续的 native 崩溃永久漏报。
+        if (isFinishing && !isChangingConfigurations) {
+            try {
+                NativeCrashLogger.markCleanExit(application)
+            } catch (e: Throwable) {
+                Log.w(TAG, "NativeCrashLogger markCleanExit failed: ${e.message}")
+            }
+        } else {
+            Log.i(TAG, "onDestroy: skip markCleanExit (isFinishing=$isFinishing, " +
+                "isChangingConfigurations=$isChangingConfigurations)")
         }
         Log.i(TAG, "onDestroy")
     }

@@ -19,6 +19,17 @@ class MpvInstanceState {
     @Volatile
     var nativeHandleCreated: Boolean = false
 
+    /**
+     * mpv 核心已因 MPV_EVENT_SHUTDOWN 终止（进程内不可恢复）。
+     *
+     * 与 [nativeHandleCreated] 的区别：句柄对象仍然存在（JNI 侧未释放），
+     * 但核心已经 terminate，任何 setOptionString/init 调用都会在已终止的
+     * 句柄上执行并触发 native 崩溃。此标记置位后禁止再次初始化，
+     * 由上层降级到备用内核。
+     */
+    @Volatile
+    var nativeCoreDead: Boolean = false
+
     @Volatile
     var activeGeneration: Int = 0
 

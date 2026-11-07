@@ -30,11 +30,24 @@ class PlayerSettingsStore(
     }
 
     /** 获取持久化的 hwdec 模式，未持久化时按设备类型给默认值 */
-    fun getHwdec(): String =
-        prefs.getString(KEY_HWDEC, null)?.takeIf { it.isNotEmpty() } ?: defaultHwdec()
+    fun getHwdec(): String {
+        // 设备黑名单：上次会话开启硬解时进程异常退出（native 崩溃），
+        // 本次会话强制软解，避免再次走到同一条 MediaCodec teardown 崩溃路径。
+        if (isHwdecBlacklisted()) return HWDEC_SOFTWARE
+        return prefs.getString(KEY_HWDEC, null)?.takeIf { it.isNotEmpty() } ?: defaultHwdec()
+    }
 
     fun setHwdec(hwdec: String) {
+        // 用户显式选择硬解即视为认可该设置，解除崩溃黑名单
+        if (hwdec != HWDEC_SOFTWARE) setHwdecBlacklisted(false)
         prefs.edit().putString(KEY_HWDEC, hwdec).apply()
+    }
+
+    /** 是否处于「硬解导致崩溃」的设备黑名单（强制软解） */
+    fun isHwdecBlacklisted(): Boolean = prefs.getBoolean(KEY_HWDEC_CRASH_BLACKLIST, false)
+
+    fun setHwdecBlacklisted(blacklisted: Boolean) {
+        prefs.edit().putBoolean(KEY_HWDEC_CRASH_BLACKLIST, blacklisted).apply()
     }
 
     /** 是否已确认该设备需要 vo fallback（黑屏检测曾触发过） */
@@ -233,8 +246,18 @@ class PlayerSettingsStore(
 
     companion object {
         private const val KEY_VO = "player_vo"
-        private const val KEY_HWDEC = "player_hwdec"
         private const val KEY_VO_FALLBACK = "player_vo_fallback_confirmed"
+
+        /**
+         * hwdec 偏好键。internal 供启动早期的 NativeCrashLogger 直接读 SharedPreferences
+         * （此时 UserPrefs 尚未 init，不能走门面）。
+         */
+        internal const val KEY_HWDEC = "player_hwdec"
+
+        /** 硬解崩溃设备黑名单：置位后强制软解，用户手动切回硬解时解除 */
+        internal const val KEY_HWDEC_CRASH_BLACKLIST = "player_hwdec_crash_blacklist"
+
+        internal const val HWDEC_SOFTWARE = "no"
         private const val KEY_PLAYER_TYPE = "player_type"
         private const val DEFAULT_PLAYER_TYPE = "MPV"
         private const val KEY_HDR_MODE = "hdr_output_mode"

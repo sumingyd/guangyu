@@ -10,6 +10,7 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
 import `is`.xyz.mpv.MPVLib
+import com.iptv.scanner.editor.pro.NativeCrashLogger
 import com.iptv.scanner.editor.pro.data.UserPrefs
 
 /**
@@ -68,6 +69,9 @@ class MPVView @JvmOverloads constructor(
      */
     override var onInstanceRecreated: (() -> Unit)? = null
 
+/** 核心已不可用回调（shutdown 后无法重建，需上层降级到备用内核） */
+override var onCoreUnavailable: (() -> Unit)? = null
+
 /** Surface 重建回调（surfaceCreated 后触发） */
 override var onSurfaceRebuilt: (() -> Unit)? = null
 
@@ -82,6 +86,17 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
         vo: String,
         hwdec: String
     ) {
+        // 核心已 terminate：nativeHandleCreated 仍为 true，但句柄指向已终止的核心。
+        // 此时调用 setOptionString/init 会在死句柄上执行并 native 崩溃（SIGABRT/SIGSEGV），
+        // 因此禁止再初始化，改为向上层报告核心不可用，由上层降级到备用内核。
+        if (instanceState.nativeCoreDead) {
+            Log.e(TAG, "initialize: mpv core already terminated in this process, " +
+                "refusing to init on dead handle (avoid native crash)")
+            instanceState.nativeInstanceCreated = false
+            instanceState.nativeInstanceAlive = false
+            onCoreUnavailable?.invoke()
+            return
+        }
         voInUse = vo
         savedConfigDir = configDir
         savedCacheDir = cacheDir
@@ -139,6 +154,9 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
 
         MPVLib.setOptionString("vo", vo)
         MPVLib.setOptionString("hwdec", effectiveHwdec)
+        // 记录本次会话实际生效的 hwdec：进程若因硬解 teardown native 崩溃，
+        // 下次启动据此把该设备加入硬解黑名单
+        NativeCrashLogger.setActiveHwdec(context, effectiveHwdec)
         // keep-open=always：stop 期间也保留最后一帧，避免换台黑屏闪烁。
         // 与 PC 端不同，Android 端在 loadfile 前会发送 stop（对齐 PC 端 play_file 的逻辑），
         // 用 always 确保 stop → loadfile 之间画面不消失。
@@ -286,6 +304,10 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
     override val isSurfaceValid: Boolean
         get() = holder.surface != null && holder.surface.isValid
 
+    /** 核心是否已终止（进程内不可恢复） */
+    override val isCoreDead: Boolean
+        get() = instanceState.nativeCoreDead
+
     /**
      * 运行时强制重新初始化 VO 模块（detach → vo=null → reattach → vo=newVo）。
      *
@@ -352,6 +374,8 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
         // 确保 mpv 核心存活：如果核心已 shutdown，先重新创建
         if (!ensureInstanceAlive()) {
             Log.e(TAG, "playFile: mpv instance not alive, cannot play")
+            // 不再静默失败：让上层把「核心不可用」暴露给界面并触发降级
+            onCoreUnavailable?.invoke()
             return
         }
         val s = holder.surface
@@ -379,6 +403,12 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
      * @return true 如果核心存活（原本就活着或成功重建），false 如果无法重建
      */
     private fun ensureInstanceAlive(): Boolean {
+        // 核心已 terminate 且句柄未释放：进程内无法安全重建（destroy 会 SIGSEGV，
+        // 在死句柄上 init 会 native 崩溃），直接返回 false 让上层降级。
+        if (instanceState.nativeCoreDead) {
+            Log.e(TAG, "ensureInstanceAlive: mpv core terminated in-process, cannot recreate")
+            return false
+        }
         // 检查强制重建标志：forceRecreate() 已通过 stop+playlist-clear 重置状态
         if (instanceState.forceRecreatePending) {
             instanceState.forceRecreatePending = false
@@ -566,14 +596,44 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
             return detected
         }
 
-        /** 返回应生效的 hwdec 值：houdini 转译 / arm32 TV 强制软解，避免硬解码器 teardown 崩溃 */
-        fun sanitizeHwdec(hwdec: String): String =
-            if (hwdec != "no" && (isHoudiniTranslation() || arm32TvDetected == true)) {
-                Log.w(TAG, "hwdec: houdini=${isHoudiniTranslation()} arm32Tv=$arm32TvDetected -> force software decode (avoid MediaCodec teardown SIGSEGV)")
-                "no"
-            } else {
-                hwdec
+        /** 本会话内的硬解降级（软解）：一旦置位，所有 sanitizeHwdec 都返回 "no" */
+        @Volatile
+        private var sessionHwdecOverride: String? = null
+
+        /**
+         * 硬解失败后的会话级降级：本次进程内强制软解，避免继续走同一条
+         * MediaCodec teardown 路径（历史出问题的车机在设备判定不成立时仍会崩溃）。
+         */
+        fun forceSoftwareDecodeForSession(reason: String) {
+            if (sessionHwdecOverride == "no") return
+            sessionHwdecOverride = "no"
+            Log.w(TAG, "hwdec: session-level downgrade to software decode ($reason)")
+        }
+
+        /** 返回应生效的 hwdec 值：会话降级 / houdini 转译 / arm32 TV / 崩溃黑名单 强制软解 */
+        fun sanitizeHwdec(hwdec: String): String {
+            if (sessionHwdecOverride != null) return sessionHwdecOverride!!
+            // 设备黑名单：上次会话硬解异常退出（native 崩溃）后本进程强制软解。
+            // 覆盖按频道保存的 hwdec（频道设置不走 PlayerSettingsStore），
+            // 避免历史出问题的车机因设备判定不成立而再次走到硬解 teardown 崩溃路径。
+            val blacklisted = try {
+                UserPrefs.getInstance().isHwdecBlacklisted()
+            } catch (e: Exception) {
+                false
             }
+            return when {
+                hwdec == "no" -> hwdec
+                blacklisted -> {
+                    Log.w(TAG, "hwdec: device in crash blacklist -> force software decode")
+                    "no"
+                }
+                isHoudiniTranslation() || arm32TvDetected == true -> {
+                    Log.w(TAG, "hwdec: houdini=${isHoudiniTranslation()} arm32Tv=$arm32TvDetected -> force software decode (avoid MediaCodec teardown SIGSEGV)")
+                    "no"
+                }
+                else -> hwdec
+            }
+        }
     }
 
     /**

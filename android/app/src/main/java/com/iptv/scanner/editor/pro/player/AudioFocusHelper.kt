@@ -23,6 +23,8 @@ class AudioFocusHelper(context: Context) {
         context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
     private var requested = false
     private var autoPausedByFocus = false
+    /** 用户手动暂停意图：抢占结束后不得覆盖 */
+    private var userPaused = false
     private var focusRequest: AudioFocusRequest? = null
 
     /** 焦点被抢占时暂停（宿主播放器注入） */
@@ -49,13 +51,38 @@ class AudioFocusHelper(context: Context) {
                 }
             }
             AudioManager.AUDIOFOCUS_GAIN -> {
-                if (autoPausedByFocus) {
+                // 用户手动暂停优先：抢占期间用户按了暂停，不得自动恢复播放
+                if (autoPausedByFocus && !userPaused) {
                     Log.i(TAG, "audio focus gain: resume")
                     autoPausedByFocus = false
                     onResume?.invoke()
+                } else {
+                    Log.i(TAG, "audio focus gain: keep paused (userPaused=$userPaused)")
+                    autoPausedByFocus = false
                 }
             }
         }
+    }
+
+    /**
+     * 用户手动暂停：记录暂停意图，并清除「抢占暂停」标记，
+     * 避免后续焦点恢复时覆盖用户意图。
+     */
+    @Synchronized
+    fun onUserPause() {
+        userPaused = true
+        autoPausedByFocus = false
+    }
+
+    /**
+     * 用户手动恢复播放：清除暂停意图并重新申请音频焦点。
+     * 永久失焦（AUDIOFOCUS_LOSS）后必须重新申请，否则会与其他应用混音
+     * 且后续不再响应抢占事件。
+     */
+    @Synchronized
+    fun onUserResume() {
+        userPaused = false
+        request()
     }
 
     @Synchronized

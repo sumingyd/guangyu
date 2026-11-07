@@ -59,7 +59,7 @@ android:largeHeap="true"
         <activity
             android:name=".MainActivityCompose"
             android:exported="true"
-            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout"
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|uiMode|locale|layoutDirection|fontScale|density|keyboard|navigation"
             android:supportsPictureInPicture="true"
             android:resizeableActivity="true"
             android:windowSoftInputMode="adjustResize">

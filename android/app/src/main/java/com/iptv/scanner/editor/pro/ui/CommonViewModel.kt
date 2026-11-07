@@ -627,14 +627,44 @@ internal fun AppViewModel.importPlaylist(uri: Uri) {
     }
 }
 
+/** mpv 支持的外挂字幕扩展名（按真实扩展名保存，不能一律改写成 .srt） */
+private val SUPPORTED_SUBTITLE_EXTS = setOf(
+    "srt", "ass", "ssa", "vtt", "sub", "idx", "sup", "ttml", "dfxp", "lrc"
+)
+
+/** 通过 SAF 查询用户所选文件的真实显示名（含真实扩展名） */
+private fun querySubtitleDisplayName(
+    resolver: android.content.ContentResolver,
+    uri: Uri
+): String? {
+    return try {
+        resolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+    } catch (e: Exception) {
+        Log.w(AppViewModel.TAG, "querySubtitleDisplayName failed: ${e.message}")
+        null
+    }
+}
+
 internal fun AppViewModel.loadSubtitleFile(uri: Uri) {
     viewModelScope.launch {
-        // SAF 返回的 content:// URI 需要拷贝到缓存目录才能给 mpv 用
+        val resolver = getApplication<Application>().contentResolver
+        val displayName = querySubtitleDisplayName(resolver, uri)
+        // 优先用 SAF 显示名的扩展名，其次退回 URI 末段
+        val rawName = displayName ?: uri.lastPathSegment ?: ""
+        val ext = rawName.substringAfterLast('.', "").lowercase().trim()
+
+        // 格式校验：扩展名不在支持列表时如实失败，不保存成 .srt 假装成功
+        if (ext.isEmpty() || ext !in SUPPORTED_SUBTITLE_EXTS) {
+            showOsd("字幕加载失败", if (ext.isEmpty()) "无法识别字幕格式" else "不支持的格式 .$ext")
+            return@launch
+        }
+
+        // SAF 返回的 content:// URI 需要拷贝到缓存目录才能给 mpv 用；保留真实扩展名
         val subFile = withContext(Dispatchers.IO) {
             try {
-                val resolver = getApplication<Application>().contentResolver
                 val cacheDir = getApplication<Application>().cacheDir
-                val tempFile = File(cacheDir, "subtitle_${System.currentTimeMillis()}.srt")
+                val tempFile = File(cacheDir, "subtitle_${System.currentTimeMillis()}.$ext")
                 resolver.openInputStream(uri)?.use { input ->
                     tempFile.outputStream().use { input.copyTo(it) }
                 }
@@ -647,8 +677,22 @@ internal fun AppViewModel.loadSubtitleFile(uri: Uri) {
             showOsd("字幕加载失败", "无法读取文件")
             return@launch
         }
-        mpv.addSubtitleFile(subFile)
-        showOsd("字幕已加载", subFile.substringAfterLast('/'))
+
+        // 记录 sub-add 前的轨道列表，用实际变化判断是否真的加载成功，而不是无条件提示成功
+        val beforeTracks = mpv.trackListJson.value
+        if (!mpv.addSubtitleFile(subFile)) {
+            showOsd("字幕加载失败", "播放器未就绪")
+            return@launch
+        }
+        val loaded = withTimeoutOrNull(2000) {
+            while (mpv.trackListJson.value == beforeTracks) delay(100)
+            true
+        } ?: false
+        if (loaded) {
+            showOsd("字幕已加载", displayName ?: subFile.substringAfterLast('/'))
+        } else {
+            showOsd("字幕加载失败", "无法解析该字幕文件")
+        }
     }
 }
 

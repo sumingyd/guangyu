@@ -63,8 +63,11 @@ class BaseMPVViewDelegate(
     }
 
     fun markInstanceDead() {
-        Log.w(TAG, "markInstanceDead: mpv core shutdown detected, marking instance as dead")
+        Log.e(TAG, "markInstanceDead: mpv core shutdown detected, marking core as dead (in-process unrecoverable)")
         instanceState.nativeInstanceCreated = false
         instanceState.nativeInstanceAlive = false
+        // 关键：native 句柄仍然存在（keep-alive 策略下从未 destroy），但核心已 terminate。
+        // 必须置 nativeCoreDead，禁止后续 initialize() 在死句柄上调用 init()（会 native 崩溃）。
+        instanceState.nativeCoreDead = true
     }
 }

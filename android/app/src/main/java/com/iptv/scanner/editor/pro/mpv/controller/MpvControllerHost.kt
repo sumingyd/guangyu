@@ -16,4 +16,8 @@ interface MpvControllerHost {
     fun getMpvView(): MPVViewLike?
     fun isFileLoaded(): Boolean
     fun getCurrentVolume(): Int
+    /** mpv 核心是否已终止（进程内不可恢复），用于拒绝无效播放请求 */
+    fun isCoreDead(): Boolean
+    /** 向界面暴露「播放器核心不可用」错误（不再静默失败） */
+    fun notifyPlaybackUnavailable()
 }

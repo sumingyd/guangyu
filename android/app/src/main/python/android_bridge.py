@@ -134,9 +134,11 @@ def _setup_android_paths(ext_files_dir='', files_dir='', native_lib_dir=''):
             _log(f'_setup_android_paths: native_lib_dir (jnius)={native_lib_dir}')
         except Exception as e:
             _log(f'_setup_android_paths: native_lib_dir not available ({e})')
-        # 迁移旧数据
-        if files_dir:
-            _migrate_old_data(None, files_dir, target_dir)
+
+    # 迁移旧数据（必须无条件执行：native_lib_dir 由 Kotlin 侧恒传入，
+    # 放在上面的 else 分支里会导致迁移永不执行，升级后旧数据全部丢失）
+    if target_dir and files_dir:
+        _migrate_old_data(None, files_dir, target_dir)
 
 
 def _migrate_old_data(app, files_dir, new_dir):

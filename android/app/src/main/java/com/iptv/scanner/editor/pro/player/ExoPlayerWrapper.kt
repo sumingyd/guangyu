@@ -751,9 +751,10 @@ class ExoPlayerWrapper(
         }
     }
 
-    override fun addSubtitleFile(path: String) {
+    override fun addSubtitleFile(path: String): Boolean {
         // ExoPlayer 支持外挂字幕通过 MediaItem.subtitleConfigurations
         Log.i(TAG, "addSubtitleFile: $path (not fully implemented)")
+        return false
     }
 
     // -----------------------------------------------------------------

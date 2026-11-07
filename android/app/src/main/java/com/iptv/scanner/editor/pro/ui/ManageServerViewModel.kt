@@ -217,8 +217,12 @@ internal fun AppViewModel.downloadAndLoadSubtitle(item: SubtitleItem) {
         )
         _subtitleDownloading.value = false
         result.onSuccess { path ->
-            mpv.addSubtitleFile(path)
-            showOsd("字幕已加载", path.substringAfterLast('/'))
+            // 只有命令真正提交给播放器才提示成功，避免播放器未就绪时谎报「已加载」
+            if (mpv.addSubtitleFile(path)) {
+                showOsd("字幕已加载", path.substringAfterLast('/'))
+            } else {
+                showOsd("字幕加载失败", "播放器未就绪")
+            }
         }.onFailure { e ->
             showOsd("字幕下载失败", e.message ?: "未知错误")
         }

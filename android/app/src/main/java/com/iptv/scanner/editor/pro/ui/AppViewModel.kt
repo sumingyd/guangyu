@@ -561,6 +561,11 @@ mpvSingleton.onFileError = {
 // 而 stale 分支要求 mpvPath.isNotEmpty() 才跳过，导致穿透到自动换台逻辑。
 if (currentPlaybackUrl.isEmpty()) {
     Log.i(TAG, "onFileError: skipped, playback stopped (currentPlaybackUrl empty)")
+} else if (mpv.isCoreDead()) {
+    // 内核已终止：换源/重连都不可能成功，明确提示用户切换内核，避免静默失效
+    Log.e(TAG, "onFileError: player core is dead, aborting auto-switch")
+    consecutiveTimeoutCount = 0
+    showOsd("播放器内核异常", "mpv 核心已退出，请切换播放器内核")
 } else if (mpv.fileLoaded.value) {
     Log.i(TAG, "onFileError: skipped, file already loaded (stale callback)")
 } else if (playChannelDebounceJob?.isActive == true) {

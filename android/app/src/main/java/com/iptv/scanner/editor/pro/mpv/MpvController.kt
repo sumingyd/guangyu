@@ -191,6 +191,12 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
             Log.i(TAG, "onSurfaceAboutToDestroy: suppressFileError enabled")
         }
 
+        // 核心不可用：不再静默失败，转成播放错误交给界面（触发换源/提示/降级）
+        view.onCoreUnavailable = {
+            Log.e(TAG, "onCoreUnavailable: mpv core is dead, surfacing playback error")
+            postOnUiThread { onFileError?.invoke() }
+        }
+
         Log.i(TAG, "MpvController attached to MPVView")
     }
 
@@ -363,6 +369,14 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     /** 音频焦点助手：绑定到 attach 的 View 上下文后生效（见 ensureAudioFocus） */
     private var audioFocusHelper: com.iptv.scanner.editor.pro.player.AudioFocusHelper? = null
 
+    /** 用户主动 stop 标记：抑制 stop 触发的 END_FILE 被误判为播放错误 */
+    @Volatile
+    private var userStopped = false
+
+    /** 连续加载失败次数（用于硬解会话级降级） */
+    @Volatile
+    private var consecutiveLoadFailures = 0
+
     private fun ensureAudioFocus(): com.iptv.scanner.editor.pro.player.AudioFocusHelper? {
         if (audioFocusHelper == null) {
             val ctx = mpvView?.asView()?.context?.applicationContext ?: return null
@@ -377,18 +391,70 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     }
 
     override fun playFile(url: String) {
-        ensureAudioFocus()?.request()
+        if (isCoreDead()) {
+            Log.e(TAG, "playFile: mpv core is dead, refusing loadfile $url")
+            postOnUiThread { onFileError?.invoke() }
+            return
+        }
+        userStopped = false
+        ensureAudioFocus()?.onUserResume()
         playbackController.playFile(url)
+    }
+
+    /** mpv 核心是否已终止（进程内不可恢复） */
+    override fun isCoreDead(): Boolean = mpvView?.isCoreDead == true
+
+    /** 向界面暴露「播放器核心不可用」（转成播放错误，由上层提示/降级） */
+    override fun notifyPlaybackUnavailable() {
+        postOnUiThread { onFileError?.invoke() }
+    }
+
+    /**
+     * 硬解失败后的会话级降级。
+     *
+     * 只靠 houdini/arm32 设备判定不足以覆盖历史出问题的车机（判定不成立时仍走
+     * MediaCodec teardown 崩溃路径）。这里在连续加载/播放失败后把 hwdec 降级为软解，
+     * 并同步到 MPVView 的会话覆盖值，后续换台不再使用硬解。
+     */
+    private fun degradeHwdecOnLoadFailure() {
+        try {
+            val current = MPVLib.getPropertyString("hwdec") ?: ""
+            if (current.isEmpty() || current == "no") return
+            consecutiveLoadFailures++
+            Log.w(TAG, "playback failure #$consecutiveLoadFailures (hwdec=$current)")
+            if (consecutiveLoadFailures < 2) return
+            consecutiveLoadFailures = 0
+            MPVView.forceSoftwareDecodeForSession("repeated playback failures with hwdec=$current")
+            postOnUiThread {
+                try {
+                    MPVLib.setPropertyString("hwdec", "no")
+                } catch (e: Throwable) {
+                    Log.w(TAG, "degrade hwdec runtime apply failed: ${e.message}")
+                }
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "degradeHwdecOnLoadFailure failed: ${e.message}")
+        }
     }
 
     fun markNeedPreStop() = playbackController.markNeedPreStop()
     fun getPath(): String = playbackController.getPath()
     override fun stop() {
+        // 用户主动停止：随后的 END_FILE 不应被当作播放错误
+        userStopped = true
         audioFocusHelper?.abandon()
         playbackController.stop()
     }
-    override fun togglePause() = playbackController.togglePause()
-    override fun setPause(p: Boolean) = playbackController.setPause(p)
+    override fun togglePause() {
+        // 记录用户意图：暂停后焦点恢复不得覆盖；恢复播放时重新申请音频焦点
+        if (paused.value) ensureAudioFocus()?.onUserResume() else ensureAudioFocus()?.onUserPause()
+        playbackController.togglePause()
+    }
+
+    override fun setPause(p: Boolean) {
+        if (p) ensureAudioFocus()?.onUserPause() else ensureAudioFocus()?.onUserResume()
+        playbackController.setPause(p)
+    }
     override fun seekTo(seconds: Double) = playbackController.seekTo(seconds)
     override fun seekRelative(seconds: Double) = playbackController.seekRelative(seconds)
     override fun seekAbsolute(seconds: Double) = playbackController.seekAbsolute(seconds)
@@ -401,7 +467,7 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     override fun cycleSub() = playbackController.cycleSub()
     override fun setAudioTrack(id: Int) = playbackController.setAudioTrack(id)
     override fun setSubTrack(id: Int) = playbackController.setSubTrack(id)
-    override fun addSubtitleFile(path: String) = playbackController.addSubtitleFile(path)
+    override fun addSubtitleFile(path: String): Boolean = playbackController.addSubtitleFile(path)
     override fun setChapter(idx: Int): Boolean = playbackController.setChapter(idx)
     override fun chapterNext(): Boolean = playbackController.chapterNext()
     override fun chapterPrev(): Boolean = playbackController.chapterPrev()
@@ -632,6 +698,8 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
         when (eventId) {
             MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> {
                 _fileLoaded.value = true
+                consecutiveLoadFailures = 0
+                userStopped = false
                 val loadedUrl = try { MPVLib.getPropertyString("path") ?: "" } catch (_: Throwable) { "" }
                 playbackController.onFileLoaded(loadedUrl)
                 _eofReached.value = false
@@ -668,6 +736,7 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
             MPVLib.MpvEvent.MPV_EVENT_START_FILE -> {
                 _fileLoaded.value = false
                 _eofReached.value = false
+                userStopped = false
                 playbackController.onStartFile()
                 unavailableProperties.clear()
                 cancelPendingFileError()
@@ -681,34 +750,58 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 val endedUrl = try { MPVLib.getPropertyString("path") ?: "" } catch (_: Throwable) { "" }
                 val replacedByNew = playbackController.loadingUrl.isNotEmpty() && endedUrl != playbackController.loadingUrl
                 val wasPlaying = wasLoaded || endedUrl == playbackController.lastLoadedUrl
+                // 目标流失败：END_FILE 属于当前正在切换到的那路流（而不是被替换掉的旧流）。
+                // 旧流的 END_FILE 需要抑制，目标流的失败必须上报，否则换台失败会被永久吞掉。
+                val targetStreamFailed = playbackController.switchingChannel &&
+                    playbackController.loadingUrl.isNotEmpty() &&
+                    endedUrl == playbackController.loadingUrl
 
                 cancelPendingFileError()
 
                 if (suppressFileErrorFlag) {
                     Log.i(TAG, "MPV_EVENT_END_FILE: suppressed (surface rebuilding), wasLoaded=$wasLoaded")
-                } else if (playbackController.switchingChannel) {
-                    Log.i(TAG, "MPV_EVENT_END_FILE: suppressed (channel switching), wasLoaded=$wasLoaded")
+                    playbackController.clearSwitchingState()
+                } else if (userStopped) {
+                    Log.i(TAG, "MPV_EVENT_END_FILE: suppressed (user stopped playback)")
+                    userStopped = false
+                    playbackController.clearSwitchingState()
+                } else if (playbackController.switchingChannel && !targetStreamFailed) {
+                    Log.i(TAG, "MPV_EVENT_END_FILE: suppressed (old stream replaced during channel switching), wasLoaded=$wasLoaded")
+                    playbackController.clearSwitchingState()
                 } else if (!wasPlaying && !replacedByNew) {
                     Log.w(TAG, "MPV_EVENT_END_FILE: file '$endedUrl' failed to load, notifying error")
+                    // 换台失败：必须清理切换标志，否则后续错误回调全部被当成「换台中」跳过
+                    playbackController.clearSwitchingState()
+                    degradeHwdecOnLoadFailure()
                     postOnUiThread { onFileError?.invoke() }
                 } else if (wasPlaying && !_eofReached.value) {
                     Log.i(TAG, "MPV_EVENT_END_FILE: stream '$endedUrl' ended mid-stream (wasLoaded=$wasLoaded), delayed error check 300ms")
                     val runnable = Runnable {
                         Log.w(TAG, "MPV_EVENT_END_FILE: stream ended mid-stream, no START_FILE followed, notifying error")
+                        playbackController.clearSwitchingState()
+                        degradeHwdecOnLoadFailure()
                         postOnUiThread { onFileError?.invoke() }
                     }
                     playbackController.pendingEndFileError = runnable
                     mpvView?.asView()?.postDelayed(runnable, 300)
                 } else {
                     Log.i(TAG, "MPV_EVENT_END_FILE: stream '$endedUrl' ended normally (wasLoaded=$wasLoaded, eof=${_eofReached.value})")
+                    playbackController.clearSwitchingState()
                 }
                 playbackController.onEndFile()
             }
             MPVLib.MpvEvent.MPV_EVENT_SHUTDOWN -> {
                 Log.w(TAG, "MPV_EVENT_SHUTDOWN: mpv core has shut down, marking instance as dead")
+                // 核心终止后所有播放请求都无法执行：若当时正在播放/加载，必须把错误暴露给界面，
+                // 否则后续 playFile 会永久静默 return，用户只看到黑屏无任何提示
+                val wasActive = _fileLoaded.value || playbackController.loadingUrl.isNotEmpty()
                 _fileLoaded.value = false
                 _eofReached.value = true
                 mpvView?.markInstanceDead()
+                if (wasActive) {
+                    playbackController.clearSwitchingState()
+                    postOnUiThread { onFileError?.invoke() }
+                }
             }
         }
     }

@@ -121,6 +121,11 @@ class UserPrefs private constructor() {
     fun setVo(vo: String) = playerSettingsStore.setVo(vo)
     fun getHwdec(): String = playerSettingsStore.getHwdec()
     fun setHwdec(hwdec: String) = playerSettingsStore.setHwdec(hwdec)
+
+    /** 是否处于「硬解导致崩溃」的设备黑名单（强制软解） */
+    fun isHwdecBlacklisted(): Boolean = playerSettingsStore.isHwdecBlacklisted()
+
+    fun setHwdecBlacklisted(blacklisted: Boolean) = playerSettingsStore.setHwdecBlacklisted(blacklisted)
     fun isVoFallbackConfirmed(): Boolean = playerSettingsStore.isVoFallbackConfirmed()
     fun setVoFallbackConfirmed(confirmed: Boolean) = playerSettingsStore.setVoFallbackConfirmed(confirmed)
     fun getHdrMode(): String = playerSettingsStore.getHdrMode()
@@ -462,7 +467,8 @@ class UserPrefs private constructor() {
     fun setForceTvMode(enabled: Boolean) { prefs.edit().putBoolean("force_tv_mode", enabled).apply() }
 
     companion object {
-        private const val PREFS_NAME = "iptv_user_prefs"
+        /** SharedPreferences 文件名。internal 供启动早期（UserPrefs.init 之前）直接读取 */
+        internal const val PREFS_NAME = "iptv_user_prefs"
 
         private const val KEY_LAST_CHANNEL_URL = "last_channel_url"
         private const val KEY_AUTO_RESUME = "auto_resume_on_start"
