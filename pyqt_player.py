@@ -22,7 +22,7 @@ from PySide6.QtCore import Qt, QTimer, Signal, QRectF  # noqa: E402
 from PySide6 import QtCore  # noqa: E402
 from PySide6.QtGui import (  # noqa: E402
     QIcon, QFont, QFontMetrics, QColor, QPainter, QBrush, QPen,
-    QLinearGradient, QPainterPath,
+    QLinearGradient, QPainterPath, QBitmap,
 )
 
 from PySide6.QtGui import QShortcut  # noqa: E402
@@ -72,20 +72,60 @@ from mixins.event_mixin import EventMixin  # noqa: E402
 
 
 class _RoundedContainer(QWidget):
+    """主窗口容器：真正裁切卡面圆角。
+
+    QSS 的 border-radius 只圆化容器自身背景，容器内的子控件仍会以直角盖住圆角；
+    旧实现的 clip 在 super().paintEvent() 之前就结束了，对子控件绘制无效。
+    这里沿用浮窗/dock 已验证的 mask 方案裁切子控件。
+    Windows 不启用：SetWindowRgn 会连带裁掉 wid 嵌入的视频区圆角，改变现有观感。
+    """
+
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._mask_key = None
+
+    def _update_rounded_mask(self):
+        from utils.platform_utils import is_windows
+        if is_windows():
+            return
+        try:
+            win = self.window()
+            if win is not None and (win.isMaximized() or win.isFullScreen()):
+                if self._mask_key is not None:
+                    self.clearMask()
+                    self._mask_key = None
+                return
+            size = self.size()
+            if size.width() <= 0 or size.height() <= 0:
+                return
+            r = AppStyles._get_style_border_radius()
+            key = (size.width(), size.height(), r)
+            if key == self._mask_key:
+                return
+            self._mask_key = key
+            bitmap = QBitmap(size)
+            bitmap.fill(Qt.GlobalColor.color0)
+            p = QPainter(bitmap)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.setBrush(Qt.GlobalColor.color1)
+            p.setPen(Qt.PenStyle.NoPen)
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(0, 0, size.width(), size.height()), r, r)
+            p.drawPath(path)
+            p.end()
+            self.setMask(bitmap)
+            self.update()
+        except Exception as e:
+            logger.debug(f"主窗口圆角遮罩更新失败: {e}")
 
     def paintEvent(self, event):
-
-        r = AppStyles._get_style_border_radius()
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        path = QPainterPath()
-        rect = QRectF(self.rect())
-        path.addRoundedRect(rect, r, r)
-        painter.setClipPath(path)
-        painter.end()
+        self._update_rounded_mask()
         super().paintEvent(event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._mask_key = None
+        self._update_rounded_mask()
 
 
 class VideoOverlayBadge(QWidget):

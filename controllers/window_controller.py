@@ -6,14 +6,17 @@
 import os
 from PySide6.QtWidgets import QWidget, QLabel, QPushButton, QHBoxLayout, QLineEdit, QComboBox
 from PySide6.QtCore import Qt, QPoint, QSize
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QCursor
 from ui.styles import AppStyles
 from controllers.main_window_protocol import UiProtocol
-from utils.platform_utils import is_macos, is_wayland, wayland_move
+from utils.platform_utils import is_macos, is_wayland, is_windows, wayland_move
 from core.log_manager import global_logger as logger
 
 
 class WindowController:
+
+    # 主窗口边缘缩放热区（逻辑像素，125%/150% 缩放下 Qt 会自动换算）
+    _RESIZE_MARGIN = 6
 
     @staticmethod
     def _title_btn_style():
@@ -25,6 +28,12 @@ class WindowController:
         self._dragging = False
         self._drag_offset = None
         self._stay_on_top_active = False
+        # 主窗口边缘缩放状态
+        self._resizing = False
+        self._resize_edge = None
+        self._resize_start_geo = None
+        self._resize_start_pos = None
+        self._resize_cursor_active = False
         
         # 标题栏组件引用（创建后赋值）
         self._title_bar = None
@@ -241,7 +250,144 @@ class WindowController:
         except Exception as e:
             logger.debug(f"重建浮动面板后恢复毛玻璃失败: {e}")
 
+    def _can_resize_by_edge(self) -> bool:
+        """主窗口边缘缩放是否可用。
+
+        Windows 分支不启用：主窗口原本不支持边缘缩放，加上会改变现有交互手感；
+        其余平台（Linux/macOS）的 frameless 窗口此前完全没有缩放能力，这里补齐。
+        """
+        if is_windows():
+            return False
+        try:
+            if getattr(self.window, 'pip_mode', False):
+                return False
+            if self.window.isMaximized() or self.window.isFullScreen():
+                return False
+        except Exception:
+            return False
+        return True
+
+    def _hit_resize_edge(self, pos):
+        m = self._RESIZE_MARGIN
+        w, h = self.window.width(), self.window.height()
+        x, y = pos.x(), pos.y()
+        on_left = x < m
+        on_right = x > w - m
+        on_top = y < m
+        on_bottom = y > h - m
+        if on_top and on_left:
+            return 'top_left'
+        if on_top and on_right:
+            return 'top_right'
+        if on_bottom and on_left:
+            return 'bottom_left'
+        if on_bottom and on_right:
+            return 'bottom_right'
+        if on_left:
+            return 'left'
+        if on_right:
+            return 'right'
+        if on_top:
+            return 'top'
+        if on_bottom:
+            return 'bottom'
+        return None
+
+    @staticmethod
+    def _edge_cursor(edge):
+        cursors = {
+            'left': Qt.CursorShape.SizeHorCursor,
+            'right': Qt.CursorShape.SizeHorCursor,
+            'top': Qt.CursorShape.SizeVerCursor,
+            'bottom': Qt.CursorShape.SizeVerCursor,
+            'top_left': Qt.CursorShape.SizeFDiagCursor,
+            'bottom_right': Qt.CursorShape.SizeFDiagCursor,
+            'top_right': Qt.CursorShape.SizeBDiagCursor,
+            'bottom_left': Qt.CursorShape.SizeBDiagCursor,
+        }
+        return cursors.get(edge, Qt.CursorShape.ArrowCursor)
+
+    @staticmethod
+    def _qt_resize_edges(edge):
+        edges_map = {
+            'top': Qt.Edge.TopEdge,
+            'bottom': Qt.Edge.BottomEdge,
+            'left': Qt.Edge.LeftEdge,
+            'right': Qt.Edge.RightEdge,
+            'top_left': Qt.Edge.TopEdge | Qt.Edge.LeftEdge,
+            'top_right': Qt.Edge.TopEdge | Qt.Edge.RightEdge,
+            'bottom_left': Qt.Edge.BottomEdge | Qt.Edge.LeftEdge,
+            'bottom_right': Qt.Edge.BottomEdge | Qt.Edge.RightEdge,
+        }
+        return edges_map.get(edge)
+
+    def _try_start_edge_resize(self, event) -> bool:
+        """按下左键时命中边缘则开始缩放；与标题栏拖动互斥（先判边缘）。"""
+        if event.button() != Qt.MouseButton.LeftButton:
+            return False
+        if not self._can_resize_by_edge():
+            return False
+        edge = self._hit_resize_edge(event.position().toPoint())
+        if not edge:
+            return False
+        # Wayland 原生平台交给系统处理缩放（与 FloatingDialog 一致）；
+        # 程序在 Wayland 会话下强制 xcb，正常不会走到这里。
+        if is_wayland():
+            wh = self.window.windowHandle()
+            qt_edge = self._qt_resize_edges(edge)
+            if wh is not None and qt_edge and wh.startSystemResize(qt_edge):
+                event.accept()
+                return True
+        self._resizing = True
+        self._resize_edge = edge
+        self._resize_start_geo = self.window.geometry()
+        self._resize_start_pos = event.globalPosition().toPoint()
+        event.accept()
+        return True
+
+    def _handle_edge_resize_move(self, event) -> bool:
+        if not (self._resizing and self._resize_edge
+                and self._resize_start_geo and self._resize_start_pos):
+            return False
+        delta = event.globalPosition().toPoint() - self._resize_start_pos
+        geo = self._resize_start_geo.__class__(self._resize_start_geo)
+        edge = self._resize_edge
+        min_w = max(200, self.window.minimumWidth())
+        min_h = max(150, self.window.minimumHeight())
+        if 'right' in edge:
+            geo.setWidth(max(min_w, self._resize_start_geo.width() + delta.x()))
+        if 'left' in edge:
+            new_w = max(min_w, self._resize_start_geo.width() - delta.x())
+            geo.setX(self._resize_start_geo.x() + self._resize_start_geo.width() - new_w)
+            geo.setWidth(new_w)
+        if 'bottom' in edge:
+            geo.setHeight(max(min_h, self._resize_start_geo.height() + delta.y()))
+        if 'top' in edge:
+            new_h = max(min_h, self._resize_start_geo.height() - delta.y())
+            geo.setY(self._resize_start_geo.y() + self._resize_start_geo.height() - new_h)
+            geo.setHeight(new_h)
+        self.window.setGeometry(geo)
+        event.accept()
+        return True
+
+    def _update_edge_cursor(self, event):
+        """未拖动/缩放时，按鼠标所在边缘切换缩放光标。"""
+        if not self._can_resize_by_edge():
+            if self._resize_cursor_active:
+                self.window.unsetCursor()
+                self._resize_cursor_active = False
+            return
+        edge = self._hit_resize_edge(event.position().toPoint())
+        if edge:
+            self.window.setCursor(QCursor(self._edge_cursor(edge)))
+            self._resize_cursor_active = True
+        elif self._resize_cursor_active:
+            self.window.unsetCursor()
+            self._resize_cursor_active = False
+
     def handle_mouse_press_event(self, event) -> bool:
+        if self._try_start_edge_resize(event):
+            return True
         if event.button() == Qt.MouseButton.LeftButton:
             if self._title_bar:
                 title_bar_geo = self._title_bar.geometry()
@@ -272,6 +418,9 @@ class WindowController:
 
     def handle_mouse_move_event(self, event) -> bool:
 
+        if self._handle_edge_resize_move(event):
+            return True
+
         if self._dragging and self._drag_offset is not None:
             if event.buttons() & Qt.MouseButton.LeftButton:
                 new_pos = event.globalPosition().toPoint() - self._drag_offset
@@ -279,10 +428,17 @@ class WindowController:
                 event.accept()
                 return True
 
+        self._update_edge_cursor(event)
         return False
 
     def handle_mouse_release_event(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            if self._resizing:
+                self._resizing = False
+                self._resize_edge = None
+                self._resize_start_geo = None
+                self._resize_start_pos = None
+                return
             self._dragging = False
             self._drag_offset = None
             if hasattr(self.window, '_raise_floating_panels'):
@@ -293,6 +449,11 @@ class WindowController:
         处理鼠标双击事件 - 标题栏双击最大化/还原
         Returns: bool - 是否已处理该事件
         """
+        # 边缘热区内的双击不触发最大化/全屏，避免与缩放手势冲突
+        if (self._can_resize_by_edge()
+                and self._hit_resize_edge(event.position().toPoint())):
+            event.accept()
+            return True
         if self._title_bar:
             title_bar_geo = self._title_bar.geometry()
             title_global_pos = self._title_bar.mapToGlobal(QPoint(0, 0))
