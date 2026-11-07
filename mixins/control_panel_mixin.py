@@ -146,7 +146,6 @@ class ControlPanelMixin:
     def _create_info_row(self):
         """创建节目信息行"""
         tr = self.language_manager.tr
-        ui_scale = get_ui_scale()
 
         info_layout = QHBoxLayout()
         info_layout.setSpacing(12)
@@ -165,10 +164,9 @@ class ControlPanelMixin:
 
         row1 = QHBoxLayout()
         row1.setSpacing(8)
-        self.channel_name = ElidedLabel(tr("no_channel_selected", "No channel selected"))
+        self.channel_name = ElidedLabel(tr("no_channel_selected", "No channel selected"), full_text_hint=True)
         self.channel_name.setStyleSheet(AppStyles.player_channel_name_style())
-        # 超长频道名省略显示并保留 tooltip，避免挤占节目名与时间
-        self.channel_name.setMaximumWidth(max(140, int(round(240 * ui_scale))))
+        # 不再写死最大宽度：按完整文本参与布局，只有整行真的放不下时才省略（保留 tooltip）
         row1.addWidget(self.channel_name, 0)
         self.current_program = ElidedLabel("")
         self.current_program.setObjectName("current_program")
