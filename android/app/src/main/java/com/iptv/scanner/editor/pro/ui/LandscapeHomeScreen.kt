@@ -41,6 +41,7 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -339,6 +340,27 @@ private fun LandscapeChannelSplitContent(viewModel: AppViewModel) {
         else displayChannels.filter { it.name.contains(searchQuery.trim(), ignoreCase = true) }
     }
 
+    // 底栏「频道」TAB 的 UP 落点：按当前渲染形态注册内容区焦点入口。
+    // 空态与宫格互斥渲染：宫格存在时指向首卡，空态带按钮时指向主按钮，
+    // 两者都没有时不注册（交给几何搜索），避免入口指向已被移除的宫格首卡。
+    val emptyActionFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val emptyLoading = iptvStatus?.sourceLoading == true || localSourceLoading
+    val emptyHasActions = searchedChannels.isEmpty() && searchQuery.isBlank() && !emptyLoading &&
+        (iptvStatus?.sourceWarning.orEmpty().isNotBlank() || listSourceTab == ListSourceTab.SUBSCRIPTION)
+    DisposableEffect(searchedChannels.isEmpty(), emptyHasActions) {
+        val entry = when {
+            searchedChannels.isNotEmpty() -> firstCardFocus
+            emptyHasActions -> emptyActionFocus
+            else -> null
+        }
+        if (entry != null) {
+            HomeContentFocusEntry.register(PortraitTab.CHANNELS, entry)
+            onDispose { HomeContentFocusEntry.unregister(PortraitTab.CHANNELS, entry) }
+        } else {
+            onDispose { }
+        }
+    }
+
     // onFocusChanged 只用于判断宫格区域是否已有焦点：用户在 600ms 内移走焦点时不再强行拽回第一张卡
     Row(
         modifier = Modifier
@@ -432,7 +454,9 @@ private fun LandscapeChannelSplitContent(viewModel: AppViewModel) {
                     searchQuery = searchQuery,
                     groupName = selectedGroup,
                     onAddSource = { viewModel.toggleSourceManager() },
-                    onRefresh = { viewModel.reloadSources() }
+                    onRefresh = { viewModel.reloadSources() },
+                    // 底栏 UP / 焦点回归的落点：主按钮获得焦点的入口
+                    firstActionFocusRequester = if (emptyHasActions) emptyActionFocus else null
                 )
             } else {
                 ChannelThumbnailPanel(

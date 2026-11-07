@@ -71,18 +71,23 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.Alignment
@@ -98,6 +103,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.iptv.scanner.editor.pro.data.ReminderItem
 import com.iptv.scanner.editor.pro.data.UserPrefs
 import com.iptv.scanner.editor.pro.data.IptvChannel
@@ -157,6 +163,8 @@ import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import com.iptv.scanner.editor.pro.player.CatchupHelper
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -216,6 +224,13 @@ internal fun PortraitToolsScreen(
     LaunchedEffect(Unit) {
         viewModel.loadSources()
         viewModel.loadEpgSources()
+    }
+
+    // 底栏 TAB 的 UP 需要落点：把工具页首项（本地频道卡）注册为内容区焦点入口
+    val entryFocus = remember { FocusRequester() }
+    DisposableEffect(Unit) {
+        HomeContentFocusEntry.register(PortraitTab.TOOLS, entryFocus)
+        onDispose { HomeContentFocusEntry.unregister(PortraitTab.TOOLS, entryFocus) }
     }
 
     // 与设置页一致：玻璃卡片组件读取 LocalLiquidGlass，需在本页提供开关值
@@ -295,6 +310,7 @@ internal fun PortraitToolsScreen(
             val localCount = channels.count { it.source.isEmpty() }
             Row(
                 modifier = Modifier
+                    .focusRequester(entryFocus)
                     .fillMaxWidth()
                     .tvFocusBorder(cornerRadius = 10)
                     .clickable {
@@ -693,6 +709,7 @@ internal fun PortraitToolsScreen(
 
 // -----------------------------------------------------------------
 // 设置内容（竖屏 Tab，APTV/iOS 分组卡片式）
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun PortraitSettingsContent(viewModel: AppViewModel) {
     val themeMode by viewModel.themeMode.collectAsState()
@@ -706,30 +723,82 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
     val isLandscape = androidx.compose.ui.platform.LocalConfiguration.current.orientation ==
         android.content.res.Configuration.ORIENTATION_LANDSCAPE
 
-    androidx.compose.runtime.CompositionLocalProvider(LocalLiquidGlass provides liquidGlass) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 130.dp)
-    ) {
-        item {
-            Text(
-                text = stringResource(R.string.tab_settings),
-                color = MaterialTheme.colorScheme.onBackground,
-                fontSize = 26.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-            )
+    // 底栏 TAB 的 UP 落点 + 详情关闭后的焦点回归：设置列表每一行都挂 FocusRequester。
+    // - 底栏居中悬浮、正上方是 Mini 播放条，几何 UP 永远只会回到播放条，入口必须显式注册；
+    // - BACK 关闭右侧详情后，焦点回到「进入详情前那一行」，而不是永远回第一项。
+    val rowFocuses = remember { List(15) { FocusRequester() } }
+    val rowBrings = remember { List(15) { BringIntoViewRequester() } }
+    var lastFocusedRow by remember { mutableStateOf(0) }
+    val scrollScope = rememberCoroutineScope()
+    // 行序号：0-4 通用，5-11 播放，12-13 频道，14 关于
+    fun rowModifier(index: Int): Modifier = Modifier
+        .focusRequester(rowFocuses[index])
+        .bringIntoViewRequester(rowBrings[index])
+        .onFocusChanged {
+            if (it.isFocused) {
+                lastFocusedRow = index
+                // 行比窗口高时，方向键移动后把该行滚进可视区
+                scrollScope.launch { rowBrings[index].bringIntoView() }
+            }
         }
+    var contentHasFocus by remember { mutableStateOf(false) }
+    var detailWasOpen by remember { mutableStateOf(false) }
+    val entryFocus = rowFocuses[0]
+    DisposableEffect(Unit) {
+        HomeContentFocusEntry.register(PortraitTab.SETTINGS, entryFocus)
+        onDispose { HomeContentFocusEntry.unregister(PortraitTab.SETTINGS, entryFocus) }
+    }
+    // 右侧详情面板关闭后把焦点还回进入前那一行；已有聚焦项时不抢占
+    val detailOpen = LandscapeSplitDetail.stack.isNotEmpty()
+    LaunchedEffect(detailOpen) {
+        if (detailOpen) {
+            detailWasOpen = true
+            return@LaunchedEffect
+        }
+        if (!detailWasOpen) return@LaunchedEffect
+        detailWasOpen = false
+        // 详情关闭会移除焦点节点、焦点被清空；节点回收有延迟，多次重试避免单次 requestFocus 落空
+        delay(60)
+        if (contentHasFocus) return@LaunchedEffect
+        repeat(10) { attempt ->
+            if (attempt > 0) delay(80)
+            if (runCatching { rowFocuses[lastFocusedRow].requestFocus() }.isSuccess) {
+                return@LaunchedEffect
+            }
+        }
+    }
 
-        item { AptvSectionHeader(stringResource(R.string.settings_general)) }
-        item {
-            AptvGroupCard {
+    androidx.compose.runtime.CompositionLocalProvider(LocalLiquidGlass provides liquidGlass) {
+    // 用整列滚动而不是 LazyColumn：设置行数固定（15 行），一次性组合能保证分组之间
+    // 没有「尚未组合的间隙」，遥控器 UP/DOWN 可在整列中连续移动；LazyColumn 跨 item
+    // 的焦点搜索在未组合区域会断裂，焦点会从「开机自启」直接逃逸到底栏。
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .onFocusChanged { contentHasFocus = it.hasFocus }
+    ) {
+        Text(
+            text = stringResource(R.string.tab_settings),
+            color = MaterialTheme.colorScheme.onBackground,
+            fontSize = 26.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        )
+
+        AptvSectionHeader(stringResource(R.string.settings_general))
+        AptvGroupCard {
                 val themeLabel = when (themeMode) { "light" -> stringResource(R.string.settings_theme_light); "system" -> stringResource(R.string.settings_theme_system); else -> stringResource(R.string.settings_theme_dark) }
-                AptvRow(Icons.Default.DarkMode, stringResource(R.string.settings_theme), value = themeLabel) {
+                AptvRow(
+                    Icons.Default.DarkMode,
+                    stringResource(R.string.settings_theme),
+                    value = themeLabel,
+                    modifier = rowModifier(0)
+                ) {
                     val next = when (themeMode) { "dark" -> "light"; "light" -> "system"; else -> "dark" }
                     viewModel.setThemeMode(next)
                 }
-                AptvRow(Icons.Default.Replay, stringResource(R.string.settings_auto_resume), value = if (autoResume) stringResource(R.string.settings_enabled) else stringResource(R.string.settings_disabled)) {
+                AptvRow(Icons.Default.Replay, stringResource(R.string.settings_auto_resume), value = if (autoResume) stringResource(R.string.settings_enabled) else stringResource(R.string.settings_disabled), modifier = rowModifier(1)) {
                     viewModel.setAutoResume(!autoResume)
                 }
                 // 横屏全屏播放页底栏布局样式（点击循环切换，右侧迷你预览当前样式结构）
@@ -744,61 +813,56 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
                         Spacer(modifier = Modifier.height(2.dp))
                         BottomBarStyleMiniPreview(bottomBarStyle, modifier = Modifier.width(88.dp))
                     }
-                }) {
+                }, modifier = rowModifier(2)) {
                     viewModel.setBottomBarStyle((bottomBarStyle + 1) % TV_BOTTOM_BAR_STYLES.size)
                 }
-                AptvSwitchRow(Icons.Default.AutoAwesome, "液态玻璃", checked = liquidGlass, onCheckedChange = { viewModel.setLiquidGlass(it) })
-                AptvSwitchRow(Icons.Default.PowerSettingsNew, "开机自启动", checked = bootStart, onCheckedChange = { viewModel.setBootStart(it) })
+                AptvSwitchRow(Icons.Default.AutoAwesome, "液态玻璃", checked = liquidGlass, onCheckedChange = { viewModel.setLiquidGlass(it) }, modifier = rowModifier(3))
+                AptvSwitchRow(Icons.Default.PowerSettingsNew, "开机自启动", checked = bootStart, onCheckedChange = { viewModel.setBootStart(it) }, modifier = rowModifier(4))
+            }
+
+        AptvSectionHeader(stringResource(R.string.settings_playback))
+        AptvGroupCard {
+            AptvRow(Icons.Default.PlayCircle, stringResource(R.string.settings_player), value = playerType.displayName, modifier = rowModifier(5)) {
+                splitDetailOrToggle(isLandscape, viewModel.playerSettingsOpen, { PlayerSettingsPanel(viewModel = viewModel) }) { viewModel.togglePlayerSettings() }
+            }
+            AptvRow(Icons.Default.Tv, stringResource(R.string.settings_video), modifier = rowModifier(6)) {
+                splitDetailOrToggle(isLandscape, viewModel.videoSettingsOpen, { VideoSettingsPanel(viewModel = viewModel) }) { viewModel.toggleVideoSettings() }
+            }
+            AptvRow(Icons.Default.VolumeUp, stringResource(R.string.settings_audio), modifier = rowModifier(7)) {
+                splitDetailOrToggle(isLandscape, viewModel.audioSettingsOpen, { AudioSettingsPanel(viewModel = viewModel) }) { viewModel.toggleAudioSettings() }
+            }
+            AptvRow(Icons.Default.Subtitles, stringResource(R.string.settings_subtitle), disabled = !isMpv, modifier = rowModifier(8)) {
+                splitDetailOrToggle(isLandscape, viewModel.subtitleSettingsOpen, { SubtitleSettingsPanel(viewModel = viewModel) }) { viewModel.toggleSubtitleSettings() }
+            }
+            AptvRow(Icons.Default.Tune, stringResource(R.string.settings_playback_settings), modifier = rowModifier(9)) {
+                splitDetailOrToggle(isLandscape, viewModel.playbackPanelOpen, { PlaybackPanel(viewModel = viewModel) }) { viewModel.togglePlaybackPanel() }
+            }
+            AptvRow(Icons.Default.PhotoCamera, stringResource(R.string.settings_screenshot), disabled = !isMpv, modifier = rowModifier(10)) {
+                splitDetailOrToggle(isLandscape, viewModel.screenshotPanelOpen, { ScreenshotPanel(viewModel = viewModel) }) { viewModel.toggleScreenshotPanel() }
+            }
+            AptvRow(Icons.Default.Wallpaper, stringResource(R.string.settings_view), modifier = rowModifier(11)) {
+                splitDetailOrToggle(isLandscape, viewModel.viewSettingsOpen, { ViewSettingsPanel(viewModel = viewModel) }) { viewModel.toggleViewSettings() }
             }
         }
 
-        item { AptvSectionHeader(stringResource(R.string.settings_playback)) }
-        item {
-            AptvGroupCard {
-                AptvRow(Icons.Default.PlayCircle, stringResource(R.string.settings_player), value = playerType.displayName) {
-                    splitDetailOrToggle(isLandscape, viewModel.playerSettingsOpen, { PlayerSettingsPanel(viewModel = viewModel) }) { viewModel.togglePlayerSettings() }
-                }
-                AptvRow(Icons.Default.Tv, stringResource(R.string.settings_video)) {
-                    splitDetailOrToggle(isLandscape, viewModel.videoSettingsOpen, { VideoSettingsPanel(viewModel = viewModel) }) { viewModel.toggleVideoSettings() }
-                }
-                AptvRow(Icons.Default.VolumeUp, stringResource(R.string.settings_audio)) {
-                    splitDetailOrToggle(isLandscape, viewModel.audioSettingsOpen, { AudioSettingsPanel(viewModel = viewModel) }) { viewModel.toggleAudioSettings() }
-                }
-                AptvRow(Icons.Default.Subtitles, stringResource(R.string.settings_subtitle), disabled = !isMpv) {
-                    splitDetailOrToggle(isLandscape, viewModel.subtitleSettingsOpen, { SubtitleSettingsPanel(viewModel = viewModel) }) { viewModel.toggleSubtitleSettings() }
-                }
-                AptvRow(Icons.Default.Tune, stringResource(R.string.settings_playback_settings)) {
-                    splitDetailOrToggle(isLandscape, viewModel.playbackPanelOpen, { PlaybackPanel(viewModel = viewModel) }) { viewModel.togglePlaybackPanel() }
-                }
-                AptvRow(Icons.Default.PhotoCamera, stringResource(R.string.settings_screenshot), disabled = !isMpv) {
-                    splitDetailOrToggle(isLandscape, viewModel.screenshotPanelOpen, { ScreenshotPanel(viewModel = viewModel) }) { viewModel.toggleScreenshotPanel() }
-                }
-                AptvRow(Icons.Default.Wallpaper, stringResource(R.string.settings_view)) {
-                    splitDetailOrToggle(isLandscape, viewModel.viewSettingsOpen, { ViewSettingsPanel(viewModel = viewModel) }) { viewModel.toggleViewSettings() }
-                }
+        AptvSectionHeader(stringResource(R.string.settings_channels))
+        AptvGroupCard {
+            AptvRow(Icons.Default.CompareArrows, stringResource(R.string.settings_mapping), modifier = rowModifier(12)) {
+                splitDetailOrToggle(isLandscape, viewModel.mappingPanelOpen, { MappingPanel(viewModel = viewModel) }) { viewModel.toggleMappingPanel() }
+            }
+            AptvRow(Icons.Default.Wifi, stringResource(R.string.settings_network), modifier = rowModifier(13)) {
+                splitDetailOrToggle(isLandscape, viewModel.networkPanelOpen, { NetworkPanel(viewModel = viewModel) }) { viewModel.toggleNetworkPanel() }
             }
         }
 
-        item { AptvSectionHeader(stringResource(R.string.settings_channels)) }
-        item {
-            AptvGroupCard {
-                AptvRow(Icons.Default.CompareArrows, stringResource(R.string.settings_mapping)) {
-                    splitDetailOrToggle(isLandscape, viewModel.mappingPanelOpen, { MappingPanel(viewModel = viewModel) }) { viewModel.toggleMappingPanel() }
-                }
-                AptvRow(Icons.Default.Wifi, stringResource(R.string.settings_network)) {
-                    splitDetailOrToggle(isLandscape, viewModel.networkPanelOpen, { NetworkPanel(viewModel = viewModel) }) { viewModel.toggleNetworkPanel() }
-                }
+        AptvSectionHeader(stringResource(R.string.aptv_group_about))
+        AptvGroupCard {
+            AptvRow(Icons.Default.Info, stringResource(R.string.settings_about), modifier = rowModifier(14)) {
+                splitDetailOrToggle(isLandscape, viewModel.aboutPanelOpen, { AboutPanel(viewModel = viewModel) }) { viewModel.toggleAboutPanel() }
             }
         }
-
-        item { AptvSectionHeader(stringResource(R.string.aptv_group_about)) }
-        item {
-            AptvGroupCard {
-                AptvRow(Icons.Default.Info, stringResource(R.string.settings_about)) {
-                    splitDetailOrToggle(isLandscape, viewModel.aboutPanelOpen, { AboutPanel(viewModel = viewModel) }) { viewModel.toggleAboutPanel() }
-                }
-            }
-        }
+        // 悬浮底栏遮挡预留（原 LazyColumn contentPadding(bottom = 130.dp)）
+        Spacer(modifier = Modifier.height(130.dp))
     }
     }
 }

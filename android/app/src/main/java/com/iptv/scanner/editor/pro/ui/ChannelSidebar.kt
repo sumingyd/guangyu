@@ -1362,6 +1362,8 @@ internal fun ChannelEmptyState(
     groupName: String = "",
     onAddSource: (() -> Unit)? = null,
     onRefresh: (() -> Unit)? = null,
+    /** 主操作按钮的焦点入口（横屏底栏 UP 落点用）；为 null 时不挂请求器 */
+    firstActionFocusRequester: FocusRequester? = null,
     modifier: Modifier = Modifier
 ) {
     // 原始告警串只进日志：其中可能包含异常堆栈或订阅源 URL，不适合直接展示给用户
@@ -1447,7 +1449,16 @@ internal fun ChannelEmptyState(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 primaryAction?.let { (label, action) ->
-                    Button(onClick = action, modifier = Modifier.tvFocusBorder()) {
+                    Button(
+                        onClick = action,
+                        modifier = Modifier
+                            .then(
+                                if (firstActionFocusRequester != null)
+                                    Modifier.focusRequester(firstActionFocusRequester)
+                                else Modifier
+                            )
+                            .tvFocusBorder()
+                    ) {
                         Text(label, fontSize = 13.sp)
                     }
                 }

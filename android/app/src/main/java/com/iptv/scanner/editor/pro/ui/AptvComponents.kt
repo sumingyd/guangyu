@@ -42,6 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -291,10 +292,11 @@ internal fun AptvRow(
     value: String = "",
     disabled: Boolean = false,
     trailing: (@Composable () -> Unit)? = null,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit = {}
 ) {
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             // tvFocusBorder 必须在 clickable 之前（外层）：onFocusChanged 只能观察到
             // 链中内层方向的 focus target，放在 clickable 之后收不到焦点事件（无高亮/放大）
@@ -351,10 +353,11 @@ internal fun AptvSwitchRow(
     icon: ImageVector,
     title: String,
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             // tvFocusBorder 在 clickable 之前（外层）才能收到焦点事件
             .tvFocusBorder()
@@ -378,7 +381,14 @@ internal fun AptvSwitchRow(
             fontSize = 15.sp,
             modifier = Modifier.weight(1f)
         )
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            // 整行已可聚焦（clickable）：内层 Switch 若单独成为焦点节点，
+            // 方向键会命中这个小组件、且外层 tvFocusBorder 观察不到子节点焦点（无行高亮），
+            // 与 MiniPlayerBar 内播放按钮同样的处理：不参与焦点
+            modifier = Modifier.focusProperties { canFocus = false }
+        )
     }
 }
 

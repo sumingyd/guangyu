@@ -180,6 +180,34 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import java.io.File
 
+/**
+ * 底栏 TAB → 内容区的焦点入口注册表。
+ *
+ * 底栏是悬浮在内容之上的独立焦点子树，且自身消费 LEFT/RIGHT/DOWN 用于 TAB 循环，
+ * 唯一放行的是 UP。但横屏首页里 TAB 栏居中、其正上方是同样居中的 Mini 播放条，
+ * 几何搜索的 UP 只会命中 Mini 播放条，内容区（设置/工具列表）永远拿不到焦点。
+ * 因此各 TAB 内容在组合时把「首项」的 FocusRequester 注册进来，
+ * 底栏 UP 时优先请求该入口；未注册的页（收藏等）保持原来的几何导航。
+ * 频道页按渲染形态注册：宫格存在时指向首卡，空态带操作按钮时指向主按钮。
+ */
+internal object HomeContentFocusEntry {
+    private val entries = mutableMapOf<PortraitTab, FocusRequester>()
+
+    fun register(tab: PortraitTab, requester: FocusRequester) {
+        entries[tab] = requester
+    }
+
+    fun unregister(tab: PortraitTab, requester: FocusRequester) {
+        if (entries[tab] === requester) entries.remove(tab)
+    }
+
+    /** 入口不可用（未注册/节点未挂载）时返回 false，调用方退回几何搜索 */
+    fun request(tab: PortraitTab): Boolean {
+        val requester = entries[tab] ?: return false
+        return runCatching { requester.requestFocus() }.isSuccess
+    }
+}
+
 @Composable
 internal fun PortraitBottomTabBar(
     viewModel: AppViewModel,
@@ -237,8 +265,10 @@ internal fun PortraitBottomTabBar(
                     )
                     // TV 遥控器焦点高亮：必须放在 clickable 之前（外层），否则收不到焦点事件
                     // 底栏横向 tab 的按键语义：RIGHT/DOWN=下一个 tab（端点回绕到首页），
-                    // LEFT=上一个 tab（回绕到设置）。按索引精确移动焦点，
-                    // 不消费 UP（保留回上方宫格区域的路径）
+                    // LEFT=上一个 tab（回绕到设置）。按索引精确移动焦点。
+                    // UP 不放行给几何搜索：横屏首页 TAB 栏居中、正上方是居中的 Mini 播放条，
+                    // 几何 UP 只会落回 Mini 播放条形成「播放条↔底栏」死循环，
+                    // 改为直接请求内容区注册的首项入口（设置/工具列表）。
                     .onPreviewKeyEvent { ev ->
                         if (ev.type != KeyEventType.KeyDown) {
                             return@onPreviewKeyEvent false
@@ -252,6 +282,8 @@ internal fun PortraitBottomTabBar(
                                 tabFocusRequesters[(cur + 1) % tabFocusRequesters.size].requestFocus()
                             Key.DirectionLeft ->
                                 tabFocusRequesters[(cur - 1 + tabFocusRequesters.size) % tabFocusRequesters.size].requestFocus()
+                            // 内容区未注册入口（频道宫格/收藏）时返回 false，保留原来的几何导航
+                            Key.DirectionUp -> return@onPreviewKeyEvent HomeContentFocusEntry.request(tab)
                             else -> return@onPreviewKeyEvent false
                         }
                         true
