@@ -88,6 +88,11 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.Alignment
@@ -731,6 +736,21 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
     var lastFocusedRow by remember { mutableStateOf(0) }
     val scrollScope = rememberCoroutineScope()
     // 行序号：0-4 通用，5-11 播放，12-13 频道，14 关于
+    // 显式接管上下键：目标行在可视区外时几何焦点搜索命中不了（整列滚动的视口外节点），
+    // 只靠 bringIntoView 会「先要焦点再滚动」形成死锁，到了「视图设置」就停住。
+    fun moveRowFocus(from: Int, dir: Int) {
+        scrollScope.launch {
+            var target = from + dir
+            while (target in rowFocuses.indices) {
+                val moved = runCatching {
+                    rowBrings[target].bringIntoView()
+                    rowFocuses[target].requestFocus()
+                }.isSuccess
+                if (moved) return@launch
+                target += dir
+            }
+        }
+    }
     fun rowModifier(index: Int): Modifier = Modifier
         .focusRequester(rowFocuses[index])
         .bringIntoViewRequester(rowBrings[index])
@@ -740,6 +760,17 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
                 // 行比窗口高时，方向键移动后把该行滚进可视区
                 scrollScope.launch { rowBrings[index].bringIntoView() }
             }
+        }
+        .onPreviewKeyEvent { ev ->
+            if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+            val dir = when (ev.key) {
+                Key.DirectionDown -> 1
+                Key.DirectionUp -> -1
+                else -> return@onPreviewKeyEvent false
+            }
+            if (index + dir !in rowFocuses.indices) return@onPreviewKeyEvent false
+            moveRowFocus(index, dir)
+            true
         }
     var contentHasFocus by remember { mutableStateOf(false) }
     var detailWasOpen by remember { mutableStateOf(false) }
