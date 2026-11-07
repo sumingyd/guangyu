@@ -1,6 +1,5 @@
 {
   "about": "关于",
-  "about_content": "光屿 GuangYu\n版本 1.0.0\n\n液态玻璃质感的 IPTV 播放器\n\n© 2026 光屿",
   "about_dialog_title": "关于光屿",
   "about_title": "关于",
   "acodec_label": "音频",
@@ -1454,7 +1453,6 @@
   "vbitrate_label": "视频码率",
   "vcodec_label": "视频",
   "verify_channels": "验证频道",
-  "version": "版本 1.0.0",
   "version_check_error": "版本检查异常",
   "version_check_failed": "版本检查失败",
   "version_check_timeout": "版本检查超时",
