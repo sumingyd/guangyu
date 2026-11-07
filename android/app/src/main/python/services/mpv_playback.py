@@ -169,63 +169,6 @@ class MpvPlayback:
         except Exception as e:
             self._facade.logger.debug(f"缩略图截取失败: {e}")
 
-    def _check_path_reachability(self, url):
-        """异步检查网络可达性。
-
-        返回 None 表示可达或检查超时（继续尝试播放），
-        返回错误字符串表示确定不可达（如 DNS 解析失败）。
-        """
-        if not url or not url.lower().startswith(('http://', 'https://')):
-            return None
-        result: list = [None]
-        event = threading.Event()
-
-        def _worker():
-            result[0] = self._facade._check_path_reachability_sync(url)
-            event.set()
-
-        t = threading.Thread(target=_worker, daemon=True)
-        t.start()
-        if not event.wait(timeout=3.5):
-            self._facade.logger.debug("网络可达性检查超时，继续尝试播放")
-            return None
-        return result[0]
-
-    def _check_path_reachability_sync(self, url):
-        """快速检查 HTTP/HTTPS 主机是否可达。
-
-        返回 None 表示可达或无法判断，返回错误字符串表示不可达。
-        注意：此检查仅用于快速过滤完全不可达的地址（如 DNS 解析失败），
-        不应阻止慢响应服务器播放——mpv 内部 network-timeout 会处理。
-        """
-        if not url:
-            return None
-        u = url.lower()
-        if u.startswith('bd://'):
-            return None
-        is_http = u.startswith(('http://', 'https://'))
-        if is_http:
-            try:
-                from urllib.parse import urlparse
-                parsed = urlparse(url)
-                host = parsed.hostname
-                port = parsed.port
-                if not host:
-                    return None
-                import socket
-                if not port:
-                    port = 443 if parsed.scheme == 'https' else 80
-                # 使用 AF_UNSPEC 支持 IPv4 和 IPv6（getaddrinfo 自动选择）
-                with socket.socket(socket.AF_UNSPEC, socket.SOCK_STREAM) as sock:
-                    sock.settimeout(3)
-                    sock.connect((host, port))
-            except (socket.timeout, socket.error, OSError) as e:
-                return f"网络不可达: {host}:{port} ({e})"
-            except Exception as e:
-                logger.debug(f"_check_path_reachability_sync 未知异常: {e}")
-            return None
-        return None
-
     def _check_thumbnail_saved(self, filepath):
         try:
             if self._facade._terminated:
@@ -524,11 +467,6 @@ class MpvPlayback:
             net_to = self._facade._playback_settings.get('network_timeout_sec', 0)
             if net_to > 0:
                 _mpv_set_property_string(self._facade.mpv_handle, 'network-timeout', str(net_to))
-
-            # source-timeout：source 暂时不可用时快速失败，避免长时间阻塞导致卡顿
-            source_to = self._facade._playback_settings.get('source_timeout_sec', 0)
-            if source_to > 0:
-                _mpv_set_property_string(self._facade.mpv_handle, 'source-timeout', str(source_to))
 
             # 性能与卡顿优化：
             # - framedrop：视频输出慢时丢帧策略，默认 vo（VO 慢时丢帧），用户可配置
@@ -936,8 +874,12 @@ class MpvPlayback:
                                         self._facade.logger.info(f"断线自动重连 ({self._facade._reconnect_count}/{self._facade._max_reconnect})")
                                         self._facade._safe_emit(self._facade.reconnect_requested, self._facade.current_url)
                                     else:
-                                        self._facade.logger.info("已达最大重连次数，停止重连")
+                                        self._facade.logger.error("已达最大重连次数，停止重连")
                                         self._facade._reconnect_count = 0
+                                        # 重连耗尽必须让用户看到明确错误，否则界面只会停在"已暂停"
+                                        self._facade._safe_emit(
+                                            self._facade.play_error,
+                                            "重连失败，请检查网络或更换频道")
                         elif reason in (MPV_END_FILE_REASON_STOP, MPV_END_FILE_REASON_QUIT):
                             self._facade.logger.debug(f"END_FILE: 正常停止/退出 reason={reason}")
                         else:
@@ -1806,16 +1748,6 @@ class MpvPlayback:
             self._facade._user_stopped = False
             self._facade._switching_channel = True
 
-            reachability = self._facade._check_path_reachability(url)
-            if reachability is not None:
-                # 预检查失败不阻止播放：某些服务器响应慢或有地域限制，
-                # Python socket 检查可能超时，但 mpv 内部网络栈（network-timeout=30s）
-                # 可以成功连接。仅记录警告，让 mpv 自行尝试。
-                self._facade.logger.warning(
-                    f"预检查提示可能不可达（不阻止播放）: {reachability}，"
-                    f"交给 mpv 尝试连接"
-                )
-
             if not self._facade.mpv_handle:
                 self._facade.logger.error("mpv播放器未初始化")
                 self._facade._safe_emit(self._facade.play_error, "mpv播放器未初始化")
@@ -1967,7 +1899,7 @@ class MpvPlayback:
             logger.debug(f"unexpected error: {_e}")
         saved_url = self._facade.current_url
         saved_position = 0.0
-        was_playing = self._facade.is_playing and not self._facade.is_paused
+        was_paused = bool(self._facade.is_paused)
         if self._facade.mpv_handle:
             try:
                 saved_position = self._facade._get_mpv_property_double('time-pos') or 0.0
@@ -2003,30 +1935,41 @@ class MpvPlayback:
         if not self._facade._ensure_mpv_initialized():
             self._facade.logger.error("HDR模式切换后重新初始化mpv失败")
             return
-        if saved_url and was_playing:
+        # 只要存在原 URL 就重播：暂停态下 is_playing=False，原先会被跳过，
+        # 旧流已停、新实例不加载任何内容，却仍被当作直播，且没有自动恢复路径。
+        if saved_url:
+            from PySide6.QtCore import QTimer
             self._facade.play(saved_url)
-            if saved_position > 0:
-                from PySide6.QtCore import QTimer
-                pos = saved_position
-                seek_retries = [0]
+            pos = saved_position
+            seek_retries = [0]
 
-                def _do_seek():
-                    if self._facade._terminated or not self._facade.mpv_handle or not self._facade.is_playing:
-                        return
-                    # 等待 file-loaded 事件后再 seek，确保播放器就绪
-                    file_loaded = False
-                    try:
-                        file_loaded = self._facade._get_mpv_property_double('time-pos') is not None
-                    except Exception as _e:
-                        logger.debug(f"unexpected error: {_e}")
-                    if file_loaded:
-                        self._facade.send_command(['seek', str(pos), 'absolute'])
-                    elif seek_retries[0] < 5:
+            def _restore_after_reload():
+                if self._facade._terminated or not self._facade.mpv_handle:
+                    return
+                if not self._facade.is_playing:
+                    return
+                # 等待 file-loaded 事件后再 seek，确保播放器就绪
+                file_loaded = False
+                try:
+                    file_loaded = self._facade._get_mpv_property_double('time-pos') is not None
+                except Exception as _e:
+                    logger.debug(f"unexpected error: {_e}")
+                if not file_loaded:
+                    if seek_retries[0] < 5:
                         seek_retries[0] += 1
-                        QTimer.singleShot(500, _do_seek)
+                        QTimer.singleShot(500, _restore_after_reload)
                     else:
                         self._facade.logger.warning(f"HDR切换后恢复播放位置失败（重试 {seek_retries[0]} 次后放弃）")
-                QTimer.singleShot(1500, _do_seek)
+                    return
+                if pos > 0:
+                    self._facade.send_command(['seek', str(pos), 'absolute'])
+                # 按切换前的暂停状态恢复
+                if was_paused:
+                    self._facade._set_mpv_string('pause', 'yes')
+                    self._facade.is_paused = True
+                    self._facade.is_playing = False
+                    self._facade._safe_emit(self._facade.play_state_changed, False)
+            QTimer.singleShot(1500, _restore_after_reload)
         self._facade.logger.info(f"HDR模式已切换为: {new_hdr_mode}")
 
     def seek(self, position):
@@ -2199,8 +2142,22 @@ class MpvPlayback:
             if not self._facade.mpv_handle or self._facade._terminated:
                 return False
             prop = f'{track_type}-track' if track_type in ('audio', 'sub') else track_type
+            cmd_prop = 'aid' if track_type == 'audio' else ('sid' if track_type == 'sub' else prop)
+            track_str = str(track_id)
             current = self._facade.get_current_track(track_type)
-            if current is not None and current == track_id:
+            if current is not None and str(current) == track_str:
+                return True
+            # 'no'/'auto' 等非数字取值只能走字符串属性，直接 int() 会抛异常被吞掉
+            if not track_str.lstrip('-').isdigit():
+                with self._facade._lock:
+                    if not self._facade.mpv_handle or self._facade._terminated:
+                        return False
+                    result = self._facade._set_mpv_string(prop, track_str)
+                if result < 0:
+                    result = self._facade.send_command(['set', cmd_prop, track_str])
+                if result < 0:
+                    self._facade.logger.error(f"切换轨道失败: {prop}={track_str}, 错误码={result}")
+                    return False
                 return True
             with self._facade._lock:
                 if not self._facade.mpv_handle or self._facade._terminated:

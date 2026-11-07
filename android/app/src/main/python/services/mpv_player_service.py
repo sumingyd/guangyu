@@ -88,7 +88,6 @@ def _load_playback_settings():
         'demuxer_max_bytes_mib': 16,
         'demuxer_max_back_bytes_mib': 4,
         'fcc_prefetch_count': 2,
-        'source_timeout_sec': 3,
         'enable_protocol_adaptive': True,
         'hls_start_at_live_edge': False,
         'hls_readahead_secs': 0,
@@ -274,12 +273,6 @@ class MpvPlayerController(QObject):
 
     def _is_network_drive(self, path):
         return self._playback._is_network_drive(path)
-
-    def _check_path_reachability_sync(self, url):
-        return self._playback._check_path_reachability_sync(url)
-
-    def _check_path_reachability(self, url):
-        return self._playback._check_path_reachability(url)
 
     def _fix_unc_path(self, path):
         return self._playback._fix_unc_path(path)
