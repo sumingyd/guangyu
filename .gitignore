@@ -215,6 +215,7 @@ capture/
 
 # 配置文件
 *.ini
+!pytest.ini
 config.ini
 playback_settings.json
 
