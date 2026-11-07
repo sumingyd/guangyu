@@ -64,8 +64,8 @@ class LogoCacheService(ThreadSafeQObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        from models.channel_mappings import get_app_data_dir
-        app_dir = get_app_data_dir()
+        from utils.app_paths import get_cache_dir
+        app_dir = get_cache_dir()
         self._cache_dir = os.path.join(app_dir, self.CACHE_DIR_NAME)
         os.makedirs(self._cache_dir, exist_ok=True)
         self._meta_path = os.path.join(self._cache_dir, self.META_FILE)

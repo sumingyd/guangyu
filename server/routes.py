@@ -1941,12 +1941,8 @@ def _get_player():
 
 def _get_cache_dir(sub: str) -> str:
     """获取缓存子目录绝对路径，不存在则创建"""
-    # Android Chaquopy 环境：优先使用 IPTV_DATA_DIR（已指向 ISEP 目录）
-    android_data = get_android_data_dir()
-    if android_data:
-        base = os.path.join(android_data, 'cache', sub)
-    else:
-        base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache', sub)
+    from utils.app_paths import get_cache_dir
+    base = os.path.join(get_cache_dir(), sub)
     os.makedirs(base, exist_ok=True)
     return base
 
@@ -2122,8 +2118,12 @@ async def handle_share_file(request):
     android_data = get_android_data_dir()
     if android_data:
         allowed_roots.append(os.path.realpath(android_data))
-    _cache_base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
-    allowed_roots.append(os.path.realpath(_cache_base))
+    # 新旧缓存目录都允许：迁移前截图的文件仍可能位于程序目录 cache 下
+    from utils.app_paths import get_cache_dir
+    allowed_roots.append(os.path.realpath(get_cache_dir()))
+    _legacy_cache_base = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
+    allowed_roots.append(os.path.realpath(_legacy_cache_base))
     real_path = os.path.realpath(path)
     if not any(real_path.startswith(root + os.sep) or real_path == root for root in allowed_roots):
         return _json_error('文件路径不在允许范围内', 403)
@@ -2163,11 +2163,8 @@ async def handle_cache_clear(request):
     if cache_type not in valid_types:
         return _json_error(f'无效的缓存类型: {cache_type}')
     try:
-        cache_root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
-        # Android Chaquopy 环境：使用 IPTV_DATA_DIR（已指向 ISEP 目录）下的 cache 目录
-        android_data = get_android_data_dir()
-        if android_data:
-            cache_root = os.path.join(android_data, 'cache')
+        from utils.app_paths import get_cache_dir
+        cache_root = get_cache_dir()
         targets = [cache_type] if cache_type != 'all' else ['thumbnails', 'screenshots', 'subtitles']
         cleared = []
         for sub in targets:
@@ -2203,11 +2200,9 @@ def _get_log_file_path():
         return instance.log_file
     except Exception:
         pass
-    # fallback：与 LogManager._get_log_path 同逻辑
-    android_data = get_android_data_dir()
-    if android_data:
-        return os.path.join(android_data, 'app.log')
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'app.log')
+    # fallback：与 LogManager 的候选路径保持一致（用户日志目录优先）
+    from utils.app_paths import get_log_dir
+    return os.path.join(get_log_dir(), 'app.log')
 
 
 async def handle_log_view(request):

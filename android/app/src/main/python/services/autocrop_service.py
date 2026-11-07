@@ -14,7 +14,6 @@ import threading
 import time
 
 from core.log_manager import global_logger as logger
-from utils.platform_utils import get_android_data_dir
 
 
 # 黑边判定阈值（灰度 < 该值视为黑色）
@@ -82,15 +81,9 @@ class AutoCropService:
     def _worker(self, pc, done_callback):
         """工作线程：截图 -> 分析 -> 应用滤镜"""
         try:
-            # 1. 截图到临时文件
-            _android_data = get_android_data_dir()
-            if _android_data:
-                cache_dir = os.path.join(_android_data, 'cache', 'autocrop')
-            else:
-                cache_dir = os.path.join(
-                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                    'cache', 'autocrop'
-                )
+            # 1. 截图到临时文件（放在用户缓存目录，避免打包目录不可写/被清理）
+            from utils.app_paths import get_cache_dir
+            cache_dir = os.path.join(get_cache_dir(), 'autocrop')
             os.makedirs(cache_dir, exist_ok=True)
             tmp_path = os.path.join(cache_dir, f'frame_{int(time.time())}.png')
             ret = pc.send_command(['screenshot-to-file', tmp_path, 'video'])

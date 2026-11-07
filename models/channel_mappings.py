@@ -9,6 +9,7 @@ from typing import Dict, List
 
 from core.log_manager import global_logger as logger
 from core.config_manager import ConfigManager
+from utils.app_paths import get_config_dir
 
 
 def get_app_data_dir() -> str:
@@ -49,10 +50,10 @@ DEFAULT_REMOTE_URL = (
     "https://raw.githubusercontent.com/sumingyd/guangyu/main/local_channel_mappings.csv"
 )
 
-# 本地缓存文件路径（使用绝对路径，兼容PyInstaller打包）
-CACHE_FILE = os.path.join(get_app_data_dir(), "channel_mappings_cache.json")
-USER_MAPPINGS_FILE = os.path.join(get_app_data_dir(), "user_channel_mappings.json")
-CHANNEL_FINGERPRINT_FILE = os.path.join(get_app_data_dir(), "channel_fingerprints.json")
+# 本地缓存文件路径（写入用户配置目录，避免打包后程序目录不可写导致映射丢失）
+CACHE_FILE = os.path.join(get_config_dir(), "channel_mappings_cache.json")
+USER_MAPPINGS_FILE = os.path.join(get_config_dir(), "user_channel_mappings.json")
+CHANNEL_FINGERPRINT_FILE = os.path.join(get_config_dir(), "channel_fingerprints.json")
 
 
 def load_mappings_from_file(file_path: str) -> Dict[str, dict]:

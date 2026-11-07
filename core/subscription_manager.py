@@ -22,10 +22,10 @@ class SubscriptionManager(Singleton):
         self._initialized = True
 
     def _get_cache_dir(self) -> str:
-        from models.channel_mappings import get_app_data_dir
+        from utils.app_paths import get_cache_dir
         cache_dir = self._config.get_value('General', 'cache_dir', 'cache') or 'cache'
         if not os.path.isabs(cache_dir):
-            cache_dir = os.path.join(get_app_data_dir(), cache_dir)
+            cache_dir = os.path.join(get_cache_dir(), cache_dir)
         if not os.path.exists(cache_dir):
             os.makedirs(cache_dir, exist_ok=True)
         return cache_dir

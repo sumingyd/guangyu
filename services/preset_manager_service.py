@@ -77,7 +77,11 @@ class PresetManagerService:
     }
 
     def __init__(self, config_dir: str = ''):
-        self._config_dir = config_dir or os.getcwd()
+        if not config_dir:
+            # 用户预设属于配置数据，必须写入用户目录而不是进程工作目录
+            from utils.app_paths import get_config_dir
+            config_dir = get_config_dir()
+        self._config_dir = config_dir
         self._preset_path = os.path.join(self._config_dir, self.PRESET_FILE)
         self._data = None
         self._load()

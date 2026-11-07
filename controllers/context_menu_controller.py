@@ -175,7 +175,8 @@ class ContextMenuController:
         try:
             from datetime import datetime
 
-            screenshot_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'screenshots')
+            from utils.app_paths import get_cache_dir
+            screenshot_dir = os.path.join(get_cache_dir(), 'screenshots')
             os.makedirs(screenshot_dir, exist_ok=True)
 
             channel_name = ''

@@ -7,7 +7,7 @@ import threading
 from PySide6.QtCore import QTimer
 from core.log_manager import global_logger as logger
 from utils.platform_utils import (
-    is_windows, is_macos, is_linux, is_android, get_android_data_dir,
+    is_windows, is_macos, is_linux, is_android,
 )
 from services.mpv_common import (
     mpv_event,
@@ -142,15 +142,8 @@ class MpvPlayback:
             return
         try:
             import hashlib
-            # Android Chaquopy 环境：优先使用 IPTV_DATA_DIR（已指向 ISEP 目录）
-            _android_data = get_android_data_dir()
-            if _android_data:
-                cache_dir = os.path.join(_android_data, 'cache', 'thumbnails')
-            else:
-                cache_dir = os.path.join(
-                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                    'cache', 'thumbnails'
-                )
+            from utils.app_paths import get_cache_dir
+            cache_dir = os.path.join(get_cache_dir(), 'thumbnails')
             os.makedirs(cache_dir, exist_ok=True)
             url_hash = hashlib.md5(self._facade.current_url.encode('utf-8')).hexdigest()
             filepath = os.path.join(cache_dir, f"{url_hash}.png")
@@ -1682,12 +1675,8 @@ class MpvPlayback:
         if not url:
             return None
         import hashlib
-        # Android Chaquopy 环境：优先使用 IPTV_DATA_DIR（已指向 ISEP 目录）
-        _android_data = get_android_data_dir()
-        if _android_data:
-            cache_dir = os.path.join(_android_data, 'cache', 'thumbnails')
-        else:
-            cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache', 'thumbnails')
+        from utils.app_paths import get_cache_dir
+        cache_dir = os.path.join(get_cache_dir(), 'thumbnails')
         filepath = os.path.join(cache_dir, f"{hashlib.md5(url.encode('utf-8')).hexdigest()}.png")
         if os.path.exists(filepath):
             return filepath

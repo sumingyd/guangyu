@@ -122,7 +122,8 @@ class SubscriptionController:
 
     def _get_cache_file_path(self, url: str) -> str:
         """获取缓存文件路径（基于URL的hash）"""
-        cache_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'cache')
+        from utils.app_paths import get_cache_dir
+        cache_dir = get_cache_dir()
         os.makedirs(cache_dir, exist_ok=True)
         url_hash = hashlib.md5(url.encode()).hexdigest()
         return os.path.join(cache_dir, f'm3u_{url_hash}.cache')

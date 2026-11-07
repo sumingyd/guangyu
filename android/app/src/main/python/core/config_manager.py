@@ -1,12 +1,11 @@
 import configparser
 import os
-import sys
 import time
 import threading
 from .log_manager import global_logger as logger
 from utils.config_notifier import notify_config_change
 from utils.singleton import Singleton
-from utils.platform_utils import get_android_data_dir
+from utils.app_paths import get_config_dir, migrate_legacy_data
 from core.stores.window_layout_store import WindowLayoutStore
 from core.stores.network_settings_store import NetworkSettingsStore
 from core.stores.resume_store import ResumeStore
@@ -21,16 +20,11 @@ class ConfigManager(Singleton):
         if self._initialized:
             return
 
-        android_data = get_android_data_dir()
-        if android_data:
-            config_dir = android_data
-            os.makedirs(config_dir, exist_ok=True)
-        elif getattr(sys, 'frozen', False):
-            config_dir = os.path.dirname(sys.executable)
-        else:
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            config_dir = os.path.dirname(current_dir)
+        config_dir = get_config_dir()
+        os.makedirs(config_dir, exist_ok=True)
         self.config_dir = config_dir
+        # 首次启动：旧版本把数据写在程序目录，先复制到用户目录再读取
+        migrate_legacy_data(config_dir=config_dir)
         self.config_file = os.path.join(config_dir, config_file)
         self.config = configparser.ConfigParser(interpolation=None, strict=False)
         self._lock = threading.RLock()
