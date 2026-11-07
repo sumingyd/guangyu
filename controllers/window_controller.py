@@ -9,7 +9,8 @@ from PySide6.QtCore import Qt, QPoint, QSize
 from PySide6.QtGui import QIcon
 from ui.styles import AppStyles
 from controllers.main_window_protocol import UiProtocol
-from utils.platform_utils import is_wayland, wayland_move
+from utils.platform_utils import is_macos, is_wayland, wayland_move
+from core.log_manager import global_logger as logger
 
 
 class WindowController:
@@ -140,12 +141,50 @@ class WindowController:
     def toggle_stay_on_top(self):
         """切换置顶状态"""
         self._stay_on_top_active = not self._stay_on_top_active
+        # macOS：setWindowFlags 会重建 NSWindow，连带销毁 QOpenGLWidget 的
+        # 渲染窗口，表现为切换置顶后视频黑屏。这里改走 NSWindow.setLevel_，
+        # 不重建窗口；原生调用不可用时才退回通用实现。
+        if is_macos() and self._apply_macos_window_level():
+            self._update_stay_on_top_button()
+            self._sync_floating_panels_on_top()
+            return
         flags = self.window.windowFlags()
-        color = AppStyles._get_colors().get('window_text', '#ffffff')
         saved_pos = self.window.pos() if is_wayland() else None
         self.window.hide()
         if self._stay_on_top_active:
             self.window.setWindowFlags(flags | Qt.WindowType.WindowStaysOnTopHint)
+        else:
+            self.window.setWindowFlags(flags & ~Qt.WindowType.WindowStaysOnTopHint)
+        self.window.show()
+        self._update_stay_on_top_button()
+        if saved_pos is not None:
+            wayland_move(self.window, saved_pos.x(), saved_pos.y())
+        self._sync_floating_panels_on_top()
+
+    def _apply_macos_window_level(self):
+        """用 NSWindow.setLevel_ 实现置顶，避免重建窗口。"""
+        try:
+            from AppKit import NSFloatingWindowLevel, NSNormalWindowLevel
+            from utils.mac_blur_helper import wrap_ns_object
+            ns_view = wrap_ns_object(self.window.winId())
+            if ns_view is None:
+                return False
+            ns_window = ns_view.window() if hasattr(ns_view, 'window') else None
+            if ns_window is None:
+                return False
+            level = NSFloatingWindowLevel if self._stay_on_top_active else NSNormalWindowLevel
+            ns_window.setLevel_(level)
+            return True
+        except Exception as e:
+            logger.debug(f"macOS 置顶设置失败，回退到 setWindowFlags: {e}")
+            return False
+
+    def _update_stay_on_top_button(self):
+        """同步置顶按钮的图标与高亮样式。"""
+        if self._stay_on_top_btn is None:
+            return
+        color = AppStyles._get_colors().get('window_text', '#ffffff')
+        if self._stay_on_top_active:
             icon_path = AppStyles.get_icon('pin_active', color, 14)
             if icon_path:
                 self._stay_on_top_btn.setIcon(QIcon(icon_path))
@@ -166,15 +205,10 @@ class WindowController:
                 base_style + f" background-color: rgba({r}, {g}, {b}, 0.25); }}"
             )
         else:
-            self.window.setWindowFlags(flags & ~Qt.WindowType.WindowStaysOnTopHint)
             icon_path = AppStyles.get_icon('pin', color, 14)
             if icon_path:
                 self._stay_on_top_btn.setIcon(QIcon(icon_path))
             self._stay_on_top_btn.setStyleSheet(self._title_btn_style())
-        self.window.show()
-        if saved_pos is not None:
-            wayland_move(self.window, saved_pos.x(), saved_pos.y())
-        self._sync_floating_panels_on_top()
 
     def _sync_floating_panels_on_top(self):
         """同步所有浮动面板的置顶状态（包括当前不可见的，确保重新显示时继承正确状态）"""
@@ -191,6 +225,21 @@ class WindowController:
             # 只对当前可见的面板调用 show()，不可见面板仅更新 flags
             if panel.isVisible():
                 panel.show()
+                self._reapply_macos_panel_blur(panel)
+
+    def _reapply_macos_panel_blur(self, panel):
+        """面板 setWindowFlags 重建窗口后会丢掉挂载的 NSVisualEffectView，重新挂一次。"""
+        if not is_macos():
+            return
+        try:
+            from ui.styles import AppStyles
+            if not AppStyles.is_glass_style():
+                return
+            from utils.mac_blur_helper import MacBlurHelper
+            if MacBlurHelper.apply(panel, material="menu"):
+                setattr(panel, '_dwm_blur_enabled', True)
+        except Exception as e:
+            logger.debug(f"重建浮动面板后恢复毛玻璃失败: {e}")
 
     def handle_mouse_press_event(self, event) -> bool:
         if event.button() == Qt.MouseButton.LeftButton:

@@ -13,6 +13,7 @@ from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import QApplication, QComboBox, QFrame, QLabel, QListWidget, QMenuBar, QSlider, QToolButton
 from controllers.main_window_protocol import MainWindowProtocol
+from utils.platform_utils import is_macos
 
 
 class UIController:
@@ -1203,7 +1204,12 @@ class UIController:
                 file_menu.addSeparator()
 
                 exit_action = QAction(tr("menu_exit", "Exit\tCtrl+Q"), self.window)
-                exit_action.triggered.connect(self.window.close)
+                # macOS 上"退出"必须真正退出：窗口的关闭按钮走的是"关闭到托盘"，
+                # 菜单里的 Exit 如果也走 close() 就永远退不掉。
+                if is_macos():
+                    exit_action.triggered.connect(self._quit_from_menu)
+                else:
+                    exit_action.triggered.connect(self.window.close)
                 file_menu.addAction(exit_action)
 
             self.window.recent_menu = recent_menu
@@ -1615,6 +1621,36 @@ class UIController:
 
         self._register_global_shortcuts()
 
+        # macOS 的快捷键修饰键是 Command，菜单里的 "Ctrl+O" 文案直接展示会误导用户。
+        if is_macos():
+            self._localize_menu_shortcut_text(menu_bar)
+
+    def _quit_from_menu(self):
+        """菜单"退出"：macOS 上强制退出（不进入托盘）。"""
+        quit_handler = getattr(self.window, '_tray_quit', None)
+        if callable(quit_handler):
+            quit_handler()
+        else:
+            self.window.close()
+
+    def _localize_menu_shortcut_text(self, menu):
+        """把菜单项里的 Ctrl+/Shift+/Alt+ 替换成 macOS 符号（仅影响显示文案）。"""
+        try:
+            for action in menu.actions():
+                text = action.text()
+                if '\t' in text:
+                    title, shortcut = text.split('\t', 1)
+                    shortcut = (shortcut
+                                .replace('Ctrl+', '⌘')
+                                .replace('Shift+', '⇧')
+                                .replace('Alt+', '⌥'))
+                    action.setText(f"{title}\t{shortcut}")
+                submenu = action.menu()
+                if submenu is not None:
+                    self._localize_menu_shortcut_text(submenu)
+        except Exception as e:
+            logger.debug(f"macOS 菜单快捷键文案本地化失败: {e}")
+
     def _register_global_shortcuts(self):
         """全局快捷键统一由菜单 QAction 声明；这里只清理旧版本遗留的独立快捷键。"""
         old = getattr(self.window, '_global_search_shortcut', None)
@@ -1625,6 +1661,31 @@ class UIController:
             except RuntimeError as e:
                 logger.debug(f"清理旧快捷键失败: {e}")
             self.window._global_search_shortcut = None
+        if is_macos():
+            self._register_macos_standard_shortcuts()
+
+    def _register_macos_standard_shortcuts(self):
+        """补齐 macOS 标准窗口快捷键（Cmd+W 关闭、Cmd+M 最小化）。
+
+        macOS 原生菜单栏已被关闭（setNativeMenuBar(False)），系统不再注入
+        这些条目；不显式注册的话，除 Cmd+Q 外的标准窗口快捷键全部缺失。
+        """
+        if getattr(self.window, '_mac_standard_shortcuts', None) is not None:
+            return
+        shortcuts = []
+        bindings = (
+            (QKeySequence(QKeySequence.StandardKey.Close), self.window.close),
+            (QKeySequence("Ctrl+M"), self.window.showMinimized),
+        )
+        for sequence, slot in bindings:
+            try:
+                sc = QShortcut(sequence, self.window)
+                sc.setContext(Qt.ShortcutContext.WindowShortcut)
+                sc.activated.connect(slot)
+                shortcuts.append(sc)
+            except Exception as e:
+                logger.debug(f"注册 macOS 快捷键失败 {sequence.toString()}: {e}")
+        self.window._mac_standard_shortcuts = shortcuts
 
     def _redo_from_shortcut(self):
         undo_stack = getattr(self.window, 'undo_stack', None)

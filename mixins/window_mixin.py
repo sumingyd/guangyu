@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QApplication, QCheckBox, QMessageBox, QToolButton
 
 from core.log_manager import global_logger as logger
 from ui.styles import AppStyles
-from utils.platform_utils import wayland_move, wayland_set_geometry, get_ui_scale
+from utils.platform_utils import is_macos, wayland_move, wayland_set_geometry, get_ui_scale
 from utils.thread_safety import safe_single_shot
 
 
@@ -267,10 +267,14 @@ class WindowMixin:
             if self.status_bar:
                 self.status_bar.hide()
             self.showFullScreen()
-            screen = self.screen()
-            if screen:
-                geo = screen.geometry()
-                wayland_set_geometry(self, geo.x(), geo.y(), geo.width(), geo.height())
+            # macOS 的全屏由 NSWindow 进入独立 Space 管理，进入后 Qt 会自动把
+            # 窗口铺满目标屏幕；这里再 setGeometry 会打断原生全屏动画，甚至
+            # 把窗口留在错误的 Space 里，因此 macOS 跳过。
+            if not is_macos():
+                screen = self.screen()
+                if screen:
+                    geo = screen.geometry()
+                    wayland_set_geometry(self, geo.x(), geo.y(), geo.width(), geo.height())
             self._position_fullscreen_menu_button()
             logger.debug(f"进入全屏后: geometry={self.geometry().getRect()}, isFullScreen={self.isFullScreen()}")
             self.unsetCursor()
@@ -293,7 +297,9 @@ class WindowMixin:
             logger.debug(f"退出全屏: showNormal前geometry={self.geometry().getRect()}, isFullScreen={self.isFullScreen()}, saved_geo={getattr(self, '_before_fullscreen_geo', None)}")
             self.showNormal()
             saved_geo = getattr(self, '_before_fullscreen_geo', None)
-            if saved_geo:
+            # 退出原生全屏时 macOS 会自行恢复进入前的窗口几何，
+            # 再调 setGeometry 会与系统恢复流程打架（多屏/DPI 下位置漂移）。
+            if saved_geo and not is_macos():
                 wayland_set_geometry(self, saved_geo.x(), saved_geo.y(), saved_geo.width(), saved_geo.height())
             logger.debug(f"退出全屏后: geometry={self.geometry().getRect()}, isFullScreen={self.isFullScreen()}")
             if saved:
@@ -363,6 +369,29 @@ class WindowMixin:
             logger.info("成功打开频道映射管理器")
         except Exception as ex:
             logger.error(f"打开频道映射管理器失败: {str(ex)}")
+
+    def _clamp_window_position(self, x, y, width, height):
+        """校正保存的窗口位置：显示器被拔掉或分辨率变化后窗口可能完全落在屏幕外。"""
+        try:
+            from PySide6.QtCore import QRect
+            from PySide6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app is None:
+                return x, y
+            screens = app.screens()
+            if not screens:
+                return x, y
+            rect = QRect(x, y, width, height)
+            for screen in screens:
+                if screen.availableGeometry().intersected(rect).isValid():
+                    return x, y
+            primary = app.primaryScreen() or screens[0]
+            avail = primary.availableGeometry()
+            logger.warning(f"保存的窗口位置({x},{y})不在任何屏幕内，已回到主屏")
+            return avail.x() + 40, avail.y() + 40
+        except Exception as e:
+            logger.debug(f"校正窗口位置失败: {e}")
+            return x, y
 
     def _center_dialog_on_screen(self, dialog):
         # 优先用主窗口所在屏幕，避免多显示器下弹到主屏

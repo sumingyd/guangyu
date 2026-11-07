@@ -4,7 +4,7 @@ from PySide6.QtCore import QSize
 from PySide6.QtGui import QGuiApplication, QIcon, QColor, QPalette
 from ui.styles import AppStyles
 from utils.singleton import Singleton
-from utils.platform_utils import is_windows, is_macos, is_android
+from utils.platform_utils import is_windows, is_macos, is_android, has_x11_compositor
 import os
 
 
@@ -132,20 +132,29 @@ class ThemeManager(Singleton, QtCore.QObject):
             # 玻璃语义统一由 AppStyles 判定：玻璃风格必须真正启用模糊，
             # 非玻璃风格使用实色卡片，不再保留"半透明无模糊"的中间态。
             is_glass = AppStyles.is_glass_style()
+            # 无合成器的 X11 上，逐像素透明顶层窗会渲染成纯黑，必须回退为不透明
+            allow_translucent = has_x11_compositor()
+            if not allow_translucent:
+                logger.warning("未检测到 X11 合成管理器，已关闭窗口透明以避免黑底（半透明/圆角不可用）")
             if isinstance(window, QtWidgets.QMainWindow):
                 if is_glass:
-                    window.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+                    window.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, allow_translucent)
                     # 主窗口内含 mpv 的 wid 原生子窗口：系统材质（Mica）只采样壁纸，
                     # 不参与窗后视频合成，且本身不透明。这里保留逐像素 alpha，
                     # 但必须显式关闭系统材质，否则视频区永远被 Mica 挡住。
-                    self._disable_dwm_blur(window)
+                    # macOS 没有 Mica，走 NSVisualEffectView 才是真正的玻璃，
+                    # 之前的 _disable_dwm_blur 会把主窗口的毛玻璃也一并摘掉。
+                    if is_macos():
+                        self._enable_dwm_blur(window)
+                    else:
+                        self._disable_dwm_blur(window)
                 else:
                     window.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, False)
                     self._disable_dwm_blur(window)
                 # 对话框/dock 需要半透明才能做圆角切口；透明不等于玻璃，
                 # 卡片填充色由 AppStyles.get_card_alpha() 决定（非玻璃风格 alpha=255）。
                 for child in window.findChildren(QtWidgets.QDialog):
-                    child.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+                    child.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, allow_translucent)
                     if is_glass:
                         self._enable_dwm_blur(child)
                     else:
@@ -153,7 +162,7 @@ class ThemeManager(Singleton, QtCore.QObject):
                 for dock_attr in ('epg_dock', 'playlist_dock', 'floating_dock'):
                     dock = getattr(window, dock_attr, None)
                     if dock:
-                        dock.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+                        dock.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, allow_translucent)
                         # 通知 dock 重新解析卡片语义（模糊/实色 + mask + 背景快照）
                         refresh = getattr(dock, 'refresh_glass_surface', None)
                         if callable(refresh):

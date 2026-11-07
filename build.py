@@ -209,6 +209,7 @@ HIDDEN_IMPORTS = [
     "utils.general_utils",
     "utils.hdr_detect",
     "utils.logging_helper",
+    "utils.mac_blur_helper",
     "utils.memory_manager",
     "utils.progress_manager",
     "utils.resource_cleaner",
@@ -411,6 +412,14 @@ def _fix_dylib_install_name(dylib_path):
         for old_prefix in ["/usr/local/lib/", "/opt/homebrew/lib/"]:
             _run(["install_name_tool", "-change", f"{old_prefix}libmpv.2.dylib",
                   "@rpath/libmpv.2.dylib", str(dylib_path)])
+        # arm64 要求动态库必须有有效签名；install_name_tool 改写
+        # LC_ID_DYLIB / LC_LOAD_DYLIB 后原签名立即失效，不重签会被内核拒绝加载。
+        sign = _run(["codesign", "--force", "--sign", "-", str(dylib_path)],
+                    capture_output=True, text=True)
+        if sign.returncode != 0:
+            print(f"  警告: install_name 修复后 ad-hoc 重签名失败: {sign.stderr.strip()}")
+        else:
+            print("  dylib 已 ad-hoc 重签名")
     except Exception as e:
         print(f"  修复dylib引用路径失败: {e}")
 
@@ -526,6 +535,9 @@ def build_macos():
     cmd.extend([
         "--windowed",
         "--osx-bundle-identifier", BUNDLE_ID,
+        # mac 专有模块是运行时按需 import 的，PyInstaller 静态分析看不到
+        "--hidden-import", "objc",
+        "--hidden-import", "AppKit",
     ])
     icns = _macos_icns_path()
     if icns:
@@ -550,6 +562,26 @@ def build_windows():
     return cmd
 
 
+def _linux_missing_shared_deps(lib_path):
+    """用 ldd 检查共享库未解析的依赖，返回缺失的库名列表。
+
+    只在打包机上有 ldd 时可用；检查失败时返回空列表（不阻断构建）。
+    """
+    try:
+        result = subprocess.run(
+            ['ldd', str(lib_path)], capture_output=True, text=True, timeout=30
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"提示: 无法执行 ldd 检查 {lib_path}: {e}")
+        return []
+    missing = []
+    for line in (result.stdout or '').splitlines():
+        line = line.strip()
+        if 'not found' in line:
+            missing.append(line.split('=>')[0].strip())
+    return missing
+
+
 def prepare_linux_dependencies():
     mpv_dir = PROJECT_ROOT / "mpv"
     mpv_dir.mkdir(exist_ok=True)
@@ -565,14 +597,36 @@ def prepare_linux_dependencies():
         print("警告: 已按 GUANGYU_ALLOW_SYSTEM_LIBMPV=1 继续，产物依赖系统 libmpv")
     else:
         print(f"libmpv.so 已就绪: {mpv_dir}")
+        libmpv_file = next(
+            (mpv_dir / name for name in ['libmpv.so.2', 'libmpv.so.1', 'libmpv.so']
+             if (mpv_dir / name).exists()),
+            None,
+        )
+        missing = _linux_missing_shared_deps(libmpv_file) if libmpv_file else []
+        if missing:
+            print("错误: libmpv 依赖的共享库在打包机上未解析，用户机器上同样会加载失败:")
+            for name in missing:
+                print(f"  - {name}")
+            print("  请在打包机安装对应运行库（或改用静态链接的 libmpv）后重试")
+            if os.environ.get("GUANGYU_ALLOW_SYSTEM_LIBMPV") != "1":
+                sys.exit(1)
+            print("警告: 已按 GUANGYU_ALLOW_SYSTEM_LIBMPV=1 继续，产物可能无法加载 libmpv")
+        else:
+            print("libmpv 依赖检查通过（ldd 无未解析项）")
 
     ffmpeg_dir = PROJECT_ROOT / "ffmpeg"
     ffmpeg_dir.mkdir(exist_ok=True)
-    if not (ffmpeg_dir / "ffprobe").exists():
+    ffprobe_path = ffmpeg_dir / "ffprobe"
+    if not ffprobe_path.exists():
         print("错误: 未找到 ffmpeg/ffprobe，请手动放置到 ffmpeg/ 目录")
         print("  或执行: sudo apt install ffmpeg")
         sys.exit(1)
-    print(f"ffprobe 已就绪: {ffmpeg_dir / 'ffprobe'}")
+    # PyInstaller 6.x 按源文件权限复制 data 文件；缺少执行位时打包后无法调用
+    try:
+        ffprobe_path.chmod(ffprobe_path.stat().st_mode | 0o111)
+    except OSError as e:
+        print(f"警告: 无法为 ffprobe 添加执行权限: {e}")
+    print(f"ffprobe 已就绪: {ffprobe_path}")
 
     # 打包 libxcb-cursor.so.0：Qt6 的 xcb 平台插件依赖此库，
     # PyInstaller 不会自动收集系统库，需手动打包以避免用户手动安装 libxcb-cursor0
@@ -591,6 +645,28 @@ def prepare_linux_dependencies():
         print("警告: 已按 GUANGYU_ALLOW_SYSTEM_LIBMPV=1 继续，用户需自行安装 libxcb-cursor0")
 
 
+def _linux_data_args():
+    """Linux 专用 --add-data 清单：剔除 mpv/ffmpeg 里的 Windows/macOS 二进制。
+
+    仓库里这些目录同时存放各平台文件（libmpv-2.dll、ffprobe.exe 等），
+    直接整目录打包会把几十 MB 的无关二进制塞进 Linux 产物。
+    """
+    staging_root = PROJECT_ROOT / "build" / "linux-data"
+    if staging_root.exists():
+        shutil.rmtree(staging_root)
+    ignore = shutil.ignore_patterns("*.dll", "*.exe", "*.dylib", "*.ico")
+    args = []
+    for name in DATA_DIRS:
+        src = PROJECT_ROOT / name
+        if not src.exists():
+            print(f"错误: 缺少打包资源目录: {src}")
+            sys.exit(1)
+        dest = staging_root / name
+        shutil.copytree(src, dest, ignore=ignore)
+        args.extend(["--add-data", f"{dest}{DATA_SEP}{name}"])
+    return args
+
+
 def build_linux():
     prepare_linux_dependencies()
     cmd = _pyinstaller_base(onefile=True)
@@ -602,7 +678,7 @@ def build_linux():
     xcb_cursor_lib = PROJECT_ROOT / "libs" / "libxcb-cursor.so.0"
     if xcb_cursor_lib.exists():
         cmd.extend(["--add-binary", f"{xcb_cursor_lib}{DATA_SEP}."])
-    cmd.extend(_data_args())
+    cmd.extend(_linux_data_args())
     cmd.extend(_hidden_import_args())
     cmd.append(str(PROJECT_ROOT / "main.py"))
     return cmd
@@ -666,7 +742,7 @@ def post_process_macos_app():
         'CFBundleShortVersionString': CURRENT_VERSION,
         'CFBundlePackageType': 'APPL',
         'CFBundleInfoDictionaryVersion': '6.0',
-        'LSMinimumSystemVersion': '10.15',
+        'LSMinimumSystemVersion': '11.0',
         'NSHighResolutionCapable': True,
         'NSSupportsAutomaticGraphicsSwitching': True,
         'CFBundleIconFile': 'logo',
@@ -724,6 +800,97 @@ def post_process_macos_app():
     print(f"macOS .app 打包完成: {app_path}")
 
 
+def _write_macos_entitlements():
+    """生成 hardened runtime 所需的 entitlements（输出到 build/，不写入仓库）。"""
+    ent_dir = PROJECT_ROOT / "build"
+    ent_dir.mkdir(exist_ok=True)
+    ent_path = ent_dir / "macos_entitlements.plist"
+    entitlements = {
+        # PyInstaller 引导器 + Python 运行时
+        "com.apple.security.cs.allow-jit": True,
+        "com.apple.security.cs.allow-unsigned-executable-memory": True,
+        # 包内 libmpv/ffprobe/PySide6 框架签名链不同，需要放宽库校验
+        "com.apple.security.cs.disable-library-validation": True,
+        # mpv_common 通过 DYLD_LIBRARY_PATH 指向 Contents/Resources/mpv
+        "com.apple.security.cs.allow-dyld-environment-variables": True,
+    }
+    with open(ent_path, "wb") as f:
+        plistlib.dump(entitlements, f)
+    return ent_path
+
+
+def code_sign_and_notarize_macos(app_path):
+    """对 .app 做 hardened runtime 签名，并在配置了凭据时提交公证。
+
+    全部由环境变量驱动，未设置时只跳过并提示，不会让本地构建失败：
+    - MACOS_CODESIGN_IDENTITY: 如 "Developer ID Application: Foo (TEAMID)"
+    - APPLE_ID / APPLE_TEAM_ID / APPLE_APP_PASSWORD: notarytool 凭据
+    """
+    identity = os.environ.get("MACOS_CODESIGN_IDENTITY", "").strip()
+    if not identity:
+        print("提示: 未设置 MACOS_CODESIGN_IDENTITY，跳过签名/公证（产物仅适合本机测试）")
+        return
+    if not app_path.exists():
+        print(f"警告: 未找到 .app，跳过签名: {app_path}")
+        return
+
+    ent_path = _write_macos_entitlements()
+    print(f"使用证书签名: {identity}")
+    sign = _run([
+        "codesign", "--force", "--deep", "--options", "runtime",
+        "--timestamp", "--entitlements", str(ent_path),
+        "--sign", identity, str(app_path),
+    ], capture_output=True, text=True)
+    if sign.returncode != 0:
+        _fail_build(f"codesign 失败: {sign.stderr.strip() or sign.stdout.strip()}")
+
+    verify = _run(
+        ["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(app_path)],
+        capture_output=True, text=True,
+    )
+    if verify.returncode != 0:
+        _fail_build(f"codesign 校验失败: {verify.stderr.strip() or verify.stdout.strip()}")
+    print("签名完成")
+
+    apple_id = os.environ.get("APPLE_ID", "").strip()
+    team_id = os.environ.get("APPLE_TEAM_ID", "").strip()
+    password = os.environ.get("APPLE_APP_PASSWORD", "").strip()
+    if not (apple_id and team_id and password):
+        print("提示: 未配置 APPLE_ID/APPLE_TEAM_ID/APPLE_APP_PASSWORD，跳过公证")
+        return
+
+    zip_path = DIST_DIR / f"{APP_NAME}-notarize.zip"
+    try:
+        shutil.make_archive(
+            str(zip_path.with_suffix('')), 'zip',
+            root_dir=str(app_path.parent), base_dir=app_path.name,
+        )
+        print("正在提交 Apple 公证（可能需要几分钟）...")
+        # 直接用 subprocess，避免 _run 把含密码的命令打印到 CI 日志
+        result = subprocess.run([
+            "xcrun", "notarytool", "submit", str(zip_path),
+            "--apple-id", apple_id, "--team-id", team_id,
+            "--password", password, "--wait",
+        ], capture_output=True, text=True)
+        if result.returncode != 0:
+            _fail_build(
+                "公证失败: "
+                + (result.stdout or "")[-2000:]
+                + (result.stderr or "")[-1000:]
+            )
+        print("公证通过，正在 stapling...")
+        staple = _run(["xcrun", "stapler", "staple", str(app_path)],
+                      capture_output=True, text=True)
+        if staple.returncode != 0:
+            _fail_build(f"stapler 失败: {staple.stderr.strip()}")
+        print("公证与 stapling 完成")
+    finally:
+        try:
+            zip_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def post_process_linux():
     dist_dir = DIST_DIR
     exe_path = dist_dir / APP_NAME
@@ -746,7 +913,8 @@ def post_process_linux():
 Type=Application
 Name={APP_NAME}
 Comment=IPTV Channel Scanner and Editor
-Exec=./{APP_NAME}
+Exec=/usr/local/bin/{APP_NAME}
+TryExec=/usr/local/bin/{APP_NAME}
 Icon={APP_NAME}
 Categories=AudioVideo;Video;Network;
 Terminal=false
@@ -847,6 +1015,7 @@ def run_build():
 
     if IS_MACOS:
         post_process_macos_app()
+        code_sign_and_notarize_macos(DIST_DIR / f"{APP_NAME}.app")
         print(f"打包完成! .app 位于: dist/{APP_NAME}.app")
     elif IS_LINUX:
         post_process_linux()

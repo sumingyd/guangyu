@@ -131,11 +131,59 @@ def is_linux_hdr_enabled():
     return result
 
 
+def _macos_edr_capable():
+    """通过 NSScreen 的 EDR 属性判断显示器是否具备 HDR/EDR 能力。
+
+    返回 True/False；PyObjC 不可用或调用失败时返回 None，由调用方回退到
+    system_profiler 文本匹配。注意该值只代表面板能力，是否真正进入 EDR
+    渲染还需要 NSView 侧开启 wantsExtendedDynamicRangeContent（本仓库未启用），
+    因此这里只作为 HDR 模式开关的参考信号。
+    """
+    try:
+        from AppKit import NSScreen
+    except ImportError:
+        return None
+    except Exception as e:
+        logger.debug(f"macOS EDR检测导入失败: {e}")
+        return None
+    try:
+        screens = NSScreen.screens()
+        if not screens:
+            return None
+        for screen in screens:
+            for selector in (
+                'maximumExtendedDynamicRangeColorComponentValue',
+                'maximumPotentialExtendedDynamicRangeColorComponentValue',
+            ):
+                try:
+                    getter = getattr(screen, selector)
+                except AttributeError:
+                    continue
+                try:
+                    value = getter()
+                except Exception:
+                    continue
+                if value is not None and value > 1.0:
+                    logger.info(f"macOS EDR检测: {selector}={value}")
+                    return True
+        return False
+    except Exception as e:
+        logger.debug(f"macOS EDR检测失败: {e}")
+        return None
+
+
 def is_macos_hdr_enabled():
     global _hdr_cache, _hdr_cache_time
     import time
     now = time.monotonic()
     if _hdr_cache is not None and (now - _hdr_cache_time) < _HDR_CACHE_TTL:
+        return _hdr_cache
+    # 优先使用 NSScreen 的 EDR 属性：system_profiler 输出里通常没有 "HDR" 字样，
+    # 旧实现基本恒返回 False，HDR 模式永远开不起来。
+    edr_capable = _macos_edr_capable()
+    if edr_capable is not None:
+        _hdr_cache = edr_capable
+        _hdr_cache_time = now
         return _hdr_cache
     try:
         result = subprocess.run(

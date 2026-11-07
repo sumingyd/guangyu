@@ -234,9 +234,11 @@ class _GlassSurfaceMixin:
         Windows 上直接跳过：实测 QWidget.grab() 抓不到 mpv 的 QOpenGLWidget
         画面（抓到的是黑/近黑），拿它当玻璃底会把视频盖成一块暗板。
         因此 Windows 走纯逐像素半透明，底就是真实视频。
+        macOS 同理：窗口里的视频由 QOpenGLWidget 绘制，grab() 同样抓不到，
+        而且 Retina 下整窗抓取开销很大；原生毛玻璃不可用时直接退回半透明色。
         """
         from ui.styles import AppStyles
-        if is_windows():
+        if is_windows() or is_macos():
             self._backdrop = None
             return
         if self._dwm_blur_enabled or not AppStyles.is_glass_style():
@@ -270,7 +272,7 @@ class _GlassSurfaceMixin:
         from ui.styles import AppStyles
         # Windows 走纯逐像素 alpha，没有可用的快照底（见 _capture_backdrop），
         # 不再每 180ms 触发一次无意义重绘。
-        if is_windows():
+        if is_windows() or is_macos():
             return
         if self.isVisible() and AppStyles.is_glass_style() and not self._dwm_blur_enabled:
             self._capture_backdrop()

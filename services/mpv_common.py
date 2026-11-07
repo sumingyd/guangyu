@@ -44,7 +44,10 @@ def _ensure_env_initialized():
         mpv_dir = os.path.join(base_path, 'mpv')
         logger.warning(f"未找到libmpv库: {libmpv_path}")
 
-    os.environ['MPV_HOME'] = mpv_dir
+    # MPV_HOME 指向 mpv 的配置目录，不应指向 libmpv 所在的库目录；
+    # Linux 上 libmpv 通常在 /usr/lib 等系统目录，指向那里会让 mpv 在系统目录里找脚本/配置。
+    if not is_linux():
+        os.environ['MPV_HOME'] = mpv_dir
     os.environ['PATH'] = mpv_dir + os.pathsep + os.environ.get('PATH', '')
 
     if is_macos() and os.path.isdir(mpv_dir):
@@ -243,7 +246,8 @@ def _ensure_libmpv_loaded():
             libmpv_path = path
             os.environ['MPV_LIBRARY'] = path
             mpv_dir = os.path.dirname(path)
-            os.environ['MPV_HOME'] = mpv_dir
+            if not is_linux():
+                os.environ['MPV_HOME'] = mpv_dir
             os.environ['PATH'] = mpv_dir + os.pathsep + os.environ.get('PATH', '')
             MPV_AVAILABLE = True
             _mpv_loaded = True
@@ -277,7 +281,19 @@ def _ensure_libmpv_loaded():
     # 所有路径均失败：输出诊断信息
     logger.error(f"加载libmpv失败（所有候选路径均失败）: {last_error}")
     diag_msg = "libmpv加载失败"
-    if is_windows():
+    if is_linux():
+        # Linux 的 OSError 文本本身已包含 "cannot open shared object file" 等原因，
+        # 之前只写日志不返回，界面只能看到笼统的"加载失败"，用户无从下手。
+        cause = getattr(last_error, '__cause__', None) if last_error else None
+        cause_str = str(cause) if cause else str(last_error)
+        diag_msg = (
+            f"libmpv 加载失败：{cause_str}\n"
+            "请确认已安装 libmpv（Ubuntu/Debian: sudo apt install libmpv2 或 libmpv1，"
+            "Fedora: sudo dnf install mpv-libs，Arch: sudo pacman -S mpv），"
+            "或把 libmpv.so 放到程序目录的 mpv/ 文件夹后重启。"
+        )
+        logger.error(f"诊断: {diag_msg}")
+    elif is_windows():
         winerror = _extract_real_winerror(last_error) if last_error else None
         if winerror == 126:
             # ERROR_MOD_NOT_FOUND: 检查 VC++ Runtime 是否存在并提供解决建议
@@ -739,13 +755,16 @@ def render_context_create(mpv_handle):
         return None
 
 
-def render_context_render(render_ctx, fbo, width, height, flip_y=False):
+def render_context_render(render_ctx, fbo, width, height, flip_y=False, block_for_target_time=False):
     if not libmpv or not render_ctx:
         return -1
     try:
         gl_fbo = mpv_opengl_fbo(fbo=fbo, w=width, h=height, internal_format=0)
         flip = ctypes.c_int(1 if flip_y else 0)
-        block = ctypes.c_int(1)
+        # 默认不阻塞：帧到达由 mpv update_callback 驱动，阻塞只会让 GUI 线程
+        # 在暂停/低帧率直播时卡在 render 调用里。只有需要按显示时钟节流的
+        # 场景才显式传 True。
+        block = ctypes.c_int(1 if block_for_target_time else 0)
         # 同 render_context_create：必须用 ctypes 数组而非 list，
         # 否则 macOS Python 会因类型严格检查抛 TypeError。
         # gl_fbo / flip / block 必须保留在栈上直到 render 调用返回，

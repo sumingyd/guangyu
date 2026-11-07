@@ -20,7 +20,7 @@ import sys
 import ctypes
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QSurfaceFormat
+from PySide6.QtGui import QGuiApplication, QSurfaceFormat
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 from core.log_manager import global_logger as logger
@@ -38,6 +38,9 @@ class MpvGLWidget(QOpenGLWidget):
         self._mpv_handle = None
         self._on_render_update_cb = None
         self._gl_ready = False
+        # 创建 render context 时所用的 GL 上下文；上下文被 Qt 重建后必须重新创建
+        self._render_ctx_context = None
+        self._connected_gl_context = None
 
         # macOS OpenGL 3.2+ 只支持 Core Profile；
         # CompatibilityProfile + version(3,2) 是无效组合，会导致上下文创建失败。
@@ -47,17 +50,12 @@ class MpvGLWidget(QOpenGLWidget):
         fmt.setDepthBufferSize(0)
         fmt.setStencilBufferSize(0)
         fmt.setSwapInterval(0)
-        # HDR 支持：使用 16-bit 浮点格式（rgba16hf）。
-        # macOS 上 mpv render API 需要高色深 FBO 才能正确输出 HDR 信号，
-        # 8-bit rgba8 会将 HDR 内容截断为 SDR 导致色彩信息丢失。
-        # 设置 RedBufferSize=16 让 Qt 创建 R16F 格式的 framebuffer（需 OpenGL 3.2+ Core Profile）。
-        try:
-            fmt.setRedBufferSize(16)
-            fmt.setGreenBufferSize(16)
-            fmt.setBlueBufferSize(16)
-            fmt.setAlphaBufferSize(8)
-        except Exception as e:
-            logger.debug(f"__init__: {e}")
+        # 注意：QSurfaceFormat 无法请求浮点色彩缓冲（rgba16hf）。
+        # 这里原先设置的 Red/Green/BlueBufferSize=16 在 macOS 上并不会生成 16-bit
+        # 浮点 FBO，Qt 仍会给出 8-bit 缓冲，而 render 时 internal_format=0 也表示
+        # "按 8-bit 处理"，两处声明互相矛盾。删掉这些无效请求，保留默认 8-bit；
+        # 真正的 HDR/EDR 输出需要自建 GL_RGBA16F FBO 并开启 NSView EDR，
+        # 属于必须真机验证的改动，暂不改动渲染链路。
         self.setFormat(fmt)
 
         self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
@@ -68,6 +66,11 @@ class MpvGLWidget(QOpenGLWidget):
         self._render_update_signal.connect(
             self._on_render_update_main, Qt.ConnectionType.QueuedConnection
         )
+
+        # 休眠唤醒/切换用户后 macOS 可能丢弃 GL 上下文，恢复前台时做一次上下文核对
+        app = QGuiApplication.instance()
+        if app is not None:
+            app.applicationStateChanged.connect(self._on_app_state_changed)
 
     # ------------------------------------------------------------------
     # 对外接口
@@ -122,19 +125,55 @@ class MpvGLWidget(QOpenGLWidget):
         """释放 render context 资源。
 
         必须在 mpv_handle 销毁之前调用，否则会泄漏 GL 资源。
+        mpv_render_context_free 要求在持有当前 GL 上下文的线程上调用，
+        因此这里必须先 makeCurrent；上下文已不可用时宁可不释放也不能裸调，
+        否则会在 mpv 内部触发 GL 调用崩溃。
         同时重置 _mpv_handle，避免后续 paintGL() 兜底逻辑使用
         已失效的 handle 创建 render context（HDR 切换场景）。
         """
-        if self._render_ctx:
+        self._mpv_handle = None
+        if not self._render_ctx:
+            self._on_render_update_cb = None
+            self._gl_ready = False
+            return
+        self._release_render_ctx(require_current=True)
+
+    def _release_render_ctx(self, require_current=True):
+        """在合适的 GL 上下文下释放 render context。
+
+        require_current=True 时先 makeCurrent；拿不到当前上下文就直接放弃释放
+        （保留引用，等 aboutToBeDestroyed 或进程退出），避免无上下文调用崩溃。
+        """
+        ctx = self._render_ctx
+        if not ctx:
+            return
+        made_current = False
+        if require_current:
+            gl_ctx = self.context()
+            if gl_ctx is None:
+                logger.warning("释放 render context 跳过：GL 上下文尚未创建或已销毁")
+                return
             try:
-                from services.mpv_common import render_context_free
-                render_context_free(self._render_ctx)
+                self.makeCurrent()
+                made_current = True
             except Exception as e:
-                logger.warning(f"render_context_free异常: {e}")
-            self._render_ctx = None
+                logger.warning(f"释放 render context 跳过：makeCurrent 失败: {e}")
+                return
+        self._render_ctx = None
+        self._render_ctx_context = None
         self._on_render_update_cb = None
         self._gl_ready = False
-        self._mpv_handle = None
+        try:
+            from services.mpv_common import render_context_free
+            render_context_free(ctx)
+        except Exception as e:
+            logger.warning(f"render_context_free异常: {e}")
+        finally:
+            if made_current:
+                try:
+                    self.doneCurrent()
+                except Exception as e:
+                    logger.debug(f"释放 render context 后 doneCurrent 失败: {e}")
 
     # ------------------------------------------------------------------
     # render context 创建（公共逻辑）
@@ -145,7 +184,18 @@ class MpvGLWidget(QOpenGLWidget):
         被 initializeGL() / setup_render_context() / paintGL() 三处复用，
         保证无论 initializeGL() 是否被过早触发，render context 都能被创建。
         """
-        if not self._mpv_handle or self._render_ctx:
+        if not self._mpv_handle:
+            return False
+        current_ctx = self.context()
+        if self._render_ctx and self._render_ctx_context is not current_ctx:
+            # Qt 重建了 GL 上下文：旧 render context 已随旧上下文失效。
+            # 旧上下文一般已在 aboutToBeDestroyed 中释放；这里只丢弃引用兜底。
+            logger.warning("检测到 GL 上下文已重建，重新创建 mpv render context")
+            self._render_ctx = None
+            self._render_ctx_context = None
+            self._on_render_update_cb = None
+            self._gl_ready = False
+        if self._render_ctx:
             return False
         try:
             from services.mpv_common import (
@@ -163,6 +213,7 @@ class MpvGLWidget(QOpenGLWidget):
             render_context_set_update_callback(
                 self._render_ctx, self._on_render_update_cb, ctypes.c_void_p(0)
             )
+            self._render_ctx_context = current_ctx
             self._gl_ready = True
             logger.info("mpv render context 创建成功(vo=libmpv, OpenGL Core Profile 3.2)")
             return True
@@ -181,7 +232,34 @@ class MpvGLWidget(QOpenGLWidget):
         设置（例如 show()+repaint() 过早触发），这里会直接返回，render
         context 的创建由 setup_render_context() / paintGL() 兜底。
         """
+        self._connect_gl_context_signals()
         self._create_render_context_impl()
+
+    def _connect_gl_context_signals(self):
+        """监听 GL 上下文销毁，在上下文消失前释放 mpv render context。
+
+        全屏切换、屏幕/DPR 变化、休眠唤醒都可能让 Qt 重建 QOpenGLWidget 的
+        GL 上下文。render context 绑定在旧上下文上，必须在旧上下文销毁前释放，
+        否则新上下文里继续 render 会直接黑屏或崩溃。
+        """
+        ctx = self.context()
+        if ctx is None or ctx is self._connected_gl_context:
+            return
+        try:
+            ctx.aboutToBeDestroyed.connect(
+                self._on_gl_context_about_to_destroy,
+                Qt.ConnectionType.DirectConnection,
+            )
+            self._connected_gl_context = ctx
+        except Exception as e:
+            logger.warning(f"连接 GL 上下文销毁信号失败: {e}")
+
+    def _on_gl_context_about_to_destroy(self):
+        """GL 上下文即将销毁：在其仍为 current 时释放 render context。"""
+        try:
+            self._release_render_ctx(require_current=True)
+        except Exception as e:
+            logger.warning(f"GL 上下文销毁时释放 render context 失败: {e}")
 
     def paintGL(self):
         # 兜底：若 initializeGL() 被过早调用导致 render context 未创建，
@@ -192,15 +270,22 @@ class MpvGLWidget(QOpenGLWidget):
             return
         try:
             fbo = self.defaultFramebufferObject()
-            w = self.width()
-            h = self.height()
-            if w <= 0 or h <= 0:
-                return
+            # defaultFramebufferObject 指向的是物理像素尺寸的 FBO，
+            # 逻辑像素（self.width()）在 Retina 上只有一半，直接传会让 mpv
+            # 只渲染左上角 1/4 区域、其余为黑边。必须换算成物理像素。
+            dpr = self.devicePixelRatioF()
+            w = max(1, round(self.width() * dpr))
+            h = max(1, round(self.height() * dpr))
             from services.mpv_common import (
                 render_context_render,
                 render_context_report_swap,
             )
-            ret = render_context_render(self._render_ctx, fbo, w, h, flip_y=True)
+            # swapInterval=0 时若再开启 block_for_target_time，渲染会在 GUI 线程
+            # 上阻塞到目标显示时刻（暂停/低帧率直播时表现为界面卡住）。
+            # 帧更新由 mpv update_callback 驱动，这里不需要阻塞等待。
+            ret = render_context_render(
+                self._render_ctx, fbo, w, h, flip_y=True, block_for_target_time=False
+            )
             if ret < 0:
                 # 错误码改为 warning 级别，便于排查渲染问题
                 logger.warning(f"mpv_render_context_render 错误码: {ret}")
@@ -211,6 +296,21 @@ class MpvGLWidget(QOpenGLWidget):
     def resizeGL(self, w, h):
         if self._gl_ready:
             self.update()
+
+    def _on_app_state_changed(self, state):
+        """休眠唤醒/切换用户回到前台时核对 GL 上下文是否还是同一个。"""
+        if state != Qt.ApplicationState.ApplicationActive:
+            return
+        if not self._mpv_handle:
+            return
+        # 上下文已被替换时不在这里直接创建（此时可能没有 current 上下文），
+        # 交给下一次 paintGL/initializeGL 走 _create_render_context_impl 的兜底重建。
+        if self._render_ctx and self._render_ctx_context is not self.context():
+            logger.warning("唤醒后发现 GL 上下文已变化，等待重新创建 render context")
+            self._gl_ready = False
+            self._render_ctx = None
+            self._render_ctx_context = None
+        self.update()
 
     # ------------------------------------------------------------------
     # mpv update_callback 处理

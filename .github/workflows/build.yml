@@ -171,8 +171,16 @@ jobs:
             echo "Using CAVS-enabled libmpv"
           else
             echo "CAVS-enabled libmpv not found, falling back to Homebrew"
-            brew install mpv
-            cp /opt/homebrew/lib/libmpv.2.dylib mpv/ || cp /usr/local/lib/libmpv.2.dylib mpv/
+            brew install mpv dylibbundler
+            MPV_LIB="$(brew --prefix mpv)/lib/libmpv.2.dylib"
+            cp "$MPV_LIB" mpv/libmpv.2.dylib
+            # 只拷 libmpv 本体不够：它依赖 ffmpeg/libass 等 Homebrew dylib，
+            # 用户机器上没有这些路径会直接加载失败（dyld: Library not loaded）。
+            # 用 dylibbundler 把依赖一并收进 mpv/ 并改写成相对 @executable_path。
+            dylibbundler -od -b -x mpv/libmpv.2.dylib -d mpv/ \
+              -p "@executable_path/../Resources/mpv/"
+            # dylibbundler 改写了 install_name，原签名失效，arm64 下必须重签
+            codesign --force --sign - mpv/*.dylib
           fi
           ls -la mpv/
 
@@ -187,7 +195,28 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Import code signing certificate
+        # 仓库未配置证书时跳过，产物为未签名 .app（仅本地测试可用）
+        if: ${{ secrets.MACOS_CERT_P12 != '' }}
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          echo "$MACOS_CERT_P12" | base64 --decode > /tmp/macos_cert.p12
+          security create-keychain -p actions build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p actions build.keychain
+          security import /tmp/macos_cert.p12 -k build.keychain \
+            -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k actions build.keychain
+          rm -f /tmp/macos_cert.p12
+
       - name: Build .app
+        env:
+          MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: python build.py
 
       - name: Package .app as zip
