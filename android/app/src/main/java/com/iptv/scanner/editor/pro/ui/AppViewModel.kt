@@ -264,6 +264,9 @@ val listViewMode: StateFlow<ListViewMode> = _listViewMode.asStateFlow()
 internal val _listSourceTab = MutableStateFlow(ListSourceTab.SUBSCRIPTION)
 val listSourceTab: StateFlow<ListSourceTab> = _listSourceTab.asStateFlow()
 
+/** 上次校正页签时的（订阅数, 本地数）；null=本次进程尚未校正过（冷启动） */
+internal var listSourceTabCounts: Pair<Int, Int>? = null
+
 /** 竖屏首页/播放器模式切换：true=首页（浏览），false=播放器界面
  * 初始始终为 true：竖屏先显示首页，横屏/TV 分支不检查 showHome 不受影响 */
 internal val _showHome = MutableStateFlow(true)

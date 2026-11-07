@@ -315,6 +315,9 @@ internal fun AppViewModel.loadChannels() {
             }
             // 收藏/历史/队列按 URL 重锚定（订阅重载后 idx 漂移会错位）
             reanchorUserListsToChannels()
+            // 列表数据变化（冷启动/订阅刷新/本地增删）后校正页签：
+            // 当前页签实际为空而另一页签有数据时切过去，避免停在空列表上
+            reconcileListSourceTab()
         }
     }
 }
@@ -417,6 +420,13 @@ internal fun AppViewModel.restoreLastChannel(autoPlayFirstFallback: Boolean) {
             val lastIdx = channels.indexOfFirst { it.url == lastUrl }
             if (lastIdx >= 0) {
                 Log.i(AppViewModel.TAG, "restoreLastChannel: restoring '$lastUrl' at idx=$lastIdx")
+                // 恢复的频道可能属于另一页签（订阅为空、上次播放的是本地频道等），
+                // 先切到该频道实际所属的页签，保证列表里能看到并高亮
+                val targetTab = if (channels[lastIdx].source.isEmpty()) ListSourceTab.LOCAL else ListSourceTab.SUBSCRIPTION
+                if (_listSourceTab.value != targetTab) {
+                    Log.i(AppViewModel.TAG, "restoreLastChannel: switch list tab to ${targetTab.name}")
+                    _listSourceTab.value = targetTab
+                }
                 playChannel(lastIdx, silent = true)
                 // 横屏（TV 风格）：后台恢复播放但停留在首页（Mini 播放条可见），由用户点击进入播放页
                 // TV 无独立首页：直接进入全屏播放

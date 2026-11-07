@@ -1053,3 +1053,37 @@ internal fun AppViewModel.setListSourceTab(tab: ListSourceTab) {
     _listSourceTab.value = tab
 }
 
+/** 订阅 / 本地两页签的真实频道数（以实际列表数据为准，不看加载状态与缓存计数） */
+internal fun AppViewModel.listSourceCounts(): Pair<Int, Int> {
+    val all = _channels.value
+    val local = all.count { it.source.isEmpty() }
+    return (all.size - local) to local
+}
+
+/**
+ * 自动校正列表页签（订阅 / 本地），与桌面端 `_ensure_playlist_tab_has_content` 一致：
+ * 只有"当前页签实际为空、另一页签实际有数据"时才切换，非空页签不会被后台刷新抢走。
+ *
+ * 额外区分"刚刚变空"与"用户主动停在空页签"：若该页签上次校正时也为空，
+ * 说明是用户手动选中的空页签，保持不动，避免刷新把用户的选择抢走。
+ */
+internal fun AppViewModel.reconcileListSourceTab() {
+    val all = _channels.value
+    if (all.isEmpty()) return
+    val counts = listSourceCounts()
+    val previous = listSourceTabCounts
+    listSourceTabCounts = counts
+    val current = _listSourceTab.value
+    val currentEmpty = if (current == ListSourceTab.SUBSCRIPTION) counts.first == 0 else counts.second == 0
+    val otherHasData = if (current == ListSourceTab.SUBSCRIPTION) counts.second > 0 else counts.first > 0
+    if (!currentEmpty || !otherHasData) return
+    val previouslyEmpty = when (current) {
+        ListSourceTab.SUBSCRIPTION -> previous?.first == 0
+        ListSourceTab.LOCAL -> previous?.second == 0
+    }
+    if (previouslyEmpty) return
+    val target = if (current == ListSourceTab.SUBSCRIPTION) ListSourceTab.LOCAL else ListSourceTab.SUBSCRIPTION
+    Log.i(AppViewModel.TAG, "reconcileListSourceTab: ${current.name}(空) -> ${target.name}, sub=${counts.first}, local=${counts.second}")
+    _listSourceTab.value = target
+}
+
