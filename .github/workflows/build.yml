@@ -151,6 +151,9 @@ jobs:
     name: Build macOS ARM64
     needs: validate-version
     runs-on: macos-latest
+    env:
+      # secrets 上下文不允许出现在 if 条件中，这里通过 job 级 env 间接判断
+      MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
 
     steps:
       - name: Checkout repository
@@ -197,7 +200,7 @@ jobs:
 
       - name: Import code signing certificate
         # 仓库未配置证书时跳过，产物为未签名 .app（仅本地测试可用）
-        if: ${{ secrets.MACOS_CERT_P12 != '' }}
+        if: ${{ env.MACOS_CERT_P12 != '' }}
         env:
           MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
           MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
