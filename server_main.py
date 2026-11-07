@@ -114,6 +114,11 @@ async def main(host='127.0.0.1', port=8080):
 if __name__ == '__main__':
     _setup_android_env()
 
+    from utils.crash_handler import install_crash_handler
+    from utils.app_paths import migrate_legacy_data
+    install_crash_handler()
+    migrate_legacy_data()
+
     import argparse
     parser = argparse.ArgumentParser(description='GuangYu - Web Server')
     parser.add_argument('--host', default='127.0.0.1',

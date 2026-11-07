@@ -1,12 +1,19 @@
-from PySide6.QtCore import QTimer, Qt, QtMsgType, qInstallMessageHandler
-from PySide6.QtGui import QColor, QIcon, QPixmap
-from PySide6.QtWidgets import QApplication, QSplashScreen
 import sys
 import os
 
 from utils.early_init import setup_environment
 from utils.delay_constants import DelayMs
 setup_environment()
+
+# 尽早安装异常兜底与数据迁移：即使后续 Qt 导入/初始化失败也能留下 crash.log
+from utils.crash_handler import install_crash_handler
+from utils.app_paths import migrate_legacy_data
+install_crash_handler()
+migrate_legacy_data()
+
+from PySide6.QtCore import QTimer, Qt, QtMsgType, qInstallMessageHandler
+from PySide6.QtGui import QColor, QIcon, QPixmap
+from PySide6.QtWidgets import QApplication, QSplashScreen
 
 
 
