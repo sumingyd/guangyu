@@ -80,6 +80,11 @@ def _capture_single(url: str, timeout: int = 8, wid: int = 0, force: bool = Fals
         if sys.platform == 'win32':
             _mpv_set_option_string(handle, 'gpu-api', 'd3d11')
             _mpv_set_option_string(handle, 'hwdec', 'd3d11va')
+        elif sys.platform.startswith('linux'):
+            # 程序在 Linux 上强制使用 xcb(XWayland)，缩略图 VO 也必须走 X11 context，
+            # 否则 gpu VO 会因找不到可用的 GPU context 直接失败、取不到帧。
+            _mpv_set_option_string(handle, 'gpu-context', 'x11')
+            _mpv_set_option_string(handle, 'hwdec', 'auto')
         else:
             _mpv_set_option_string(handle, 'hwdec', 'auto')
         _mpv_set_option_string(handle, 'osc', 'no')

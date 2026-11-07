@@ -295,7 +295,19 @@ class MpvPlayback:
             # 这样无论用户启动时选什么 HDR 模式，运行时切换到 passthrough/scrgb 时，
             # vo 已经是 gpu-next，配合 target-colorspace-hint=yes 可以动态切换 swapchain。
             user_vo = str(self._facade._playback_settings.get('vo', 'auto')).lower()
-            if user_vo not in ('auto', 'gpu', 'gpu-next', 'libmpv', 'direct3d'):
+            # vo 支持范围按平台区分：Linux 的 wid 嵌入只能走 gpu/gpu-next + X11，
+            # libmpv 需要 render API、direct3d 是 Windows 专用，选错只会黑屏。
+            if is_linux():
+                allowed_vo = ('auto', 'gpu', 'gpu-next')
+            elif is_macos():
+                allowed_vo = ('auto', 'gpu', 'gpu-next', 'libmpv')
+            else:
+                allowed_vo = ('auto', 'gpu', 'gpu-next', 'libmpv', 'direct3d')
+            if user_vo not in allowed_vo:
+                if user_vo:
+                    self._facade.logger.warning(
+                        f"当前平台不支持 vo={user_vo}，已回退为 auto"
+                    )
                 user_vo = 'auto'
             if user_vo == 'auto':
                 vo = 'gpu-next'
@@ -373,6 +385,14 @@ class MpvPlayback:
                         self._facade.logger.warning(f"设置gpu-context={ctx_val}失败(错误码:{ret_ctx})")
                 _mpv_set_option_string(self._facade.mpv_handle, 'force-window', 'no')
             elif is_linux():
+                if gpu_api == 'vulkan':
+                    self._facade.logger.warning(
+                        "Linux 下暂不支持 gpu-api=vulkan，已改用 opengl（配置被忽略）"
+                    )
+                if hdr_mode in ('passthrough', 'scrgb'):
+                    self._facade.logger.warning(
+                        f"Linux/X11 下无法输出 HDR 直通信号（hdr_output_mode={hdr_mode}），将按 SDR 渲染"
+                    )
                 _mpv_set_option_string(self._facade.mpv_handle, 'gpu-api', 'opengl')
                 ret_ctx = _mpv_set_option_string(self._facade.mpv_handle, 'gpu-context', 'x11')
                 if ret_ctx < 0:

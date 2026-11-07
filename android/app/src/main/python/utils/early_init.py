@@ -1,5 +1,10 @@
+import subprocess
 import sys
 import os
+import time
+
+# 无头/离屏平台由调用方显式指定（CI、测试），不要被下面的 Wayland 逻辑覆盖
+_HEADLESS_QPA_PLATFORMS = ('offscreen', 'minimal')
 
 
 def _patch_py314_traceback_bug():
@@ -71,6 +76,81 @@ def _patch_py314_gc_threshold():
         pass
 
 
+def _linux_is_wayland_session():
+    """按会话变量判断是否运行在 Wayland 下（此时 Qt 尚未初始化，不能用 QPA 平台名）。"""
+    session_type = os.environ.get('XDG_SESSION_TYPE', '').strip().lower()
+    if session_type == 'wayland':
+        return True
+    if session_type == 'x11':
+        return False
+    return bool(os.environ.get('WAYLAND_DISPLAY'))
+
+
+def _log_display_error(message):
+    """把启动期显示环境错误写到 stderr 和日志文件，保证 --windowed 打包后也能追溯。"""
+    try:
+        stream = sys.stderr if sys.stderr is not None else sys.__stderr__
+        if stream is not None:
+            stream.write(message + '\n')
+            stream.flush()
+    except Exception:
+        pass
+    try:
+        from utils.app_paths import get_log_dir
+        log_dir = get_log_dir()
+        os.makedirs(log_dir, exist_ok=True)
+        with open(os.path.join(log_dir, 'startup_error.log'), 'a', encoding='utf-8') as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
+    except Exception:
+        pass
+
+
+def _show_display_error_dialog(message):
+    """尽力用原生对话框告知启动失败原因；没有 zenity/kdialog 时只依赖日志。"""
+    for cmd in (
+        ['zenity', '--error', '--title', 'GuangYu', '--no-wrap', '--text', message],
+        ['kdialog', '--title', 'GuangYu', '--error', message],
+    ):
+        try:
+            result = subprocess.run(cmd, timeout=120)
+            if result.returncode == 0:
+                return
+        except (OSError, subprocess.SubprocessError):
+            continue
+
+
+def _configure_linux_display():
+    """Linux 显示环境预检：Wayland 会话统一切到 XWayland(xcb)。
+
+    mpv 的 wid 嵌入只接受 X11 窗口 ID，Wayland 原生会话下 winId() 不是 XID，
+    继续运行只会黑屏或在播放时静默失败。因此在导入 PySide6 之前就把 QPA
+    平台固定为 xcb，并在没有 XWayland 时给出可读错误而不是让 Qt 直接崩溃。
+    """
+    if not sys.platform.startswith('linux') or 'ANDROID_ARGUMENT' in os.environ:
+        return
+    requested = (os.environ.get('QT_QPA_PLATFORM') or '').strip().lower()
+    if requested in _HEADLESS_QPA_PLATFORMS:
+        return
+    if not _linux_is_wayland_session():
+        return
+    if not os.environ.get('DISPLAY'):
+        message = (
+            'GuangYu 启动失败：当前是 Wayland 会话，但没有可用的 X11 显示（XWayland）。\n'
+            '视频画面依赖 X11 窗口嵌入，缺少 XWayland 时无法显示。\n'
+            '请安装并启用 XWayland（多数发行版的 xorg-xwayland 包），'
+            '或改用 X11 会话后重新启动。'
+        )
+        _log_display_error(message)
+        _show_display_error_dialog(message)
+        raise SystemExit(1)
+    if requested and not requested.startswith('xcb'):
+        _log_display_error(
+            f'检测到 Wayland 会话，已将 QT_QPA_PLATFORM={requested} 覆盖为 xcb'
+            '（mpv 窗口嵌入依赖 X11，Wayland 原生平台无法显示视频）。'
+        )
+    os.environ['QT_QPA_PLATFORM'] = 'xcb'
+
+
 def setup_environment():
     _patch_py314_traceback_bug()
     _patch_py314_asyncio_exception_handler()
@@ -86,11 +166,6 @@ def setup_environment():
                 os.environ['SSL_CERT_FILE'] = _cert_path
                 os.environ['REQUESTS_CA_BUNDLE'] = _cert_path
 
-    if sys.platform.startswith('linux') and 'ANDROID_ARGUMENT' not in os.environ:
-        session_type = os.environ.get('XDG_SESSION_TYPE', '').lower()
-        wayland_display = os.environ.get('WAYLAND_DISPLAY', '')
-        is_wayland_env = (session_type == 'wayland') or (bool(wayland_display) and session_type != 'x11')
-        if is_wayland_env and not os.environ.get('QT_QPA_PLATFORM'):
-            os.environ['QT_QPA_PLATFORM'] = 'xcb'
+    _configure_linux_display()
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
