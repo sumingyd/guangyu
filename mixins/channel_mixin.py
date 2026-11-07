@@ -51,31 +51,70 @@ class ChannelMixin:
 
         pending = getattr(self, '_pending_last_channel', None)
         if pending:
-            channels_to_search = self._sub_channels if source == 'subscription' else self._local_channels
-            target_list = self.sub_channel_list if source == 'subscription' else self.local_channel_list
-            if len(channels_to_search or []) > 0:
-                self._pending_last_channel = None
-                last_url = pending.get('url', '')
-                last_name = pending.get('name', '')
-                last_idx = pending.get('index', -1)
-                target_idx = -1
-                # 同名多源时频道名无法唯一确定频道，优先按 URL 定位
-                if last_url:
-                    for i, ch in enumerate(channels_to_search or []):
-                        if ch.get('url', '') == last_url:
-                            target_idx = i
-                            break
-                # URL 命中不了（旧配置或列表已变动）退回下标
-                if target_idx < 0 and last_idx >= 0 and last_idx < len(channels_to_search or []):
-                    target_idx = last_idx
-                # 最后才用名字兜底
-                if target_idx < 0 and last_name:
-                    for i, ch in enumerate(channels_to_search or []):
-                        if ch.get('name', '') == last_name:
-                            target_idx = i
-                            break
-                if target_idx >= 0:
-                    safe_single_shot(100, self, lambda idx=target_idx, sl=target_list: self.select_channel_by_index(idx, source_list=sl))
+            self._restore_pending_channel(source)
+
+    def _restore_pending_channel(self, populated_source):
+        """恢复上次播放频道；频道在哪一页签就切到哪一页签。
+
+        优先在当前刚填充的列表里查找，找不到再查另一页签，
+        避免"订阅为空、频道属于本地"时永远无法恢复或停在空订阅页。
+        """
+        pending = getattr(self, '_pending_last_channel', None)
+        if not pending:
+            return
+
+        candidates = [
+            ('subscription', self.sub_channel_list, self._sub_channels),
+            ('local', self.local_channel_list, self._local_channels),
+        ]
+        if populated_source != 'subscription':
+            candidates.reverse()
+
+        has_data = False
+        for source, target_list, channels in candidates:
+            if not channels:
+                continue
+            has_data = True
+            target_idx = self._find_channel_index(channels, pending)
+            if target_idx < 0:
+                continue
+            self._pending_last_channel = None
+            tab_index = 0 if source == 'subscription' else 1
+            tab = getattr(self, 'playlist_tab', None)
+            if tab is not None and tab.currentIndex() != tab_index:
+                # 走统一切页入口，保证 active_channel_list 与页签一致
+                switch = getattr(self, '_switch_playlist_tab', None)
+                if switch is not None:
+                    switch(tab_index)
+                else:
+                    tab.setCurrentIndex(tab_index)
+            safe_single_shot(
+                100, self,
+                lambda idx=target_idx, sl=target_list: self.select_channel_by_index(idx, source_list=sl)
+            )
+            return
+
+        # 两个列表都有数据却都没匹配上：配置已过期，清掉避免后续按下标误选
+        if has_data:
+            self._pending_last_channel = None
+
+    @staticmethod
+    def _find_channel_index(channels, pending):
+        """按 URL → 下标 → 名称的顺序在给定频道列表中定位待恢复频道。"""
+        last_url = pending.get('url', '')
+        last_name = pending.get('name', '')
+        last_idx = pending.get('index', -1)
+        if last_url:
+            for i, ch in enumerate(channels):
+                if ch.get('url', '') == last_url:
+                    return i
+        if isinstance(last_idx, int) and 0 <= last_idx < len(channels):
+            return last_idx
+        if last_name:
+            for i, ch in enumerate(channels):
+                if ch.get('name', '') == last_name:
+                    return i
+        return -1
 
     def _update_groups_for(self, source):
         channels = self._sub_channels if source == 'subscription' else self._local_channels

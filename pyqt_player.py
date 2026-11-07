@@ -702,6 +702,9 @@ class IPTVPlayer(
         def load_data_with_delay():
             self.start_subscription_timers()
             self._populate_channel_list(source='subscription')
+            # 默认页签以数据为准：订阅为空而本地有频道时不要停在空订阅页
+            if hasattr(self, '_ensure_playlist_tab_has_content'):
+                self._ensure_playlist_tab_has_content()
 
             self._check_for_updates_async()
             self._auto_start_server()

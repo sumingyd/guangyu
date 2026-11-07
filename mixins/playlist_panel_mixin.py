@@ -412,6 +412,25 @@ class PlaylistPanelMixin:
             btn.setChecked(i == idx)
             btn.blockSignals(False)
 
+    def _ensure_playlist_tab_has_content(self):
+        """当前页签为空而另一个页签有数据时切换过去。
+
+        只处理订阅/本地两页：不抢用户正在看的非空页签，也不在没有数据的
+        情况下反复切页。收藏/历史页签交给各自控制器维护。
+        """
+        tab = getattr(self, 'playlist_tab', None)
+        if tab is None:
+            return
+        index = tab.currentIndex()
+        if index not in (0, 1):
+            return
+        sub_count = len(getattr(self, '_sub_channels', []) or [])
+        local_count = len(getattr(self, '_local_channels', []) or [])
+        if index == 0 and sub_count == 0 and local_count > 0:
+            self._switch_playlist_tab(1)
+        elif index == 1 and local_count == 0 and sub_count > 0:
+            self._switch_playlist_tab(0)
+
     def _on_playlist_tab_changed(self, index):
         """播放列表标签页切换"""
 

@@ -217,12 +217,17 @@ class PanelMixin:
             message = getattr(self, '_pending_update_message', '')
             self._pending_update_message = None
             logger.info(f"_do_on_playlist_updated_in_main_thread: 开始更新UI, CHANNELS数量={app_state.channel_count}")
-            if hasattr(self, 'playlist_tab'):
-                self.playlist_tab.setCurrentIndex(0)
             try:
                 self.populate_channel_list(source='subscription')
             except Exception as ex:
                 logger.error(f"populate_channel_list失败: {ex}")
+            # 订阅刷新不再无条件切回订阅页：用户停在本地页时保持不动；
+            # 仅在当前页签变空且另一页签有数据时切换，避免停在空列表上。
+            try:
+                if hasattr(self, '_ensure_playlist_tab_has_content'):
+                    self._ensure_playlist_tab_has_content()
+            except Exception as ex:
+                logger.error(f"同步播放列表页签失败: {ex}")
             try:
                 self._populate_epg_list()
             except Exception as ex:
