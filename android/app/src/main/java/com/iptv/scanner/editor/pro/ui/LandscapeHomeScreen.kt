@@ -264,6 +264,9 @@ private fun LandscapeChannelSplitContent(viewModel: AppViewModel) {
     val favorites by viewModel.favorites.collectAsState()
     val selectedGroup by viewModel.selectedGroup.collectAsState()
     val listSourceTab by viewModel.listSourceTab.collectAsState()
+    // 空态使用真实加载/告警状态（与 ChannelSidebar 一致），不用「列表为空」反推
+    val iptvStatus by viewModel.iptvStatus.collectAsState()
+    val localSourceLoading by viewModel.sourceLoading.collectAsState()
     val epgCacheVersion by viewModel.epgCacheVersion.collectAsState()
     val sources by viewModel.sources.collectAsState()
     val selectedSource by viewModel.selectedSource.collectAsState()
@@ -420,20 +423,17 @@ private fun LandscapeChannelSplitContent(viewModel: AppViewModel) {
 
             // 宫格频道卡（复用竖屏缩略图宫格：2列玻璃卡）
             if (searchedChannels.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    // 订阅源仍在后台加载时显示加载提示，避免被误认为无频道
-                    val status by viewModel.iptvStatus.collectAsState()
-                    Text(
-                        when {
-                            searchQuery.isNotBlank() -> "无匹配频道"
-                            status?.sourceLoading == true -> "正在加载订阅源..."
-                            !status?.sourceWarning.isNullOrBlank() -> status?.sourceWarning ?: "暂无频道"
-                            else -> "暂无频道"
-                        },
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 14.sp
-                    )
-                }
+                // 统一空态：加载中 / 搜索无结果 / 订阅源告警 / 订阅为空 / 分组为空 等分支与 CTA 均由
+                // ChannelEmptyState 提供；其内部自带 fillMaxSize + 居中 + 24dp 内边距，与原 Box 布局约束一致。
+                ChannelEmptyState(
+                    tab = if (listSourceTab == ListSourceTab.LOCAL) ChannelTab.LOCAL else ChannelTab.SUB,
+                    loading = iptvStatus?.sourceLoading == true || localSourceLoading,
+                    sourceWarning = iptvStatus?.sourceWarning.orEmpty(),
+                    searchQuery = searchQuery,
+                    groupName = selectedGroup,
+                    onAddSource = { viewModel.toggleSourceManager() },
+                    onRefresh = { viewModel.reloadSources() }
+                )
             } else {
                 ChannelThumbnailPanel(
                     displayChannels = searchedChannels,
