@@ -701,7 +701,7 @@ textarea.form-input {
       <div class="card-header">
         <div>
           <div class="card-title">添加订阅源</div>
-          <div class="card-subtitle">输入 M3U 播放列表 URL 或上传文件</div>
+          <div class="card-subtitle">输入 M3U 频道列表 URL 或上传文件</div>
         </div>
       </div>
       <div class="form-row">
@@ -724,7 +724,7 @@ textarea.form-input {
       <div class="card-header">
         <div>
           <div class="card-title">订阅源列表</div>
-          <div class="card-subtitle">已添加的 M3U 播放列表源</div>
+          <div class="card-subtitle">已添加的 M3U 订阅源</div>
         </div>
         <button class="btn btn-outline btn-sm" onclick="reloadSources()">重新加载全部</button>
       </div>
@@ -2445,7 +2445,7 @@ function exportM3U() {
   if (_AUTH_TOKEN) params.set('token', _AUTH_TOKEN);
   const url = API + '/api/m3u' + (params.toString() ? '?' + params.toString() : '');
   // 复制链接到剪贴板 + 提供下载
-  showConfirm('导出 M3U 播放列表', '点击"确定"下载文件，或复制以下链接：\n' + url, () => {
+  showConfirm('导出 M3U 频道列表', '点击"确定"下载文件，或复制以下链接：\n' + url, () => {
     window.open(url, '_blank');
   });
   // 尝试复制到剪贴板
