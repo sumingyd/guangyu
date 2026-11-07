@@ -494,6 +494,7 @@ class IPTVPlayer(
         x, y, width, height, _ = self.config.load_window_layout(
             default_x=100, default_y=100, default_width=1280, default_height=780
         )
+        x, y = self._clamp_window_position(x, y, width, height)
         self.setGeometry(x, y, width, height)
         self.setMinimumSize(800, 600)
 
@@ -589,7 +590,10 @@ class IPTVPlayer(
         """创建最基础的UI框架：无边框窗口、容器、标题栏、内容区域"""
         logger.debug("创建最最基本的UI")
         self.setWindowFlags(QtCore.Qt.WindowType.FramelessWindowHint | QtCore.Qt.WindowType.Window)
-        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        # Linux 无合成器时逐像素透明会渲染成黑底，先按环境决定初始值，
+        # 主题应用时（theme_manager._apply_window_backdrop）会再次校准。
+        from utils.platform_utils import has_x11_compositor
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, has_x11_compositor())
         self.setMouseTracking(True)
         self.setAcceptDrops(True)
 
