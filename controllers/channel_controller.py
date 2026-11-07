@@ -413,12 +413,12 @@ class ChannelController:
                     w.remain_label.setText(w.language_manager.tr("waiting_to_play", "Waiting to play..."))
                 else:
                     w.current_program.setText("")
-                    w.program_desc.setText(w.language_manager.tr("open_playlist_success", "Playlist opened, click a channel to play"))
+                    w.program_desc.setText(w.language_manager.tr("open_playlist_success", "Channel list opened, click a channel to play"))
                     w.time_label.setText(f"{datetime.now().strftime('%H:%M')}")
                     w.remain_label.setText(w.language_manager.tr("waiting_to_play", "Waiting to play..."))
         except Exception:
             w.current_program.setText("")
-            w.program_desc.setText(w.language_manager.tr("open_playlist_success", "Playlist opened, click a channel to play"))
+            w.program_desc.setText(w.language_manager.tr("open_playlist_success", "Channel list opened, click a channel to play"))
             current_time = datetime.now().strftime("%H:%M")
             w.time_label.setText(f"{current_time}")
             w.remain_label.setText(w.language_manager.tr("waiting_to_play", "Waiting to play..."))

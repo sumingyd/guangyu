@@ -131,7 +131,7 @@ class SkipIntroOutroController(QObject):
                     tr = self.window.language_manager.tr if hasattr(self.window, 'language_manager') else (lambda k, d='': d)
                     if hasattr(self.window, '_show_osd_feedback'):
                         self.window._show_osd_feedback(
-                            tr('osd_skip_intro', f'Skipped intro to {self._intro_end_sec:.1f}s'))
+                            tr('osd_skip_intro', '已跳过片头（{secs:.1f}s）').format(secs=self._intro_end_sec))
                     logger.info(f"跳过片头到 {self._intro_end_sec:.1f}s")
                 elif cur_sec >= self._intro_end_sec:
                     # 已超过片头位置，标记为已跳过

@@ -77,8 +77,8 @@ class _PlaylistReloadThread(QThread):
 # 使用说明默认内容 —— 定义在模块级别便于维护
 DEFAULT_USAGE_CONTENT = (
     '## 基本操作\n\n'
-    '### 1. 打开播放列表\n'
-    '- 点击"文件"菜单 → "打开播放列表"（Ctrl+O）\n'
+    '### 1. 打开频道列表\n'
+    '- 点击"文件"菜单 → "打开频道列表"（Ctrl+O）\n'
     '- 支持 M3U、M3U8、TXT 格式\n'
     '- 也可将文件直接拖放到主窗口打开\n\n'
     '### 2. 播放频道\n'
@@ -109,7 +109,7 @@ DEFAULT_USAGE_CONTENT = (
     '## 高级功能\n\n'
     '### 订阅设置\n'
     '- 工具菜单 → 订阅设置\n'
-    '- 配置多个播放列表源和 EPG 数据源\n\n'
+    '- 配置多个订阅源和 EPG 数据源\n\n'
     '### 频道映射\n'
     '- 工具菜单 → 频道映射管理器\n\n'
     '### 界面定制\n'
@@ -141,7 +141,7 @@ class SettingsFileOperations:
     def open_playlist(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self.window,
-            self._tr("open_playlist", "Open Playlist"),
+            self._tr("open_playlist", "Open Channel List"),
             "",
             "M3U Files (*.m3u *.m3u8);;Text Files (*.txt);;All Files (*)"
         )
@@ -638,14 +638,14 @@ class SettingsFileOperations:
     def _build_subscription_section(self, tr, source_type, playback=True):
         if source_type == 'playlist':
             title_key = "playlist_subscription"
-            title_default = "Playlist Subscription"
+            title_default = "Subscription Sources"
             sources_label_key = "playlist_sources"
-            sources_label_default = "Playlist Sources (click to activate):"
+            sources_label_default = "Subscription sources (click to activate):"
             list_obj_name = "__settings_playlist_list__"
             interval_obj_name = "playlist_interval_combo"
             config_section = 'PlaylistSources'
             url_placeholder_key = "enter_playlist_url"
-            url_placeholder_default = "Enter playlist URL"
+            url_placeholder_default = "Enter subscription source URL"
             widget_prefix = 'playlist_'
         else:
             title_key = "epg_subscription"
@@ -1323,7 +1323,7 @@ class SettingsFileOperations:
             QMessageBox.critical(
                 self.window,
                 tr("error", "Error"),
-                tr("open_file_error", "Failed to load playlist. Please check the file format and try again.")
+                tr("open_file_error", "Failed to load channel list. Please check the file format and try again.")
             )
 
     def _save_playlist_file(self, file_path: str):
@@ -1347,7 +1347,7 @@ class SettingsFileOperations:
             QMessageBox.critical(
                 self.window,
                 tr("error", "Error"),
-                tr("save_error", "Failed to save playlist. Please check the file path and permissions.")
+                tr("save_error", "Failed to save channel list. Please check the file path and permissions.")
             )
 
     @staticmethod
@@ -1490,7 +1490,7 @@ class SettingsFileOperations:
         # 用户可主动选择是否将输入的 URL 作为 M3U 列表解析
         # 不勾选时，系统自动判断（下载内容后根据 #EXTM3U 等标记判断）
         parse_as_playlist_checkbox = QCheckBox(
-            tr("parse_as_playlist", "作为 M3U 列表解析（不勾选则自动判断）")
+            tr("parse_as_playlist", "作为 M3U 频道列表解析（不勾选则自动判断）")
         )
         layout.addWidget(parse_as_playlist_checkbox)
 

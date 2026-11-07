@@ -193,7 +193,7 @@ class ControlPanelMixin:
         row1.addWidget(self.remain_label, 0)
         text_layout.addLayout(row1)
 
-        self.program_desc = QLabel(tr("open_playlist_or_import", "Open a playlist file or import channels to start watching"))
+        self.program_desc = QLabel(tr("open_playlist_or_import", "Open a channel list file or import channels to start watching"))
         self.program_desc.setObjectName("program_desc")
         self.program_desc.setStyleSheet(AppStyles.player_program_desc_style())
         self.program_desc.setWordWrap(True)
@@ -424,7 +424,7 @@ class ControlPanelMixin:
         if not hasattr(self, 'program_desc'):
             return False
         cta_text = self.language_manager.tr(
-            "open_playlist_or_import", "Open a playlist file or import channels to start watching"
+            "open_playlist_or_import", "Open a channel list file or import channels to start watching"
         )
         return self.program_desc.text() == cta_text
 

@@ -1179,7 +1179,7 @@ class UIController:
             file_menu = menu_bar.addMenu(tr("menu_file", "File"))
             recent_menu = None
             if file_menu:
-                open_playlist = QAction(tr("menu_open_playlist", "Open Playlist\tCtrl+O"), self.window)
+                open_playlist = QAction(tr("menu_open_playlist", "Open Channel List\tCtrl+O"), self.window)
                 open_playlist.triggered.connect(self.window.open_playlist)
                 file_menu.addAction(open_playlist)
 
@@ -1381,7 +1381,7 @@ class UIController:
             view_menu.addAction(show_epg)
             self.window._epg_menu_action = show_epg
 
-            show_playlist = QAction(tr("menu_playlist", "Playlist\tL"), self.window)
+            show_playlist = QAction(tr("menu_playlist", "Channel List\tL"), self.window)
             show_playlist.setCheckable(True)
             show_playlist.setChecked(self.window.playlist_visible)
             show_playlist.triggered.connect(self.window.toggle_playlist)

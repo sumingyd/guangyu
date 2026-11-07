@@ -196,7 +196,7 @@ class ResumePlaybackController(QObject):
             else:
                 tr = self.window.language_manager.tr
                 if hasattr(self.window, '_show_osd_feedback'):
-                    self.window._show_osd_feedback(tr('osd_resume_not_in_list', 'File not in current playlist'))
+                    self.window._show_osd_feedback(tr('osd_resume_not_in_list', 'File not in current channel list'))
         except Exception as e:
             logger.debug(f"恢复指定断点失败: {e}")
 

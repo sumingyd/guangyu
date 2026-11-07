@@ -6,8 +6,8 @@ from core.log_manager import global_logger as logger
 
 SUPPORTED_FORMATS = {
     'playlist': {
-        'label_zh': '播放列表',
-        'label_en': 'Playlist',
+        'label_zh': '频道列表',
+        'label_en': 'Channel List',
         'extensions': ['.m3u', '.m3u8'],
     },
     'text': {

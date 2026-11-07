@@ -129,7 +129,7 @@ class LanguageManager(Singleton):
             if hasattr(main_window, 'epg_title'):
                 main_window.epg_title.setText(self.tr('epg_title', 'Program Guide'))
             if hasattr(main_window, 'playlist_title'):
-                main_window.playlist_title.setText(self.tr('playlist_title', 'Playlist'))
+                main_window.playlist_title.setText(self.tr('playlist_title', 'Channel List'))
             if hasattr(main_window, 'epg_date_label'):
                 current_text = main_window.epg_date_label.text()
                 zh_day_map = {'今天': 'today', '昨天': 'yesterday', '明天': 'tomorrow'}
@@ -203,7 +203,7 @@ class LanguageManager(Singleton):
             if hasattr(main_window, 'current_program'):
                 main_window.current_program.setText("")
             if hasattr(main_window, 'program_desc'):
-                main_window.program_desc.setText(self.tr('open_playlist_or_import', 'Open a playlist file or import channels to start watching'))
+                main_window.program_desc.setText(self.tr('open_playlist_or_import', 'Open a channel list file or import channels to start watching'))
             if hasattr(main_window, 'remain_label'):
                 main_window.remain_label.setText(self.tr('waiting_to_play', 'Waiting to play...'))
             if hasattr(main_window, '_set_exit_catchup_visible'):

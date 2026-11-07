@@ -116,7 +116,7 @@ class BookmarkController(QObject):
             if not channel:
                 tr = self.window.language_manager.tr
                 if hasattr(self.window, '_show_osd_feedback'):
-                    self.window._show_osd_feedback(tr('osd_bookmark_not_in_list', 'File not in current playlist'))
+                    self.window._show_osd_feedback(tr('osd_bookmark_not_in_list', 'File not in current channel list'))
                 return
             # 设置待恢复位置，文件加载后由 _on_file_loaded 执行 seek
             self._pending_seek_url = url

@@ -148,7 +148,7 @@ class PlaylistPanelMixin:
         self.playlist_layout = QVBoxLayout(playlist_container)
         self.playlist_layout.setContentsMargins(8, 8, 8, 8)
 
-        self.playlist_title = QLabel(tr('playlist_title', 'Playlist'))
+        self.playlist_title = QLabel(tr('playlist_title', 'Channel List'))
         self.playlist_title.setStyleSheet(AppStyles.player_playlist_title_style())
         self.playlist_layout.addWidget(self.playlist_title)
 

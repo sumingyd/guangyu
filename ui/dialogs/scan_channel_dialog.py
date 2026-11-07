@@ -1771,7 +1771,7 @@ class ScanChannelDialog(FloatingDialog):
         selected_rows = self.channel_list.selectionModel().selectedRows()
         if len(selected_rows) > 1:
             tr = self.language_manager.tr
-            self.edit_name.setText(tr("multi_selected", f"已选中 {len(selected_rows)} 个频道"))
+            self.edit_name.setText(tr("multi_selected", "已选中 {n} 个频道").format(n=len(selected_rows)))
             self.edit_name.setReadOnly(True)
             self.edit_group.setReadOnly(True)
             self.edit_url.setReadOnly(True)

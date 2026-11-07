@@ -137,7 +137,7 @@ class ContextMenuController:
         epg_action.setCheckable(True)
         epg_action.setChecked(self._facade.window.epg_visible)
         epg_action.triggered.connect(lambda checked=False: self._facade.window.toggle_epg())
-        playlist_action = view_menu.addAction(tr("ctx_playlist", "Playlist\tL"))
+        playlist_action = view_menu.addAction(tr("ctx_playlist", "Channel List\tL"))
         playlist_action.setCheckable(True)
         playlist_action.setChecked(self._facade.window.playlist_visible)
         playlist_action.triggered.connect(lambda checked=False: self._facade.window.toggle_playlist())
