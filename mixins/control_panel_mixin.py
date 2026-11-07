@@ -227,14 +227,16 @@ class ControlPanelMixin:
         tr = self.language_manager.tr
 
         self.control_row = QHBoxLayout()
-        self.control_row.setSpacing(8)
+        # 间距随按钮一起收紧（Windows 桌面）；Android/TV 保持原间距
+        self.control_row.setSpacing(6 if not is_android() else 8)
 
         btn_color = AppStyles.get_color('player_panel_text')
         # 按逻辑屏宽分级的尺寸因子：按钮、图标与全屏精简模式统一套用
         ui_scale = get_ui_scale()
-        btn_w = max(28, int(round(self.CTRL_BUTTON_WIDTH * ui_scale)))
-        btn_h = max(26, int(round(self.CTRL_BUTTON_HEIGHT * ui_scale)))
-        btn_icon_size = QSize(max(16, int(round(20 * ui_scale))), max(16, int(round(20 * ui_scale))))
+        btn_w = max(25, int(round(self.CTRL_BUTTON_WIDTH * ui_scale)))
+        btn_h = max(22, int(round(self.CTRL_BUTTON_HEIGHT * ui_scale)))
+        _icon_px = max(14, int(round(16 * ui_scale)))
+        btn_icon_size = QSize(_icon_px, _icon_px)
         if is_android():
             btn_icon_size = QSize(28, 28)
             btn_w = max(btn_w, 48)

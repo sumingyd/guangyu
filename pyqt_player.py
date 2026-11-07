@@ -220,8 +220,8 @@ class IPTVPlayer(
     PROGRAM_DESC_HEIGHT = 48
     CHANNEL_LOGO_WIDTH = 100
     CHANNEL_LOGO_HEIGHT = 36
-    CTRL_BUTTON_WIDTH = 36
-    CTRL_BUTTON_HEIGHT = 32
+    CTRL_BUTTON_WIDTH = 30
+    CTRL_BUTTON_HEIGHT = 26
 
     player_controller = None
     config = None

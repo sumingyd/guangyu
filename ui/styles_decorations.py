@@ -57,7 +57,7 @@ class StylesDecorations(StylesBase):
             c['player_panel_text'] = '#eaeaea'
             c['player_panel_secondary'] = '#888898'
             c['player_panel_disabled'] = '#585878'
-            c['player_panel_hint'] = '#6a6a8a'
+            c['player_panel_hint'] = '#7a7aa0'
             c['player_button'] = 'rgba(40, 40, 74, 0.95)'
             c['player_combo'] = 'rgba(34, 34, 64, 0.9)'
             c['player_line'] = '#3a3a60'
@@ -113,7 +113,7 @@ class StylesDecorations(StylesBase):
             c['player_panel_text'] = '#44476a'
             c['player_panel_secondary'] = '#5a5f7a'
             c['player_panel_disabled'] = '#8086a0'
-            c['player_panel_hint'] = '#7a7f9a'
+            c['player_panel_hint'] = '#6f7492'
             c['player_button'] = 'rgba(209, 217, 230, 0.95)'
             c['player_combo'] = 'rgba(224, 229, 236, 0.9)'
             c['player_line'] = '#b8bec7'
@@ -209,6 +209,9 @@ class StylesDecorations(StylesBase):
             c['accent'] = '#2080c0'
             c['accent_hover'] = '#1870b0'
             c['accent_pressed'] = '#1060a0'
+            # 浅色玻璃卡面半透明，提示字在明亮底色上只有 2.7:1；配合卡面 25% 浅色
+            # scrim 后加深到 #4d4d4d，实测最坏 4.7:1（纯黑画面下 3.0:1）。
+            c['player_panel_hint'] = '#4d4d4d'
             c['osd_text'] = '#1a2a3a'
             c['osd_border'] = '#ffffff'
             c['osd_shadow'] = '#c0c0c0'
@@ -235,6 +238,8 @@ class StylesDecorations(StylesBase):
             c['accent_pressed'] = '#005fa8'
             c['mica_color'] = '#f9f9f9'
             c['card_color'] = '#ffffff'
+            # 浅色玻璃提示字需在明亮/中灰最坏底色上都可读（见 frosted 同项说明）。
+            c['player_panel_hint'] = '#4d4d4d'
         c['font_family'] = "'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei', sans-serif"
         c['border_thin'] = 'rgba(255,255,255,0.08)' if color_mode == 'dark' else 'rgba(0,0,0,0.06)'
         c['shadow_subtle'] = '0 2px 4px rgba(0,0,0,0.16)' if color_mode == 'dark' else '0 2px 4px rgba(0,0,0,0.08)'
@@ -268,6 +273,7 @@ class StylesDecorations(StylesBase):
             c['shadow_light'] = 'rgba(255,255,255,0.9)'
             c['shadow_subtle'] = '0 2px 8px rgba(0,0,0,0.12)'
             c['border_subtle'] = 'rgba(0,0,0,0.08)'
+            c['player_panel_hint'] = '#4d4d4d'
         c['font_family'] = "'SF Pro Display', 'SF Pro', 'Segoe UI', 'Microsoft YaHei', sans-serif"
         return c
 
@@ -298,6 +304,7 @@ class StylesDecorations(StylesBase):
             c['shadow_light'] = 'rgba(255,255,255,0.95)'
             c['shadow_subtle'] = '0 1px 4px rgba(0,0,0,0.08)'
             c['border_subtle'] = 'rgba(0,0,0,0.08)'
+            c['player_panel_hint'] = '#4d4d4d'
         c['font_family'] = "'SF Pro Display', 'SF Pro', 'Segoe UI', 'Microsoft YaHei', sans-serif"
         return c
 

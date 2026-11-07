@@ -308,9 +308,14 @@ class _GlassSurfaceMixin:
         # 面板背后是任意亮度的视频画面，固定 51% 的深色卡面叠在亮画面（天空、白墙）
         # 上时对比度会掉到 1~3:1，文字看起来"发虚"。Windows 上拿不到真实背景亮度，
         # 所以统一补一层 25% 黑 scrim，把最坏情况的底色压暗，文字回到可读区间。
-        # 浅色主题不加，避免把浅色卡片压灰。
-        if glass and AppStyles._get_effective_color_mode() == 'dark':
-            painter.fillPath(path, QColor(0, 0, 0, 64))
+        # 浅色玻璃同理：白卡叠在暗画面上会压成中灰，深色提示字同样发虚，补一层
+        # 25% 卡面色 scrim（与深色侧对称），把最坏背景抬回可读区间。
+        if glass:
+            mode = AppStyles._get_effective_color_mode()
+            if mode == 'dark':
+                painter.fillPath(path, QColor(0, 0, 0, 64))
+            else:
+                painter.fillPath(path, QColor(r, g, b, 64))
 
         lr, lg, lb = _parse_hex_color(colors.get(self._border_color_key, '#646464'))
         if AppStyles.is_neumorphic():

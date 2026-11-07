@@ -10,7 +10,9 @@ class StylesPlayer(StylesBase):
     @staticmethod
     def player_button_style() -> str:
         colors = AppStyles._get_qss_colors()
-        r = min(AppStyles._get_style_border_radius(), 6)
+        # 按钮高度收紧后，沿用风格圆角会接近胶囊形（frosted 12px / 26px 高），
+        # 这里按按钮尺度封顶到 8px，保持与文字相近的视觉重量。
+        r = min(AppStyles._get_style_border_radius(), 8)
         style = AppStyles._visual_style
         btn_dec = AppStyles._style_btn_decoration(colors)
         btn_dec_hover = AppStyles._style_btn_decoration(colors, hover=True)
@@ -20,16 +22,19 @@ class StylesPlayer(StylesBase):
                 color: {colors['player_panel_text']};
                 font-size: {AppStyles.fs('caption')}px;
                 {btn_dec}
+                border-radius: {r}px;
                 padding: 1px 4px;
                 margin: 0px;
             }}
             QToolButton:hover {{
                 color: {colors['player_panel_text']};
                 {btn_dec_hover}
+                border-radius: {r}px;
             }}
             QToolButton:pressed {{
                 color: {colors['player_button']};
                 {btn_dec_pressed}
+                border-radius: {r}px;
             }}
             QToolButton:checked {{
                 background-color: {colors['highlight']};

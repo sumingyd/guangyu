@@ -7,7 +7,7 @@ from typing import Dict, Any
 from datetime import datetime
 from collections import deque
 
-from PySide6.QtWidgets import QListWidgetItem, QListWidget
+from PySide6.QtWidgets import QListWidgetItem, QListWidget, QWidget
 from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6 import QtWidgets
 
@@ -76,7 +76,9 @@ class ChannelController:
         try:
             list_widget.setUpdatesEnabled(enabled)
             if enabled:
-                list_widget.update()
+                # QAbstractItemView 在 PySide6 中存在 update(QModelIndex) 重载，
+                # 会遮蔽 QWidget.update() 的零参形式，直接调用会抛 TypeError。
+                QWidget.update(list_widget)
         except RuntimeError:
             pass
 
