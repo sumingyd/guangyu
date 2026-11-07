@@ -407,9 +407,14 @@ class SettingsFileOperations:
             ('auto', tr("vo_auto", "Auto (Recommended - derive from HDR mode)")),
             ('gpu', tr("vo_gpu", "gpu (Default cross-platform VO)")),
             ('gpu-next', tr("vo_gpu_next", "gpu-next (Next-gen, HDR passthrough/scRGB)")),
-            ('libmpv', tr("vo_libmpv", "libmpv (Render API, macOS default)")),
-            ('direct3d', tr("vo_direct3d", "direct3d (Windows legacy VO)")),
         ]
+        # 只列出当前平台真正可用的 vo：Linux 的 wid 嵌入不支持 libmpv/direct3d，
+        # 列出这些选项会让用户选到必然黑屏的配置。
+        from utils.platform_utils import is_windows, is_linux
+        if not is_linux():
+            vo_items.append(('libmpv', tr("vo_libmpv", "libmpv (Render API, macOS default)")))
+        if is_windows():
+            vo_items.append(('direct3d', tr("vo_direct3d", "direct3d (Windows legacy VO)")))
         current_vo = str(playback_settings.get('vo', 'auto')).lower()
         selected_vo_idx = 0
         for i, (val, label) in enumerate(vo_items):

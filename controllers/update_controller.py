@@ -590,8 +590,18 @@ class UpdateController:
         script = (
             "#!/bin/bash\n"
             "sleep 2\n"
-            f'mv -f {safe_new_exe} {safe_current_exe}\n'
-            f'chmod +x {safe_current_exe}\n'
+            'LOG="${XDG_CACHE_HOME:-$HOME/.cache}/GuangYu/update.log"\n'
+            'mkdir -p "$(dirname "$LOG")" 2>/dev/null\n'
+            f'if mv -f {safe_new_exe} {safe_current_exe} 2>>"$LOG"; then\n'
+            f'    chmod +x {safe_current_exe} 2>>"$LOG"\n'
+            "else\n"
+            '    echo "[$(date "+%F %T")] 更新失败：无法写入" '
+            f'{safe_current_exe} >>"$LOG" 2>&1\n'
+            '    MSG="GuangYu 更新失败：无法替换程序文件（可能缺少写权限）。'
+            '请用有权限的方式手动替换，或重新安装。详情见 $LOG"\n'
+            '    if command -v notify-send >/dev/null 2>&1; then notify-send "GuangYu" "$MSG"; fi\n'
+            '    if command -v zenity >/dev/null 2>&1; then zenity --error --no-wrap --text "$MSG" >/dev/null 2>&1 & fi\n'
+            "fi\n"
             f'nohup {safe_current_exe} > /dev/null 2>&1 &\n'
             'rm "$0"\n'
         )

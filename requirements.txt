@@ -8,6 +8,10 @@
 # 核心GUI框架
 PySide6==6.7.1
 
+# macOS 原生能力（NSVisualEffectView 毛玻璃、NSWindow 层级、NSScreen EDR 检测）。
+# 仅 darwin 安装，Windows/Linux 依赖不变。
+pyobjc-framework-Cocoa==10.3.1; sys_platform == "darwin"
+
 # 网络请求和流媒体处理
 requests==2.34.2
 urllib3==2.7.0
@@ -36,3 +40,9 @@ pyinstaller==6.22.3
 
 # 开发/CI 测试
 pytest==9.1.1
+
+# Linux 运行时系统依赖（pip 无法安装，需用系统包管理器安装）：
+#   libmpv        Ubuntu/Debian: libmpv2 或 libmpv1；Fedora: mpv-libs；Arch: mpv
+#   libxcb-cursor0 Qt6 xcb 平台插件的必需依赖（Ubuntu 22.04+/Debian 12+）
+#   xwayland      Wayland 会话下提供 DISPLAY；缺失时程序会给出可读错误并退出
+#   ffmpeg        提供 ffprobe；缺失时频道验证/扫描的 ffprobe 引擎不可用

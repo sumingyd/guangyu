@@ -28,11 +28,24 @@ def is_linux():
 def is_wayland():
     if not is_linux():
         return False
+    # 优先按 Qt 实际选用的 QPA 平台判断：Wayland 会话下程序会强制走 xcb（XWayland），
+    # 此时窗口系统实际是 X11，若仍按会话变量判断会误走 Wayland 分支
+    # （Wayland 分支用 windowHandle().setPosition 定位，对 X11 窗口无效）。
+    if _HAS_QT:
+        try:
+            app = QGuiApplication.instance()
+            if app is not None:
+                platform_name = (app.platformName() or '').strip().lower()
+                if platform_name:
+                    return platform_name.startswith('wayland')
+        except Exception:
+            pass
+    # Qt 尚未初始化（启动早期）时回退到会话变量探测
     session_type = os.environ.get('XDG_SESSION_TYPE', '').lower()
     if session_type == 'wayland':
         return True
     qt_qpa = os.environ.get('QT_QPA_PLATFORM', '').lower()
-    if qt_qpa == 'wayland':
+    if qt_qpa.startswith('wayland'):
         return True
     if session_type == 'x11':
         return False
@@ -40,6 +53,45 @@ def is_wayland():
     if wayland_display:
         return True
     return False
+
+
+def has_x11_compositor():
+    """当前窗口环境是否有合成管理器（决定逐像素透明/圆角能否工作）。
+
+    X11 没有合成器时，FramelessWindowHint + WA_TranslucentBackground 的顶层窗
+    会把透明区域渲染成纯黑；调用方据此回退为不透明。非 Linux 平台自带合成，
+    检测失败时也保守返回 True，避免误关已有视觉效果。
+    """
+    if not is_linux():
+        return True
+    if is_wayland():
+        return True
+    try:
+        import ctypes
+        import ctypes.util
+        xlib_name = ctypes.util.find_library('X11')
+        if not xlib_name:
+            return True
+        xlib = ctypes.CDLL(xlib_name)
+        xlib.XOpenDisplay.restype = ctypes.c_void_p
+        xlib.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        display = xlib.XOpenDisplay(None)
+        if not display:
+            return True
+        try:
+            xlib.XInternAtom.restype = ctypes.c_ulong
+            xlib.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+            xlib.XGetSelectionOwner.restype = ctypes.c_ulong
+            xlib.XGetSelectionOwner.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+            atom = xlib.XInternAtom(display, b'_NET_WM_CM_S0', 0)
+            if not atom:
+                return True
+            return xlib.XGetSelectionOwner(display, atom) != 0
+        finally:
+            xlib.XCloseDisplay.argtypes = [ctypes.c_void_p]
+            xlib.XCloseDisplay(display)
+    except Exception:
+        return True
 
 
 def wayland_move(widget, x, y):
