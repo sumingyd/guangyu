@@ -266,7 +266,8 @@ jobs:
           # libegl1/libgl1: PySide6 在 runner 上导入需要 EGL；
           # libva*/libvdpau1: CAVS 版 libmpv 链接了 VAAPI/VDPAU，ldd 检查需要能解析
           sudo apt install -y ffmpeg libxcb-cursor0 libass-dev zlib1g-dev libjpeg-dev \
-            libegl1 libgl1 libxkbcommon-x11-0 libva2 libva-drm2 libva-x11-2 libvdpau1
+            libegl1 libgl1 libxkbcommon-x11-0 libva2 libva-drm2 libva-x11-2 libvdpau1 \
+            liblua5.1-0 libxpresent1
 
       - name: Download CAVS-enabled libmpv (Linux x86_64)
         # 优先从项目 Release 下载带 CAVS + AVS2 支持的 libmpv
@@ -352,9 +353,9 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt update
-          # CAVS 版 libmpv 链接了 VAAPI/VDPAU，ldd 检查需要能解析这些运行库
+          # CAVS 版 libmpv 链接了 VAAPI/VDPAU/Lua/Xpresent，ldd 检查需要能解析这些运行库
           sudo apt install -y libxcb-cursor0 libass-dev zlib1g-dev libjpeg-dev \
-            libva2 libva-drm2 libva-x11-2 libvdpau1
+            libva2 libva-drm2 libva-x11-2 libvdpau1 liblua5.1-0 libxpresent1
 
       - name: Download CAVS-enabled libmpv (Linux ARM64)
         # 优先从项目 Release 下载带 CAVS + AVS2 支持的 libmpv

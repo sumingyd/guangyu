@@ -127,10 +127,13 @@ def test_find_linux_executable_prefers_install_name(tmp_path):
     assert uc.find_linux_executable(str(tmp_path), "GuangYu") == str(tmp_path / "GuangYu")
 
     # 目录下只有一个可执行文件时才作为兜底采用，避免误选脚本
+    # POSIX 下兜底判断依赖真实的可执行位，这里显式赋予
     single = tmp_path / "single"
     single.mkdir()
-    (single / "GuangYu").write_text("bin", encoding="utf-8")
-    assert uc.find_linux_executable(str(single), "NotExist") == str(single / "GuangYu")
+    fallback_bin = single / "GuangYu"
+    fallback_bin.write_text("bin", encoding="utf-8")
+    fallback_bin.chmod(0o755)
+    assert uc.find_linux_executable(str(single), "NotExist") == str(fallback_bin)
 
 
 def test_start_download_without_asset_does_not_download():
