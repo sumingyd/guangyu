@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -142,6 +143,11 @@ fun TvUnifiedPanel(viewModel: AppViewModel) {
     val osdHideChannelNum by viewModel.osdHideChannelNum.collectAsState()
     val osdDisableFavorite by viewModel.osdDisableFavorite.collectAsState()
     val osdDisableEpg by viewModel.osdDisableEpg.collectAsState()
+
+    // 订阅源加载态：服务端状态 + 本地重载标志，任一为真即视为加载中。
+    // 频道列空态必须依赖真实加载状态，不能用「列表为空」反推。
+    val iptvStatus by viewModel.iptvStatus.collectAsState()
+    val localSourceLoading by viewModel.sourceLoading.collectAsState()
 
     // 多画面状态（多画面模式下点击频道添加到副画面，而非切换主画面）
     val multiViewState by viewModel.multiViewState.collectAsState()
@@ -366,6 +372,10 @@ fun TvUnifiedPanel(viewModel: AppViewModel) {
                                     }
                                 },
                                 onFocusedChannelChange = { idx -> focusedChannelIdx = idx },
+                                sourceLoading = iptvStatus?.sourceLoading == true || localSourceLoading,
+                                sourceWarning = iptvStatus?.sourceWarning.orEmpty(),
+                                onAddSource = { viewModel.toggleSourceManager() },
+                                onRefresh = { viewModel.reloadSources() },
                                 modifier = Modifier.width(260.dp).focusRequester(channelListFocus)
                             )
 
@@ -773,6 +783,10 @@ private fun ChannelsColumn(
     disableEpg: Boolean,
     onChannelClick: (Int) -> Unit,
     onFocusedChannelChange: (Int) -> Unit,
+    sourceLoading: Boolean,
+    sourceWarning: String,
+    onAddSource: () -> Unit,
+    onRefresh: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     // 根据 tab 和分组过滤频道
@@ -787,6 +801,9 @@ private fun ChannelsColumn(
         }
         if (selectedGroup.isEmpty()) tabbed else tabbed.filter { it.first.group == selectedGroup }
     }
+
+    // 列表 key：以频道 URL 作为稳定身份，频道增删/分组过滤后组合状态与焦点不会错位
+    val channelItemKeys = remember(filteredChannels) { buildChannelItemKeys(filteredChannels) }
 
     // 滚动状态：用于面板打开时自动滚动到当前频道
     val listState = rememberLazyListState()
@@ -823,33 +840,26 @@ private fun ChannelsColumn(
 
             // 频道列表
             if (filteredChannels.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = when (channelsTab) {
-                            ChannelTab.SUB -> "暂无频道\n请通过菜单添加订阅源"
-                            ChannelTab.LOCAL -> "暂无本地频道"
-                            else -> "未找到匹配频道"
-                        },
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 13.sp,
-                        lineHeight = 20.sp,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                    )
-                }
+                ChannelEmptyState(
+                    tab = channelsTab,
+                    loading = sourceLoading,
+                    sourceWarning = sourceWarning,
+                    groupName = if (channelsTab == ChannelTab.SUB) selectedGroup else "",
+                    onAddSource = onAddSource,
+                    onRefresh = onRefresh
+                )
             } else {
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 4.dp)
                 ) {
-                    items(
+                    itemsIndexed(
                         items = filteredChannels,
-                        key = { (channel, idx) -> idx }
-                    ) { (channel, idx) ->
-                        val currentEpgTitle = remember(epgCacheVersion, idx) {
+                        key = { index, _ -> channelItemKeys[index] }
+                    ) { _, (channel, idx) ->
+                        // 当前节目名按频道 URL 缓存：同一频道换位置时不重复取 EPG
+                        val currentEpgTitle = remember(epgCacheVersion, channel.url) {
                             if (disableEpg) "" else getCachedCurrentProgram(idx)?.title ?: ""
                         }
                         TvChannelItem(
@@ -1164,10 +1174,12 @@ private fun MenuColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 4.dp)
             ) {
-                items(
+                itemsIndexed(
                     items = menuItems,
-                    key = { it.title }
-                ) { item ->
+                    // 菜单项标题可能重复（如多个「打开文件」入口），用序号+标题保证 key 唯一，
+                    // 否则 LazyColumn 会因重复 key 直接抛异常
+                    key = { index, item -> "${index}_${item.title}" }
+                ) { _, item ->
                     TvMenuItemRow(item)
                 }
             }

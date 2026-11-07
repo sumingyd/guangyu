@@ -55,8 +55,10 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.activity.compose.BackHandler
 import androidx.compose.material3.CircularProgressIndicator
@@ -207,6 +209,11 @@ internal fun PortraitListScreen(
     val thumbnailPaths by viewModel.thumbnailPaths.collectAsState()
     val scanResults by viewModel.scanResults.collectAsState()
 
+    // 订阅源加载态：服务端状态 + 本地重载标志，任一为真即视为加载中。
+    // 空态分支必须依赖真实加载状态，不能用「列表为空」反推。
+    val iptvStatus by viewModel.iptvStatus.collectAsState()
+    val localSourceLoading by viewModel.sourceLoading.collectAsState()
+
     // 延迟映射：url -> latency(ms)，优先使用实时测量值，回退到扫描结果
     val liveLatencyMap by viewModel.liveLatencyMap.collectAsState()
     val latencyMap = remember(scanResults, liveLatencyMap) {
@@ -288,7 +295,8 @@ internal fun PortraitListScreen(
         var showGroupSheet by remember { mutableStateOf(false) }
         var showSourceSheet by remember { mutableStateOf(false) }
         var viewMenuExpanded by remember { mutableStateOf(false) }
-        var searchQuery by remember { mutableStateOf("") }
+        // 搜索关键词只有函数级 searchQuery 一份：头部输入框直接写入它，
+        // 列表过滤与空态判断都读同一份状态。
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -728,20 +736,15 @@ internal fun PortraitListScreen(
         }
 
         if (searchedChannels.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                // 订阅源仍在后台加载时显示加载提示，避免被误认为无频道
-                val status by viewModel.iptvStatus.collectAsState()
-                Text(
-                    when {
-                        searchQuery.isNotBlank() -> "无匹配频道"
-                        status?.sourceLoading == true -> "正在加载订阅源..."
-                        !status?.sourceWarning.isNullOrBlank() -> status?.sourceWarning ?: "暂无频道"
-                        else -> "暂无频道"
-                    },
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 14.sp
-                )
-            }
+            ChannelEmptyState(
+                tab = if (listSourceTab == ListSourceTab.LOCAL) ChannelTab.LOCAL else ChannelTab.SUB,
+                loading = iptvStatus?.sourceLoading == true || localSourceLoading,
+                sourceWarning = iptvStatus?.sourceWarning.orEmpty(),
+                searchQuery = searchQuery,
+                groupName = selectedGroup,
+                onAddSource = { viewModel.toggleSourceManager() },
+                onRefresh = { viewModel.reloadSources() }
+            )
             return
         }
 
@@ -1329,5 +1332,149 @@ internal fun PortraitChannelListItem(
                 modifier = Modifier.size(18.dp)
             )
         }
+    }
+}
+
+// =====================================================================
+// 频道列表公共空态 / 加载态 / 错误态 / key 工具
+// =====================================================================
+
+/**
+ * 频道列表统一的空态、加载态与错误态。
+ *
+ * 供 TV 统一面板、横屏侧边栏、竖屏动态面板、频道列表面板共用，
+ * 避免各页面各自拼一套文案导致同一场景提示不一致。
+ *
+ * 判定顺序（互斥）：
+ * 1. 加载中 —— 显示进度，不展示「暂无频道」以免误导
+ * 2. 有搜索词 —— 无匹配结果
+ * 3. 订阅源告警 —— 固定可读文案 + 重试
+ * 4. 无明显原因 —— 按 tab/分组给出针对性引导
+ *
+ * 注意：内部文案目前为硬编码中文，后续需统一迁移到 strings.xml。
+ */
+@Composable
+internal fun ChannelEmptyState(
+    tab: ChannelTab,
+    loading: Boolean,
+    sourceWarning: String,
+    searchQuery: String = "",
+    groupName: String = "",
+    onAddSource: (() -> Unit)? = null,
+    onRefresh: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    // 原始告警串只进日志：其中可能包含异常堆栈或订阅源 URL，不适合直接展示给用户
+    LaunchedEffect(sourceWarning) {
+        if (sourceWarning.isNotBlank()) {
+            Log.w("ChannelEmptyState", "订阅源加载告警（原始信息）: $sourceWarning")
+        }
+    }
+
+    val failed = !loading && sourceWarning.isNotBlank()
+    val addSource = onAddSource
+    val refresh = onRefresh
+    val keyword = searchQuery.trim()
+
+    val primary = when {
+        loading -> "正在加载订阅源..."
+        searchQuery.isNotBlank() -> "无匹配频道"
+        failed -> "网络异常，当前显示缓存频道"
+        tab == ChannelTab.LOCAL -> "暂无本地频道"
+        tab == ChannelTab.FAV -> "暂无收藏"
+        tab == ChannelTab.HIST -> "暂无历史"
+        groupName.isNotBlank() -> "该分组暂无频道"
+        else -> "暂无频道"
+    }
+    val secondary = when {
+        loading -> "首次加载可能需要几十秒，请稍候"
+        searchQuery.isNotBlank() -> "未找到包含「$keyword」的频道，换个关键词再试试"
+        failed -> "订阅源刷新失败，可点击下方按钮重试"
+        tab == ChannelTab.LOCAL -> "可通过文件浏览导入本地视频或播放列表"
+        tab == ChannelTab.FAV -> "在频道列表按星标收藏常看频道"
+        tab == ChannelTab.HIST -> "播放过的频道会自动记录在这里"
+        groupName.isNotBlank() -> "切换到其他分组或选择「全部」"
+        else -> "添加订阅源后会自动同步频道列表"
+    }
+
+    // 主次操作互不重复：失败场景主按钮是重试；正常空态主按钮是添加订阅源、次按钮是刷新
+    val primaryAction: Pair<String, () -> Unit>? = when {
+        loading || searchQuery.isNotBlank() -> null
+        failed -> refresh?.let { "重试" to it }
+        tab == ChannelTab.SUB -> addSource?.let { "添加订阅源" to it }
+        else -> null
+    }
+    val secondaryAction: Pair<String, () -> Unit>? = when {
+        loading || searchQuery.isNotBlank() || failed || tab != ChannelTab.SUB -> null
+        else -> refresh?.let { "刷新" to it }
+    }
+
+    Column(
+        modifier = modifier.fillMaxSize().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        if (loading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(28.dp),
+                color = MaterialTheme.colorScheme.primary,
+                strokeWidth = 2.5.dp
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+        }
+        Text(
+            text = primary,
+            color = MaterialTheme.colorScheme.onSurface,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = secondary,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp,
+            lineHeight = 18.sp,
+            textAlign = TextAlign.Center,
+            // 关键词可能很长，限制行数避免撑破空态布局
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (primaryAction != null || secondaryAction != null) {
+            Spacer(modifier = Modifier.height(18.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                primaryAction?.let { (label, action) ->
+                    Button(onClick = action, modifier = Modifier.tvFocusBorder()) {
+                        Text(label, fontSize = 13.sp)
+                    }
+                }
+                secondaryAction?.let { (label, action) ->
+                    OutlinedButton(onClick = action, modifier = Modifier.tvFocusBorder()) {
+                        Text(label, fontSize = 13.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 为频道列表生成稳定的 LazyColumn key。
+ *
+ * 使用频道 URL 而非列表下标：频道增删、分组过滤、分页截断后，
+ * 同一频道的组合状态与焦点不会错位到别的频道上。
+ * 同一 URL 在多个订阅源中重复出现时追加出现序号，保证 key 唯一
+ * （LazyColumn 遇到重复 key 会直接抛异常）。
+ */
+internal fun buildChannelItemKeys(items: List<Pair<IptvChannel, Int>>): List<String> {
+    val seen = HashMap<String, Int>()
+    return items.map { (channel, idx) ->
+        val base = channel.url.ifBlank { "ch_$idx" }
+        val hits = (seen[base] ?: 0) + 1
+        seen[base] = hits
+        if (hits == 1) base else "$base#$hits"
     }
 }

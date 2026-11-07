@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.collectAsState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -80,6 +81,10 @@ fun ChannelsPanel(viewModel: AppViewModel, inline: Boolean = false, compact: Boo
     val currentIdx by viewModel.currentIdx.collectAsState()
     val favorites by viewModel.favorites.collectAsState()
     val history by viewModel.history.collectAsState()
+
+    // 订阅源加载态：服务端状态 + 本地重载标志，任一为真即视为加载中
+    val iptvStatus by viewModel.iptvStatus.collectAsState()
+    val localSourceLoading by viewModel.sourceLoading.collectAsState()
 
     val closeFocusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) {
@@ -202,6 +207,11 @@ fun ChannelsPanel(viewModel: AppViewModel, inline: Boolean = false, compact: Boo
                         currentIdx = currentIdx,
                         favorites = favorites,
                         tab = tab,
+                        selectedGroup = selectedGroup,
+                        sourceLoading = iptvStatus?.sourceLoading == true || localSourceLoading,
+                        sourceWarning = iptvStatus?.sourceWarning.orEmpty(),
+                        onAddSource = { viewModel.toggleSourceManager() },
+                        onRefresh = { viewModel.reloadSources() },
                         onPlay = { viewModel.playChannel(it) },
                         modifier = Modifier.weight(0.62f)
                     )
@@ -212,6 +222,11 @@ fun ChannelsPanel(viewModel: AppViewModel, inline: Boolean = false, compact: Boo
                     currentIdx = currentIdx,
                     favorites = favorites,
                     tab = tab,
+                    selectedGroup = selectedGroup,
+                    sourceLoading = iptvStatus?.sourceLoading == true || localSourceLoading,
+                    sourceWarning = iptvStatus?.sourceWarning.orEmpty(),
+                    onAddSource = { viewModel.toggleSourceManager() },
+                    onRefresh = { viewModel.reloadSources() },
                     onPlay = { viewModel.playChannel(it) }
                 )
             }
@@ -243,27 +258,24 @@ private fun ChannelListContent(
     currentIdx: Int,
     favorites: Set<Int>,
     tab: ChannelTab,
+    selectedGroup: String,
+    sourceLoading: Boolean,
+    sourceWarning: String,
+    onAddSource: () -> Unit,
+    onRefresh: () -> Unit,
     onPlay: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (filteredChannels.isEmpty()) {
-        Box(
-            modifier = modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = when (tab) {
-                    ChannelTab.SUB -> "暂无频道\n请在主菜单 > 文件 > 订阅源管理 添加"
-                    ChannelTab.LOCAL -> "暂无本地频道"
-                    ChannelTab.FAV -> "暂无收藏\n点击频道右侧星标添加"
-                    ChannelTab.HIST -> "暂无历史\n播放后会自动记录"
-                },
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 13.sp,
-                lineHeight = 20.sp,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center
-            )
-        }
+        ChannelEmptyState(
+            tab = tab,
+            loading = sourceLoading,
+            sourceWarning = sourceWarning,
+            groupName = if (tab == ChannelTab.SUB || tab == ChannelTab.LOCAL) selectedGroup else "",
+            onAddSource = onAddSource,
+            onRefresh = onRefresh,
+            modifier = modifier
+        )
     } else {
         // 分页加载：频道数超过阈值时启用增量加载
         val usePagination = filteredChannels.size > PAGINATION_THRESHOLD
@@ -291,15 +303,18 @@ private fun ChannelListContent(
             filteredChannels
         }
 
+        // 列表 key：以频道 URL 作为稳定身份，分页追加/过滤切换时不会错位
+        val channelItemKeys = remember(displayedChannels) { buildChannelItemKeys(displayedChannels) }
+
         LazyColumn(
             state = if (usePagination) listState else rememberLazyListState(),
             modifier = modifier.fillMaxSize(),
             contentPadding = PaddingValues(vertical = 4.dp)
         ) {
-            items(
+            itemsIndexed(
                 items = displayedChannels,
-                key = { (channel, idx) -> idx }
-            ) { (channel, idx) ->
+                key = { index, _ -> channelItemKeys[index] }
+            ) { _, (channel, idx) ->
                 ChannelListItem(
                     channel = channel,
                     isPlaying = idx == currentIdx,

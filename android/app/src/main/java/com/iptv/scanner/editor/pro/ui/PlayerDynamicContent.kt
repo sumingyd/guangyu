@@ -112,6 +112,7 @@ import com.iptv.scanner.editor.pro.ui.theme.tvFocusBorder
 import androidx.media3.ui.PlayerView
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Settings
@@ -656,6 +657,10 @@ internal fun PortraitChannelOnlyList(viewModel: AppViewModel) {
     val channelsTab by viewModel.channelsTab.collectAsState()
     val epgCacheVersion by viewModel.epgCacheVersion.collectAsState()
 
+    // 订阅源加载态：服务端状态 + 本地重载标志，任一为真即视为加载中
+    val iptvStatus by viewModel.iptvStatus.collectAsState()
+    val localSourceLoading by viewModel.sourceLoading.collectAsState()
+
     val filteredChannels = remember(channels, selectedGroup, channelsTab) {
         val all = channels.mapIndexed { idx, c -> c to idx }
         val filtered = if (channelsTab == ChannelTab.LOCAL) {
@@ -669,20 +674,17 @@ internal fun PortraitChannelOnlyList(viewModel: AppViewModel) {
     }
 
     if (filteredChannels.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            // 订阅源仍在后台加载时显示加载提示，避免被误认为无频道
-            val status by viewModel.iptvStatus.collectAsState()
-            Text(
-                text = when {
-                    status?.sourceLoading == true -> "正在加载订阅源..."
-                    !status?.sourceWarning.isNullOrBlank() -> status?.sourceWarning ?: "暂无频道"
-                    else -> "暂无频道"
-                },
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 13.sp
-            )
-        }
+        ChannelEmptyState(
+            tab = channelsTab,
+            loading = iptvStatus?.sourceLoading == true || localSourceLoading,
+            sourceWarning = iptvStatus?.sourceWarning.orEmpty(),
+            groupName = if (channelsTab == ChannelTab.SUB) selectedGroup else "",
+            onAddSource = { viewModel.toggleSourceManager() },
+            onRefresh = { viewModel.reloadSources() }
+        )
     } else {
+        // 列表 key：以频道 URL 作为稳定身份，频道增删/过滤后组合状态不会错位
+        val channelItemKeys = remember(filteredChannels) { buildChannelItemKeys(filteredChannels) }
         val listState = rememberLazyListState()
         LaunchedEffect(filteredChannels, currentIdx) {
             if (currentIdx >= 0) {
@@ -698,10 +700,10 @@ internal fun PortraitChannelOnlyList(viewModel: AppViewModel) {
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(vertical = 4.dp)
             ) {
-                items(
+                itemsIndexed(
                     items = filteredChannels,
-                    key = { (channel, idx) -> idx }
-                ) { (channel, idx) ->
+                    key = { index, _ -> channelItemKeys[index] }
+                ) { _, (channel, idx) ->
                     PortraitChannelListItem(
                         channel = channel,
                         channelIdx = idx,
