@@ -132,22 +132,23 @@ class StylesBase:
         """获取主题颜色，自动使用 _safe_fallback 作为回退"""
         return cls._get_colors().get(key, cls._safe_fallback(key))
 
-    # 统一 5 档字阶：辅助 12 / 正文 14 / 小标题 16 / 标题 20 / 大标题 28
-    FONT_SIZE_STEPS = (12, 14, 16, 20, 28)
+    # 统一字阶：辅助 11 / 辅助+ 12 / 正文 14 / 小标题 16 / 标题 20 / 大标题 28
+    # 11 必须保留：面板列表项、徽标等 caption 语义就是 11px，
+    # 旧的五档（12/14/16/20/28）会把它吸附成 12px，实测比重构前大 9%。
+    FONT_SIZE_STEPS = (11, 12, 14, 16, 20, 28)
 
     # 三级语义字号：辅助（说明/徽标）/ 正文（按钮/输入）/ 标题（区块标题）
     FONT_LEVELS = {'caption': 11, 'body': 12, 'title': 14}
 
     @classmethod
     def fs(cls, level: str = 'body') -> int:
-        """语义字号（px）；按逻辑屏宽分级缩放，并保证不小于 10px。"""
-        base = cls.FONT_LEVELS.get(level, 12)
-        try:
-            from utils.platform_utils import get_ui_scale
-            base = base * get_ui_scale()
-        except Exception:
-            pass
-        return max(10, int(round(base)))
+        """语义字号（px），取重构前的固定值。
+
+        重构前各面板样式就是字面量 14/12/11px，没有乘屏宽因子；
+        引入 get_ui_scale() 后在高分屏上会被放大两次（系统 DPI 已放大一次，
+        token 再乘 1.15/1.3），实测观感明显大于重构前，故恢复固定值。
+        """
+        return cls.FONT_LEVELS.get(level, 12)
 
     @classmethod
     def font_size(cls, level: str) -> int:
@@ -157,7 +158,11 @@ class StylesBase:
 
     @classmethod
     def normalize_font_sizes(cls, qss: str) -> str:
-        """把 QSS 文本中所有 font-size: Npx 吸附到 5 档标准字阶"""
+        """把 QSS 文本中所有 font-size: Npx 吸附到标准字阶。
+
+        并列时取较小档：旧实现取较大档，会把 13px 抬成 14px，
+        在高分屏（scale=1.15）上 caption 被放大 27%，是面板字偏大的来源之一。
+        """
         if not qss:
             return qss
         import re
@@ -165,7 +170,7 @@ class StylesBase:
 
         def _snap(m):
             px = int(m.group(1))
-            snapped = min(steps, key=lambda s: (abs(s - px), -s))
+            snapped = min(steps, key=lambda s: (abs(s - px), s))
             return f"font-size: {snapped}px"
 
         return re.sub(r'font-size:\s*(\d+)px', _snap, qss)

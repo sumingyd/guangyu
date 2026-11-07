@@ -179,22 +179,12 @@ class _GlassSurfaceMixin:
                 return
             if self._dwm_blur_enabled or self._dwm_blur_checked:
                 return
-            # 只有系统真模糊设置成功才算启用；否则必须让 _capture_backdrop
-            # 走快照模糊兜底，避免"半透明纯色但没有任何模糊"的假玻璃。
-            blur_ok = False
-            try:
-                hwnd = int(self.winId())
-                DWMWA_SYSTEMBACKDROP_TYPE = 38
-                DWMSBT_MAINVIEW = 2
-                value = ctypes.c_int(DWMSBT_MAINVIEW)
-                result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                    hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
-                    ctypes.byref(value), ctypes.sizeof(value)
-                )
-                blur_ok = (result == 0)
-            except Exception:
-                blur_ok = False
-            self._dwm_blur_enabled = blur_ok
+            # Windows 上不再使用 DWMWA_SYSTEMBACKDROP_TYPE（Mica）。
+            # 实测：Mica 启用后窗口背景变成基于壁纸的系统材质，是实心不透明的，
+            # 窗后面的视频永远不会参与合成（红/蓝棋盘两点采样完全相同）；
+            # 逐像素 alpha 本身是正常的（同一探针去掉 Mica 后两点分别透出红/蓝）。
+            # 因此这里保持逐像素半透明，由 paintEvent 的卡片色叠到真实背景上。
+            self._dwm_blur_enabled = False
             self._dwm_blur_checked = True
             self._update_glass_mask()
         except Exception:
@@ -222,8 +212,16 @@ class _GlassSurfaceMixin:
             pass
 
     def _capture_backdrop(self):
-        """抓取窗口背后区域的快照并模糊；只在没有系统模糊时使用。"""
+        """抓取窗口背后区域的快照并模糊；只在没有系统模糊时使用。
+
+        Windows 上直接跳过：实测 QWidget.grab() 抓不到 mpv 的 QOpenGLWidget
+        画面（抓到的是黑/近黑），拿它当玻璃底会把视频盖成一块暗板。
+        因此 Windows 走纯逐像素半透明，底就是真实视频。
+        """
         from ui.styles import AppStyles
+        if is_windows():
+            self._backdrop = None
+            return
         if self._dwm_blur_enabled or not AppStyles.is_glass_style():
             self._backdrop = None
             return
@@ -253,6 +251,10 @@ class _GlassSurfaceMixin:
 
     def _refresh_backdrop_if_needed(self):
         from ui.styles import AppStyles
+        # Windows 走纯逐像素 alpha，没有可用的快照底（见 _capture_backdrop），
+        # 不再每 180ms 触发一次无意义重绘。
+        if is_windows():
+            return
         if self.isVisible() and AppStyles.is_glass_style() and not self._dwm_blur_enabled:
             self._capture_backdrop()
             self.update()
@@ -329,6 +331,18 @@ class FloatingDockWidget(_GlassSurfaceMixin, QDockWidget):
         self._resize_start_geo = None
         self._resize_start_pos = None
         self._init_glass_surface()
+
+    def _card_alpha(self) -> int:
+        """三块悬浮面板的卡面透明度按重构前的基准恢复。
+
+        重构前 FloatingDockWidget 以构造参数 opacity=130（约 51%）逐像素填充，
+        面板能明显透出底下的视频；重构后被抬到 168/199 并叠加 Mica，
+        观感变成实心。这里按 130 恢复，非玻璃风格仍保持不透明。
+        """
+        from ui.styles import AppStyles
+        if not AppStyles.is_glass_style():
+            return 255
+        return 130
 
     def _set_transient_parent(self):
         try:
