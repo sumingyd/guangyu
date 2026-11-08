@@ -72,6 +72,31 @@ class TestServerMixin:
             mock_start.assert_not_called()
 
     @patch('mixins.server_mixin.logger')
+    def test_auto_start_server_default_off_when_key_missing(self, mock_logger):
+        """Settings 里没有 auto_start 键（新用户）时不得启动服务，且需记日志。"""
+        self.host.config.load_server_settings.return_value = {}
+        with patch('server.app.set_main_window'), \
+             patch('server.app.start_server') as mock_start:
+            self.host._auto_start_server()
+            mock_start.assert_not_called()
+        mock_logger.info.assert_called()
+
+    @patch('mixins.server_mixin.logger')
+    def test_auto_start_server_syncs_menu_action(self, mock_logger):
+        """按用户设置启动后，菜单项文案需与实际运行状态一致。"""
+        self.host.config.load_server_settings.return_value = {
+            'auto_start': True, 'port': 9090, 'host': '0.0.0.0'
+        }
+        mock_server = MagicMock()
+        mock_server.is_running.return_value = True
+        with patch('server.app.set_main_window'), \
+             patch('server.app.start_server'), \
+             patch('server.app.get_server', return_value=mock_server), \
+             patch('server.routes.get_auth_token', return_value='tok'):
+            self.host._auto_start_server()
+        self.host._server_action.setText.assert_called_once()
+
+    @patch('mixins.server_mixin.logger')
     def test_auto_start_server_enabled(self, mock_logger):
         self.host.config.load_server_settings.return_value = {
             'auto_start': True, 'port': 9090, 'host': '0.0.0.0'
@@ -124,6 +149,17 @@ class TestServerMixin:
              patch('webbrowser.open') as mock_open:
             self.host._open_server_api()
             mock_open.assert_called_once_with('http://localhost:8080/?token=tok123')
+
+    @patch('mixins.server_mixin.logger')
+    def test_open_server_api_when_not_running(self, mock_logger):
+        """服务默认关闭时打开 API 只提示用户开启，不得打开无效链接。"""
+        mock_server = MagicMock()
+        mock_server.is_running.return_value = False
+        with patch('server.app.get_server', return_value=mock_server), \
+             patch('webbrowser.open') as mock_open:
+            self.host._open_server_api()
+            mock_open.assert_not_called()
+        self.host.status_bar.showMessage.assert_called_once()
 
     @patch('mixins.server_mixin.logger')
     def test_open_server_api_exception(self, mock_logger):

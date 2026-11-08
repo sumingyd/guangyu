@@ -1205,6 +1205,7 @@
   "server_auto_start": "启动时自动运行服务",
   "server_host": "监听地址:",
   "server_not_running": "服务未运行",
+  "server_not_running_hint": "服务未运行，请先在“工具 > 服务”中启动服务",
   "server_open_api": "打开API",
   "server_port": "端口:",
   "server_running": "服务运行中",

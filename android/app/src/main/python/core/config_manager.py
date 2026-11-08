@@ -329,14 +329,12 @@ class ConfigManager(Singleton):
     def load_scan_engine_settings(self) -> dict:
         return self._network_settings_store.load_scan_engine_settings()
 
-    def save_server_settings(self, enabled: bool = True, port: int = 8080,
-                             host: str = '0.0.0.0', auto_start: bool = True):
-        """保存Server后端设置"""
-        self.set_value('Server', 'enabled', str(enabled))
-        self.set_value('Server', 'port', str(port))
-        self.set_value('Server', 'host', host)
-        self.set_value('Server', 'auto_start', str(auto_start))
-        return self.save_config()
+    def save_server_settings(self, enabled: bool = False, port: int = 8080,
+                             host: str = '0.0.0.0', auto_start: bool = False):
+        """保存Server后端设置（默认关闭，按需手动开启）"""
+        return self._network_settings_store.save_server_settings(
+            enabled=enabled, port=port, host=host, auto_start=auto_start
+        )
 
     def load_server_settings(self) -> dict:
         return self._network_settings_store.load_server_settings()

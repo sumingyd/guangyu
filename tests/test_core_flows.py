@@ -180,6 +180,35 @@ def test_config_write_then_reload(tmp_path, monkeypatch):
         ConfigManager.reset_instance()
 
 
+def test_server_auto_start_defaults_off_when_key_missing(tmp_path, monkeypatch):
+    """配置里没有 [Server] 键时，HTTP 服务器必须默认关闭。"""
+    try:
+        config = _make_sandbox_config(monkeypatch, tmp_path)
+        settings = config.load_server_settings()
+        assert settings['auto_start'] is False
+        assert settings['enabled'] is False
+    finally:
+        ConfigManager.reset_instance()
+
+
+def test_server_auto_start_explicit_true_kept_after_reload(tmp_path, monkeypatch):
+    """老配置里显式写入 True 时必须保持开启，不被新默认值覆盖。"""
+    try:
+        config = _make_sandbox_config(monkeypatch, tmp_path)
+        config.save_server_settings(enabled=True, port=9091, host='127.0.0.1', auto_start=True)
+        config.flush()
+
+        ConfigManager.reset_instance()
+        reloaded = _make_sandbox_config(monkeypatch, tmp_path)
+        settings = reloaded.load_server_settings()
+        assert settings['auto_start'] is True
+        assert settings['enabled'] is True
+        assert settings['port'] == 9091
+        assert settings['host'] == '127.0.0.1'
+    finally:
+        ConfigManager.reset_instance()
+
+
 # ---------------------------------------------------------------- 订阅解析
 
 M3U_SAMPLE = '''#EXTM3U x-tvg-url="http://epg.example/e.xml" catchup-days="2"

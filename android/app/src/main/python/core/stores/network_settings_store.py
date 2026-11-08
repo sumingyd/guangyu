@@ -87,9 +87,9 @@ class NetworkSettingsStore:
             'engine': self._facade.get_value('ScanEngine', 'engine', 'ffprobe')
         }
 
-    def save_server_settings(self, enabled: bool = True, port: int = 8080,
-                             host: str = '0.0.0.0', auto_start: bool = True):
-        """保存Server后端设置"""
+    def save_server_settings(self, enabled: bool = False, port: int = 8080,
+                             host: str = '0.0.0.0', auto_start: bool = False):
+        """保存Server后端设置（默认关闭，按需手动开启）"""
         self._facade.set_value('Server', 'enabled', str(enabled))
         self._facade.set_value('Server', 'port', str(port))
         self._facade.set_value('Server', 'host', host)
@@ -97,13 +97,17 @@ class NetworkSettingsStore:
         return self._facade.save_config()
 
     def load_server_settings(self) -> dict:
-        """加载Server后端设置"""
+        """加载Server后端设置
+
+        默认关闭：配置键不存在（新用户/新配置）时返回 auto_start=False；
+        配置里显式写入 True 的老用户保持开启，不受默认值变更影响。
+        """
         f = self._facade
         return {
-            'enabled': f._parse_bool(f.get_value('Server', 'enabled', 'True'), True),
+            'enabled': f._parse_bool(f.get_value('Server', 'enabled', 'False'), False),
             'port': f._parse_int(f.get_value('Server', 'port', '8080'), 8080),
             'host': f.get_value('Server', 'host', '0.0.0.0') or '0.0.0.0',
-            'auto_start': f._parse_bool(f.get_value('Server', 'auto_start', 'True'), True)
+            'auto_start': f._parse_bool(f.get_value('Server', 'auto_start', 'False'), False)
         }
 
     def save_mapping_settings(self, enable_mapping: bool = True):

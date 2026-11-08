@@ -1205,6 +1205,7 @@
   "server_auto_start": "Auto-start Server on launch",
   "server_host": "Listen address:",
   "server_not_running": "Server not running",
+  "server_not_running_hint": "Server is not running. Start it from Tools > Server first.",
   "server_open_api": "Open API",
   "server_port": "Port:",
   "server_running": "Server running",

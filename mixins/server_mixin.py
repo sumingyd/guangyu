@@ -11,19 +11,23 @@ class ServerMixin:
             from server.routes import get_auth_token
             set_main_window(self)
             settings = self.config.load_server_settings()
-            if settings.get('auto_start', True):
-                port = settings.get('port', 8080)
-                host = settings.get('host', '0.0.0.0')
-                start_server(host=host, port=port)
-                server = get_server()
-                if server.is_running():
-                    tr = self.language_manager.tr
-                    token = get_auth_token()
-                    self.status_bar_show_message(
-                        tr('server_started', '服务已启动') + f' http://localhost:{port}  ' +
-                        tr('server_auth_token', '认证码') + f': {token}', 10000
-                    )
-                    logger.info(f"服务已启动: http://{host}:{port}, 认证码: {token}")
+            if not settings.get('auto_start', False):
+                logger.info("HTTP 服务器未启动（默认关闭，可在“工具 > 服务 > 服务设置”中开启）")
+                return
+            port = settings.get('port', 8080)
+            host = settings.get('host', '0.0.0.0')
+            start_server(host=host, port=port)
+            server = get_server()
+            if server.is_running():
+                tr = self.language_manager.tr
+                token = get_auth_token()
+                self.status_bar_show_message(
+                    tr('server_started', '服务已启动') + f' http://localhost:{port}  ' +
+                    tr('server_auth_token', '认证码') + f': {token}', 10000
+                )
+                logger.info(f"HTTP 服务器已按用户设置启动: http://{host}:{port}, 认证码: {token}")
+                if self._server_action is not None:
+                    self._server_action.setText(tr('server_stop', '停止服务'))
         except Exception as e:
             logger.error(f"自动启动服务失败: {e}")
 
@@ -57,7 +61,13 @@ class ServerMixin:
             from server.app import get_server
             from server.routes import get_auth_token
             server = get_server()
-            port = server.port if server and server.is_running() else 8080
+            if not server or not server.is_running():
+                tr = self.language_manager.tr
+                self.status_bar_show_message(
+                    tr('server_not_running_hint', '服务未运行，请先在“工具 > 服务”中启动服务'), 5000
+                )
+                return
+            port = server.port
             token = get_auth_token()
             import webbrowser
             webbrowser.open(f'http://localhost:{port}/?token={token}')
@@ -98,7 +108,7 @@ class ServerMixin:
         layout.addSpacing(4)
 
         auto_start_cb = QCheckBox(tr('server_auto_start', '启动时自动运行服务'))
-        auto_start_cb.setChecked(settings.get('auto_start', True))
+        auto_start_cb.setChecked(settings.get('auto_start', False))
         layout.addWidget(auto_start_cb)
 
         port_layout = QHBoxLayout()
@@ -135,11 +145,12 @@ class ServerMixin:
         layout.addLayout(btn_layout)
 
         def on_save():
+            auto_start = auto_start_cb.isChecked()
             self.config.save_server_settings(
-                enabled=True,
+                enabled=auto_start,
                 port=port_spin.value(),
                 host=host_combo.currentData(),
-                auto_start=auto_start_cb.isChecked()
+                auto_start=auto_start
             )
             dialog.accept()
 
