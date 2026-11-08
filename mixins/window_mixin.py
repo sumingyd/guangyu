@@ -25,6 +25,14 @@ class WindowMixin:
         if hasattr(self, 'video_placeholder') and self.video_placeholder:
             self.video_placeholder.setGeometry(0, 0, self.video_frame.width(), self.video_frame.height())
 
+        # 屏保覆盖层与视频区同尺寸，窗口缩放时同步（只在其可见时调整）
+        screensaver = getattr(self, '_screensaver_widget', None)
+        try:
+            if screensaver is not None and screensaver.isVisible():
+                screensaver.setGeometry(0, 0, self.video_frame.width(), self.video_frame.height())
+        except RuntimeError:
+            pass
+
         self._update_video_overlay_position()
 
     def _raise_overlay_above_video(self):

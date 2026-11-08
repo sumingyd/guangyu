@@ -24,8 +24,8 @@ class SettingsMixin:
     def open_log_directory(self):
         self.settings_ops.open_log_directory()
 
-    def player_settings(self):
-        self.settings_ops.player_settings()
+    def player_settings(self, focus: str | None = None):
+        self.settings_ops.player_settings(focus)
 
     def _toggle_file_association(self):
         from ui.dialogs.file_association_dialog import FileAssociationDialog

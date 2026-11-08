@@ -1492,8 +1492,13 @@ class UIController:
             tools_menu.addSeparator()
 
             player_settings = QAction(tr("menu_subscription_settings", "Subscription Settings"), self.window)
-            player_settings.triggered.connect(self.window.player_settings)
+            player_settings.triggered.connect(lambda: self.window.player_settings())
             tools_menu.addAction(player_settings)
+
+            # 屏保属于显示/偏好设置，与「订阅设置」放在同一分组，紧随其后
+            screensaver = QAction(tr("menu_screensaver", "屏保..."), self.window)
+            screensaver.triggered.connect(lambda: self.window.player_settings('screensaver'))
+            tools_menu.addAction(screensaver)
 
             tools_menu.addSeparator()
 

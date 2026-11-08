@@ -825,7 +825,22 @@ class EventHandler:
             except Exception as e:
                 logger.debug(f"保存最后频道失败: {e}")
 
+        # 屏保：先退出覆盖层并释放对空闲停绘的 hold，再关闭空闲控制器
+        screensaver = getattr(self.window, 'screensaver_controller', None)
+        if screensaver is not None:
+            try:
+                screensaver.shutdown()
+            except Exception as e:
+                logger.debug(f"关闭屏保失败: {e}")
+
         # 2. 先停止所有可能访问mpv_handle的定时器（必须在终止MPV之前！）
+        idle_render = getattr(self.window, '_idle_render', None)
+        if idle_render is not None:
+            try:
+                # restore=False：不唤醒被空闲停绘挂起的定时器，避免 mpv 终止后被回调访问
+                idle_render.shutdown(restore=False)
+            except Exception as e:
+                logger.debug(f"关闭空闲停绘失败: {e}")
         timer_attrs = ['update_timer', '_source_timeout_timer', '_auto_hide_timer']
         for attr in timer_attrs:
             timer = getattr(self.window, attr, None)

@@ -178,7 +178,7 @@ class SettingsFileOperations:
 
     # ==================== 设置对话框 ====================
 
-    def player_settings(self):
+    def player_settings(self, focus: str | None = None):
         dialog = self._create_settings_dialog()
         tr = self._tr
 
@@ -199,8 +199,10 @@ class SettingsFileOperations:
         playback_content = QWidget()
         playback_content_layout = QVBoxLayout(playback_content)
         playback_content_layout.setContentsMargins(0, 0, 0, 0)
+        screensaver_section = self._build_screensaver_section(tr)
         playback_content_layout.addWidget(self._build_protocol_section(tr, playback_settings))
         playback_content_layout.addWidget(self._build_close_behavior_section(tr))
+        playback_content_layout.addWidget(screensaver_section)
         playback_content_layout.addStretch()
 
         playback_scroll = QScrollArea()
@@ -255,6 +257,16 @@ class SettingsFileOperations:
         dialog.adjustSize()
         dialog.resize(720, 500)
 
+        if focus == 'screensaver':
+            tab_widget.setCurrentIndex(0)
+
+            def _reveal_screensaver():
+                # 等对话框真正显示、滚动区几何确定后再定位，避免打开后停在顶部
+                if dialog.isVisible():
+                    playback_scroll.ensureWidgetVisible(screensaver_section, 0, 0)
+
+            QTimer.singleShot(0, _reveal_screensaver)
+
         if self.window._center_dialog_on_screen:
             self.window._center_dialog_on_screen(dialog)
 
@@ -303,6 +315,40 @@ class SettingsFileOperations:
                 close_combo.setCurrentIndex(0)
 
         layout.addRow(tr("close_action_label", "关闭窗口时:"), close_combo)
+        group.setLayout(layout)
+        return group
+
+    def _build_screensaver_section(self, tr):
+        """屏保分组：开关 + 等待时间（关闭开关时等待时间置灰）。"""
+        from controllers.screensaver_controller import parse_enabled, parse_minutes
+
+        group = QGroupBox(tr("screensaver_settings", "屏保"))
+        layout = QFormLayout()
+
+        enabled_check = QCheckBox(tr("screensaver_enabled", "启用屏保"))
+        enabled_check.setObjectName("screensaver_enabled_check")
+
+        idle_combo = QComboBox()
+        idle_combo.setObjectName("screensaver_idle_combo")
+        for minutes in (1, 5, 10, 30, 60):
+            idle_combo.addItem(tr(f"screensaver_wait_{minutes}", f"{minutes} 分钟"), minutes)
+
+        enabled, minutes = True, 5
+        config = self.window.config
+        if config:
+            enabled = parse_enabled(config.get_value('ScreenSaver', 'enabled', 'true'), True)
+            minutes = parse_minutes(config.get_value('ScreenSaver', 'idle_minutes', '5'), 5)
+
+        enabled_check.setChecked(enabled)
+        for i in range(idle_combo.count()):
+            if idle_combo.itemData(i) == minutes:
+                idle_combo.setCurrentIndex(i)
+                break
+        idle_combo.setEnabled(enabled)
+        enabled_check.toggled.connect(idle_combo.setEnabled)
+
+        layout.addRow(enabled_check)
+        layout.addRow(tr("screensaver_wait_label", "等待时间:"), idle_combo)
         group.setLayout(layout)
         return group
 
@@ -765,6 +811,7 @@ class SettingsFileOperations:
 
             self._save_intervals(dialog)
             self._save_close_behavior(dialog)
+            self._save_screensaver_settings(dialog)
             self._apply_playback_settings(new_playback)
 
             playlist_changed, new_active_index = self._check_playlist_changed(old_playlist, new_playlist, old_active_index)
@@ -872,6 +919,25 @@ class SettingsFileOperations:
                 self.window.config.clear_close_behavior()
             else:
                 self.window.config.save_close_behavior(action)
+
+    def _save_screensaver_settings(self, dialog):
+        """写入屏保开关与等待时间，并触发热更新。"""
+        config = self.window.config
+        if not config:
+            return
+        check = dialog.findChild(QCheckBox, "screensaver_enabled_check")
+        combo = dialog.findChild(QComboBox, "screensaver_idle_combo")
+        enabled = check.isChecked() if check else True
+        minutes = combo.currentData() if combo and combo.currentData() is not None else 5
+        config.set_value('ScreenSaver', 'enabled', 'true' if enabled else 'false')
+        config.set_value('ScreenSaver', 'idle_minutes', str(int(minutes)))
+        config.save_config()
+        ctrl = getattr(self.window, 'screensaver_controller', None)
+        if ctrl is not None:
+            try:
+                ctrl.reload_config()
+            except Exception as e:
+                logger.debug(f"屏保配置热更新失败: {e}")
 
     def _apply_playback_settings(self, new_playback):
         if not new_playback or not self.window.config:

@@ -412,6 +412,9 @@ class IPTVPlayer(
 
     # 定时器与 Dock
     update_timer = None
+    _idle_render = None
+    _screensaver_widget = None
+    screensaver_controller = None
 
     epg_dock = None
     playlist_dock = None
@@ -726,6 +729,11 @@ class IPTVPlayer(
         self._create_bottom_panel(show=False)
         _QApp.instance().processEvents()
 
+        # 空闲停绘：此时三个悬浮面板均已创建，可以采集"面板是否打开"
+        self._setup_idle_render()
+        # 屏保：依赖 video_frame 与上面的空闲控制器
+        self._setup_screensaver()
+
         # 11. 注册清理 / 主题 / 快捷键（轻量，不阻塞）
         from utils.resource_cleaner import register_cleanup
         from services.ffprobe_validator_service import FfprobeStreamValidator
@@ -991,6 +999,94 @@ class IPTVPlayer(
         self.update_timer.timeout.connect(self.update_floating_panel_info)
         self.player_controller.playback_position_updated.connect(self._on_playback_position_updated)
 
+    def _resolve_lyrics_timer(self):
+        """歌词组件按需创建，定时器需在首次采样时再解析。"""
+        widget = getattr(self, '_lyrics_widget', None)
+        return getattr(widget, '_timer', None) if widget is not None else None
+
+    def _setup_idle_render(self):
+        """注册空闲停绘：窗口不可见/遮挡或长时间无操作时降低 UI 刷新频率。
+
+        只登记纯 UI 定时器（状态栏信息、OSD、歌词、壁纸、可视化、系统主题轮询），
+        不触碰 mpv 渲染与音频链路，因此空闲期间播放本身不受影响。
+        """
+        try:
+            from core.idle_render import IdleRenderController, POLICY_SLOW, POLICY_STOP
+            ctrl = IdleRenderController(self)
+
+            # 状态栏/信息栏：必须慢速保活（15s），恢复时立即补一次刷新
+            if self.update_timer is not None:
+                ctrl.register_timer('status_refresh', self.update_timer,
+                                    policy=POLICY_SLOW, idle_interval_ms=15000)
+                ctrl.register_callbacks('status_refresh',
+                                        on_active=self.update_floating_panel_info)
+
+            # OSD 计时器：OSD 隐藏时无需秒级刷新，直接停
+            osd_timer = getattr(getattr(self, 'ui_ctrl', None), '_osd_timer', None)
+            if osd_timer is not None:
+                ctrl.register_timer('osd_refresh', osd_timer, policy=POLICY_STOP)
+                refresh_osd = getattr(getattr(self, 'ui_ctrl', None), '_refresh_osd', None)
+                if refresh_osd is not None:
+                    # 恢复时立刻补一帧 OSD，避免暂停/遮挡期间残留旧时间
+                    ctrl.register_callbacks('osd_refresh', on_active=refresh_osd)
+
+            # 歌词滚动：按需创建，使用惰性解析
+            ctrl.register_lazy('lyrics', self._resolve_lyrics_timer, policy=POLICY_STOP)
+
+            # 银河壁纸：空闲屏的装饰动画，降到 4fps 保活而不是完全冻住
+            wallpaper_timer = getattr(getattr(self, 'video_placeholder', None), '_timer', None)
+            if wallpaper_timer is not None:
+                ctrl.register_timer('wallpaper', wallpaper_timer,
+                                    policy=POLICY_SLOW, idle_interval_ms=250)
+
+            # 音频可视化：16ms 重绘，空闲时降到 10fps；随机风格切换 15s -> 60s
+            av = getattr(self, '_audio_visual_widget', None)
+            if av is not None:
+                av_timer = getattr(av, '_timer', None)
+                if av_timer is not None:
+                    ctrl.register_timer('audio_visual', av_timer,
+                                        policy=POLICY_SLOW, idle_interval_ms=100)
+                av_random = getattr(av, '_random_timer', None)
+                if av_random is not None:
+                    ctrl.register_timer('audio_visual_random', av_random,
+                                        policy=POLICY_SLOW, idle_interval_ms=60000)
+
+            # 系统主题轮询（仅无 styleHints 时存在）：3s -> 30s
+            sys_timer = getattr(getattr(self, '_theme_manager', None), '_system_theme_timer', None)
+            if sys_timer is not None:
+                ctrl.register_timer('system_theme', sys_timer,
+                                    policy=POLICY_SLOW, idle_interval_ms=30000)
+
+            ctrl.start()
+            self._idle_render = ctrl
+            logger.info(f"空闲停绘初始化完成: {ctrl.get_status()}")
+        except Exception as e:
+            self._idle_render = None
+            logger.error(f"初始化空闲停绘失败（不影响播放）: {e}")
+
+
+    def _setup_screensaver(self):
+        """创建屏保覆盖层与进入/退出控制器。
+
+        屏保只读播放状态与 EPG，不修改播放链路；自身定时器不注册到
+        空闲停绘，激活期间通过 ``hold`` 显式阻止空闲判定。
+        """
+        try:
+            from ui.screensaver_widget import ScreenSaverWidget
+            from controllers.screensaver_controller import ScreenSaverController
+
+            widget = ScreenSaverWidget(self.video_frame)
+            widget.hide()
+            ctrl = ScreenSaverController(self, widget)
+            ctrl.start()
+            self._screensaver_widget = widget
+            self.screensaver_controller = ctrl
+            logger.info(f"屏保初始化完成: {ctrl.get_status()}")
+        except Exception as e:
+            self._screensaver_widget = None
+            self.screensaver_controller = None
+            logger.error(f"初始化屏保失败（不影响播放）: {e}")
+
 
     def _install_event_filters(self):
         """安装事件过滤器（幂等：多次调用只生效一次）"""
@@ -1060,6 +1156,8 @@ class IPTVPlayer(
                     self._audio_visual_widget.setGeometry(0, 0, w, h)
                 if hasattr(self, '_lyrics_widget') and self._lyrics_widget and self._lyrics_widget.isVisible():
                     self._lyrics_widget.setGeometry(0, 0, w, h)
+                if getattr(self, '_screensaver_widget', None) and self._screensaver_widget.isVisible():
+                    self._screensaver_widget.setGeometry(0, 0, w, h)
 
     def _update_recent_files_menu(self):
         """初始化最近打开文件菜单"""
