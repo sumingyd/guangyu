@@ -386,6 +386,10 @@ class StylesIcons(StylesBase):
             'shadow_dark': 'rgba(0,0,0,0.4)',
             'neumorphic_light': '#323232',
             'neumorphic_dark': '#0a0a0a',
+            'favorite': '#FFD700',
+            'favorite_background': 'rgba(255, 215, 0, 0.12)',
+            'favorite_border': 'rgba(255, 215, 0, 0.5)',
+            'on_accent': '#ffffff',
         },
         'light': {
             'window': '#f0f0f0',
@@ -450,6 +454,10 @@ class StylesIcons(StylesBase):
             'shadow_dark': 'rgba(0,0,0,0.12)',
             'neumorphic_light': '#ffffff',
             'neumorphic_dark': '#d0d0d0',
+            'favorite': '#FFD700',
+            'favorite_background': 'rgba(255, 215, 0, 0.12)',
+            'favorite_border': 'rgba(255, 215, 0, 0.5)',
+            'on_accent': '#ffffff',
         },
     }
 

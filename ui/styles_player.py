@@ -149,12 +149,12 @@ class StylesPlayer(StylesBase):
         badge_r = AppStyles._get_scaled_radius('badge')
         return f"""
             QLabel {{
-                color: #FFD700;
+                color: {colors['favorite']};
                 font-size: {AppStyles.fs('caption')}px;
                 font-weight: bold;
-                background-color: rgba(255, 215, 0, 0.12);
+                background-color: {colors['favorite_background']};
                 padding: 1px 6px;
-                border: 1px solid rgba(255, 215, 0, 0.5);
+                border: 1px solid {colors['favorite_border']};
                 border-radius: {badge_r}px;
             }}
         """
@@ -313,7 +313,7 @@ class StylesPlayer(StylesBase):
                 background-color: {colors['player_panel']};
                 color: {colors['player_panel_text']};
                 selection-background-color: {colors['player_accent']};
-                selection-color: #ffffff;
+                selection-color: {colors['on_accent']};
                 border: 1px solid {colors['player_line']};
                 border-radius: {AppStyles._get_scaled_radius('list_item')}px;
                 padding: 4px;
@@ -450,7 +450,7 @@ class StylesPlayer(StylesBase):
             }}
             QListWidget::item:selected {{
                 background-color: {colors['accent']};
-                color: #ffffff;
+                color: {colors['on_accent']};
             }}
             QListWidget::item:selected:!active {{
                 background-color: {colors['highlight']};

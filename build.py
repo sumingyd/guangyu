@@ -75,8 +75,8 @@ _PNG_ICON = PROJECT_ROOT / "resources" / "logo.png"
 ICO_ICON = PROJECT_ROOT / "resources" / "logo.ico"
 
 # 需要打包进产物的数据目录。shaders/ 缺失会导致所有 GLSL 预设静默失效，
-# 因此与 mpv/ffmpeg 一样在 _data_args() 中强制校验。
-DATA_DIRS = ["mpv", "ffmpeg", "resources", "i18n", "shaders"]
+# themes/ 是配色单一真源（palette.json），缺失会回退内置默认色但无法换肤。
+DATA_DIRS = ["mpv", "ffmpeg", "resources", "i18n", "shaders", "themes"]
 
 
 HIDDEN_IMPORTS = [

@@ -1,0 +1,239 @@
+{
+  "version": 1,
+  "meta": {
+    "name": "GuangYu",
+    "description": "跨端配色单一真源：PC（PySide6 QSS/绘制）与 Android（Compose）共用。键名为语义 token，不绑定具体控件。",
+    "notes": [
+      "每个颜色模式只需覆盖本文件即可换肤，无需改代码。",
+      "字段缺失或非法时由客户端回退到内置默认配色，避免界面全黑。",
+      "颜色值支持 #RGB / #RRGGBB / #AARRGGBB / rgb() / rgba()。",
+      "metrics.* 为数值型 token（不透明度等），单位由客户端解释。"
+    ]
+  },
+  "modes": {
+    "dark": {
+      "background": {
+        "window": "#000000",
+        "base": "#1a1a1a",
+        "base_alt": "#2a2a2a",
+        "raised": "#3a3a3a",
+        "high": "#444444",
+        "player": "#1a1a1a",
+        "player_placeholder": "#1a1a1a",
+        "overlay": "rgba(0, 0, 0, 0.55)",
+        "tooltip": "#2a2a2a"
+      },
+      "text": {
+        "primary": "#ffffff",
+        "bright": "#ffffff",
+        "secondary": "#aaaaaa",
+        "tertiary": "#c8c8c8",
+        "disabled": "#8a8a8a",
+        "inverse": "#000000",
+        "link": "#6a9eff",
+        "link_visited": "#8a7eff",
+        "placeholder": "#aaaaaa",
+        "tooltip": "#f0f0f0"
+      },
+      "border": {
+        "default": "#555555",
+        "strong": "#666666",
+        "thin": "rgba(255, 255, 255, 0.08)",
+        "subtle": "rgba(255, 255, 255, 0.10)",
+        "highlight_light": "rgba(255, 255, 255, 0.15)",
+        "highlight_dark": "rgba(0, 0, 0, 0.5)",
+        "frosted": "rgba(255, 255, 255, 0.1)",
+        "frosted_mid": "rgba(255, 255, 255, 0.15)",
+        "frosted_strong": "rgba(255, 255, 255, 0.2)"
+      },
+      "panel": {
+        "background": "#2a2a2a",
+        "card": "#2a2a2a",
+        "text_primary": "#ffffff",
+        "text_secondary": "#aaaaaa",
+        "text_disabled": "#8a8a8a",
+        "text_hint": "#c8c8c8",
+        "control_background": "rgba(60, 60, 60, 0.9)",
+        "control_background_alt": "rgba(45, 45, 45, 0.8)",
+        "divider": "#555555"
+      },
+      "accent": {
+        "base": "#4a7eff",
+        "hover": "#3a6eff",
+        "pressed": "#2a5eff",
+        "on": "#ffffff"
+      },
+      "focus": {
+        "indicator": "#6a9eff",
+        "ring": "rgba(255, 255, 255, 0.3)"
+      },
+      "selection": {
+        "background": "#2a3a5a",
+        "background_strong": "#4a7eff",
+        "text": "#6a9eff",
+        "text_strong": "#ffffff"
+      },
+      "state": {
+        "success": "#4CAF50",
+        "warning": "#FF9800",
+        "danger": "#f44336",
+        "danger_soft": "#ff6464",
+        "danger_background": "#3a1a1a",
+        "info": "#2196F3",
+        "favorite": "#FFD700",
+        "favorite_background": "rgba(255, 215, 0, 0.12)",
+        "favorite_border": "rgba(255, 215, 0, 0.5)"
+      },
+      "slider": {
+        "track": "#555555",
+        "volume_track": "#444444",
+        "fill": "#6a9eff",
+        "handle": "#ffffff",
+        "cache": "rgba(106, 158, 255, 0.4)"
+      },
+      "table": {
+        "header": "#3a3a3a",
+        "header_gradient_start": "#444444",
+        "header_gradient_middle": "#3a3a3a",
+        "header_gradient_end": "#2a2a2a",
+        "header_text": "#ffffff",
+        "header_hover": "#4a7eff",
+        "border": "#555555",
+        "grid": "#444444",
+        "alternate": "#1a1a1a",
+        "hover": "#2a3a5a",
+        "selection": "#4a7eff",
+        "selection_text": "#ffffff"
+      },
+      "osd": {
+        "text": "#ffffff",
+        "border": "#000000",
+        "shadow": "#000000"
+      },
+      "shadow": {
+        "light": "rgba(255, 255, 255, 0.05)",
+        "dark": "rgba(0, 0, 0, 0.4)",
+        "subtle": "rgba(0, 0, 0, 0.3)"
+      },
+      "effect": {
+        "neumorphic_light": "#323232",
+        "neumorphic_dark": "#0a0a0a"
+      },
+      "metrics": {
+        "window_opacity": 140
+      }
+    },
+    "light": {
+      "background": {
+        "window": "#f0f0f0",
+        "base": "#ffffff",
+        "base_alt": "#e8e8e8",
+        "raised": "#d0d0d0",
+        "high": "#e0e0e0",
+        "player": "#e0e0e0",
+        "player_placeholder": "#e0e0e0",
+        "overlay": "rgba(0, 0, 0, 0.35)",
+        "tooltip": "#ffffff"
+      },
+      "text": {
+        "primary": "#333333",
+        "bright": "#000000",
+        "secondary": "#555555",
+        "tertiary": "#666666",
+        "disabled": "#767676",
+        "inverse": "#ffffff",
+        "link": "#2a6eff",
+        "link_visited": "#6a5eff",
+        "placeholder": "#767676",
+        "tooltip": "#333333"
+      },
+      "border": {
+        "default": "#c0c0c0",
+        "strong": "#a0a0a0",
+        "thin": "rgba(0, 0, 0, 0.06)",
+        "subtle": "rgba(0, 0, 0, 0.08)",
+        "highlight_light": "rgba(255, 255, 255, 0.8)",
+        "highlight_dark": "rgba(0, 0, 0, 0.15)",
+        "frosted": "rgba(0, 0, 0, 0.06)",
+        "frosted_mid": "rgba(0, 0, 0, 0.1)",
+        "frosted_strong": "rgba(0, 0, 0, 0.12)"
+      },
+      "panel": {
+        "background": "#fafafa",
+        "card": "#e8e8e8",
+        "text_primary": "#333333",
+        "text_secondary": "#555555",
+        "text_disabled": "#767676",
+        "text_hint": "#666666",
+        "control_background": "rgba(200, 200, 200, 0.9)",
+        "control_background_alt": "rgba(220, 220, 220, 0.8)",
+        "divider": "#c0c0c0"
+      },
+      "accent": {
+        "base": "#2a6eff",
+        "hover": "#1a5eff",
+        "pressed": "#0a4eff",
+        "on": "#ffffff"
+      },
+      "focus": {
+        "indicator": "#2a6eff",
+        "ring": "rgba(0, 0, 0, 0.2)"
+      },
+      "selection": {
+        "background": "#cce0ff",
+        "background_strong": "#2a6eff",
+        "text": "#2a6eff",
+        "text_strong": "#ffffff"
+      },
+      "state": {
+        "success": "#4CAF50",
+        "warning": "#FF9800",
+        "danger": "#f44336",
+        "danger_soft": "#ff6464",
+        "danger_background": "#ffdddd",
+        "info": "#2196F3",
+        "favorite": "#FFD700",
+        "favorite_background": "rgba(255, 215, 0, 0.12)",
+        "favorite_border": "rgba(255, 215, 0, 0.5)"
+      },
+      "slider": {
+        "track": "#c0c0c0",
+        "volume_track": "#d0d0d0",
+        "fill": "#2a6eff",
+        "handle": "#333333",
+        "cache": "rgba(42, 110, 255, 0.35)"
+      },
+      "table": {
+        "header": "#d8d8d8",
+        "header_gradient_start": "#e8e8e8",
+        "header_gradient_middle": "#d8d8d8",
+        "header_gradient_end": "#c8c8c8",
+        "header_text": "#333333",
+        "header_hover": "#2a6eff",
+        "border": "#c0c0c0",
+        "grid": "#d0d0d0",
+        "alternate": "#f5f5f5",
+        "hover": "#cce0ff",
+        "selection": "#2a6eff",
+        "selection_text": "#ffffff"
+      },
+      "osd": {
+        "text": "#1a1a1a",
+        "border": "#ffffff",
+        "shadow": "#808080"
+      },
+      "shadow": {
+        "light": "rgba(255, 255, 255, 0.8)",
+        "dark": "rgba(0, 0, 0, 0.12)",
+        "subtle": "rgba(0, 0, 0, 0.08)"
+      },
+      "effect": {
+        "neumorphic_light": "#ffffff",
+        "neumorphic_dark": "#d0d0d0"
+      },
+      "metrics": {
+        "window_opacity": 160
+      }
+    }
+  }
+}

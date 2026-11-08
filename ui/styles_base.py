@@ -279,7 +279,13 @@ class StylesBase:
         with cls._cache_lock:
             if cls._colors_cache is not None and cls._colors_cache_key == cache_key:
                 return cls._colors_cache
-        base_colors = cls.COLOR_PALETTES.get(effective_mode, cls.COLOR_PALETTES['dark'])
+        base_colors = dict(cls.COLOR_PALETTES.get(effective_mode, cls.COLOR_PALETTES['dark']))
+        # 主题 JSON（themes/palette.json）是配色单一真源：覆盖内置默认值。
+        # 文件缺失 / JSON 非法 / 字段非法时 get_legacy_colors 只返回可用项，
+        # 剩余键继续沿用上方内置默认值，保证任何异常都不会把界面渲染成黑色。
+        overrides = cls._palette_overrides(effective_mode)
+        if overrides:
+            base_colors.update(overrides)
         style = cls._visual_style
         if style == 'neumorphic':
             result = cls._style_modifier_neumorphic(base_colors.copy(), effective_mode)
@@ -299,6 +305,30 @@ class StylesBase:
             cls._colors_cache = result
             cls._colors_cache_key = cache_key
         return result
+
+    @classmethod
+    def _palette_overrides(cls, effective_mode: str) -> dict:
+        """读取 themes/palette.json 并转成旧键名；任何异常都回退为空字典。"""
+        try:
+            from ui.palette import get_legacy_colors
+            return get_legacy_colors(effective_mode)
+        except Exception as e:
+            try:
+                from core.log_manager import global_logger as logger
+                logger.warning(f"加载主题 token 失败，使用内置默认配色: {e}")
+            except Exception:
+                pass
+            return {}
+
+    @classmethod
+    def reload_theme_tokens(cls):
+        """重新读取 palette.json 并清缓存（换肤不重启时调用）。"""
+        try:
+            from ui.palette import reload as reload_palette
+            reload_palette()
+        except Exception:
+            pass
+        cls._invalidate_caches()
 
     @classmethod
     def _get_qss_colors(cls):
