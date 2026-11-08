@@ -152,6 +152,7 @@ HIDDEN_IMPORTS = [
     "services.fcc_service",
     "services.logo_cache_service",
     "services.logo_matcher",
+    "services.loopback_spectrum_service",
     "services.m3u_parser",
     "services.mpv_common",
     "services.mpv_gl_widget",
@@ -258,6 +259,12 @@ def _hidden_import_args():
         args.extend(["--hidden-import", imp])
     for pkg in COLLECT_ALL:
         args.extend(["--collect-all", pkg])
+    if IS_WINDOWS:
+        # 屏保实时频谱用 importlib 动态导入 pyaudiowpatch，PyInstaller 静态分析
+        # 看不到。其 C 扩展是 site-packages 顶层的 _portaudiowpatch（PortAudio
+        # 静态链接进该 .pyd），必须一并声明，否则产物启动后无法采集。
+        for imp in ("pyaudiowpatch", "_portaudiowpatch"):
+            args.extend(["--hidden-import", imp])
     return args
 
 

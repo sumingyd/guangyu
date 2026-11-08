@@ -29,6 +29,10 @@ pypinyin==0.55.0
 # 音频可视化FFT
 numpy==2.4.6
 
+# 屏保实时频谱：WASAPI loopback 采集系统输出（仅 Windows，仅屏保激活期间使用）。
+# 非 Windows 不安装；缺失时屏保静默降级为静态/慢波频谱。
+PyAudioWPatch==0.2.12.7; sys_platform == "win32"
+
 # 音频元数据(封面/歌词)提取
 mutagen==1.48.1
 
