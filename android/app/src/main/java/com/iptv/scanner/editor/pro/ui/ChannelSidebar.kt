@@ -917,7 +917,7 @@ private fun ChannelListPanel(
                                 modifier = Modifier.weight(1f)
                             )
                             if (latency != null && latency > 0) {
-                                val latColor = when { latency < 200 -> Color(0xFF4CAF50); latency < 500 -> Color(0xFFFFC107); else -> Color(0xFFF44336) }
+                                val latColor = when { latency < 200 -> tvPalette.success; latency < 500 -> tvPalette.warning; else -> tvPalette.danger }
                                 Text("${latency}ms", color = latColor, fontSize = 10.sp, fontWeight = FontWeight.Medium)
                             }
                         }
@@ -950,8 +950,8 @@ private fun ChannelListPanel(
                                 }
                             }
                             if (isFav) {
-                                Surface(color = Color(0xFFFFC107).copy(alpha = 0.15f), shape = RoundedCornerShape(4.dp)) {
-                                    Text("收藏", color = Color(0xFFFFC107), fontSize = 9.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp))
+                                Surface(color = tvPalette.favorite.copy(alpha = 0.15f), shape = RoundedCornerShape(4.dp)) {
+                                    Text("收藏", color = tvPalette.favorite, fontSize = 9.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp))
                                 }
                             }
                         }
@@ -1084,7 +1084,7 @@ internal fun ChannelThumbnailPanel(
                         }
                         // 左下角延迟标识
                         if (latency != null && latency > 0) {
-                            val latColor = when { latency < 200 -> Color(0xFF4CAF50); latency < 500 -> Color(0xFFFFC107); else -> Color(0xFFF44336) }
+                            val latColor = when { latency < 200 -> tvPalette.success; latency < 500 -> tvPalette.warning; else -> tvPalette.danger }
                             Surface(
                                 color = Color.Black.copy(alpha = 0.6f),
                                 shape = RoundedCornerShape(4.dp),
@@ -1173,8 +1173,8 @@ internal fun ChannelThumbnailPanel(
                                     }
                                 }
                                 if (isFav) {
-                                    Surface(color = Color(0xFFFFC107).copy(alpha = 0.15f), shape = RoundedCornerShape(3.dp)) {
-                                        Text("收藏", color = Color(0xFFFFC107), fontSize = 8.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+                                    Surface(color = tvPalette.favorite.copy(alpha = 0.15f), shape = RoundedCornerShape(3.dp)) {
+                                        Text("收藏", color = tvPalette.favorite, fontSize = 8.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
                                     }
                                 }
                             }

@@ -319,7 +319,7 @@ private fun ViewportCell(
                         Icon(
                             if (viewport.isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
                             contentDescription = if (viewport.isMuted) "取消静音" else "静音",
-                            tint = if (viewport.isMuted) Color(0xFFFF6B6B) else Color.White,
+                            tint = if (viewport.isMuted) tvPalette.dangerSoft else Color.White,
                             modifier = Modifier.size(18.dp)
                         )
                     }
@@ -485,7 +485,7 @@ private fun ErrorViewportHint(channelName: String, errorMessage: String, modifie
 
 @Composable
 private fun ChannelLabel(text: String, isPrimary: Boolean, modifier: Modifier = Modifier) {
-    val bgColor = if (isPrimary) Color(0xFF4A9EFF) else Color.Black.copy(alpha = 0.6f)
+    val bgColor = if (isPrimary) tvPalette.accentBase else Color.Black.copy(alpha = 0.6f)
     Box(
         modifier = modifier
             .padding(4.dp)

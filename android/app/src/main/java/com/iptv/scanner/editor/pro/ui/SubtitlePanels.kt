@@ -533,7 +533,7 @@ fun SubtitleSearchPanel(viewModel: AppViewModel) {
         if (error.isNotEmpty() && results.isEmpty() && !searching) {
             Text(
                 text = error,
-                color = Color(0xFFE57373),
+                color = tvPalette.dangerSoft,
                 fontSize = 12.sp,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
             )

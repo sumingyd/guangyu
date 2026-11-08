@@ -920,9 +920,9 @@ fun AvSyncPanel(viewModel: AppViewModel) {
             // avdiff 状态指示
             val diffAbs = kotlin.math.abs(avDiff)
             val diffColor = when {
-                diffAbs < 0.04 -> Color(0xFF4CAF50)  // 绿色：正常
-                diffAbs < 0.2 -> Color(0xFFFFC107)   // 黄色：轻微偏差
-                else -> Color(0xFFF44336)            // 红色：严重偏差
+                diffAbs < 0.04 -> tvPalette.success  // 绿色：正常
+                diffAbs < 0.2 -> tvPalette.warning   // 黄色：轻微偏差
+                else -> tvPalette.danger            // 红色：严重偏差
             }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
@@ -1118,7 +1118,7 @@ fun ClipExportPanel(viewModel: AppViewModel) {
                             LinearProgressIndicator(
                                 progress = { exportProgress / 100f },
                                 modifier = Modifier.fillMaxWidth(),
-                                color = Color(0xFF4CAF50),
+                                color = tvPalette.success,
                                 trackColor = MaterialTheme.colorScheme.surfaceVariant
                             )
                             Text(
@@ -1130,8 +1130,8 @@ fun ClipExportPanel(viewModel: AppViewModel) {
                         if (exportStatus.isNotEmpty()) {
                             Text(
                                 text = exportStatus,
-                                color = if (exportStatus.startsWith("导出成功")) Color(0xFF4CAF50)
-                                       else Color(0xFFFFA500),
+                                color = if (exportStatus.startsWith("导出成功")) tvPalette.success
+                                       else tvPalette.warning,
                                 fontSize = 12.sp
                             )
                         }

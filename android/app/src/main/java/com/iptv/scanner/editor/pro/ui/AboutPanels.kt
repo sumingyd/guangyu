@@ -166,7 +166,7 @@ fun AboutPanel(viewModel: AppViewModel) {
                 when (updateState) {
                     is UpdateState.Checking -> {}
                     is UpdateState.UpToDate -> {
-                        Text("当前已是最新版本", color = Color(0xFF4CAF50), fontSize = 13.sp)
+                        Text("当前已是最新版本", color = tvPalette.success, fontSize = 13.sp)
                     }
                     is UpdateState.UpdateAvailable -> {
                         val info = updateState as UpdateState.UpdateAvailable
@@ -179,7 +179,7 @@ fun AboutPanel(viewModel: AppViewModel) {
                     }
                     is UpdateState.Error -> {
                         val err = updateState as UpdateState.Error
-                        Text("检查失败: ${err.message}", color = Color(0xFFEF5350), fontSize = 13.sp)
+                        Text("检查失败: ${err.message}", color = tvPalette.danger, fontSize = 13.sp)
                     }
                     else -> {}
                 }
@@ -319,7 +319,7 @@ fun UpdateDialog(viewModel: AppViewModel) {
                     is ApkDownloadState.Completed -> {
                         Text(
                             "下载完成，正在启动安装程序…",
-                            color = Color(0xFF4CAF50),
+                            color = tvPalette.success,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium
                         )
@@ -333,7 +333,7 @@ fun UpdateDialog(viewModel: AppViewModel) {
                     is ApkDownloadState.Error -> {
                         Text(
                             s.message,
-                            color = Color(0xFFE57373),
+                            color = tvPalette.dangerSoft,
                             fontSize = 13.sp
                         )
                         Spacer(modifier = Modifier.height(4.dp))
@@ -355,7 +355,7 @@ fun UpdateDialog(viewModel: AppViewModel) {
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
                                     "已复制下载地址，可在手机/电脑浏览器中粘贴打开。",
-                                    color = Color(0xFF4CAF50),
+                                    color = tvPalette.success,
                                     fontSize = 11.sp
                                 )
                             }
@@ -394,7 +394,7 @@ fun UpdateDialog(viewModel: AppViewModel) {
                         TextButton(
                             onClick = { viewModel.cancelApkDownload() },
                             modifier = Modifier.tvFocusBorder().focusRequester(primaryFocus)
-                        ) { Text("取消下载", color = Color(0xFFE57373)) }
+                        ) { Text("取消下载", color = tvPalette.dangerSoft) }
                     }
                     is ApkDownloadState.Completed -> {
                         TextButton(

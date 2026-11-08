@@ -973,7 +973,7 @@ private fun PortraitEpgItem(
         if (statusText.isNotEmpty()) {
             val badgeColor = when {
                 isCurrent -> AptvAccent
-                isPast -> Color(0xFF4A9EFF)
+                isPast -> tvPalette.accentBase
                 else -> oc.textSecondary
             }
             Surface(

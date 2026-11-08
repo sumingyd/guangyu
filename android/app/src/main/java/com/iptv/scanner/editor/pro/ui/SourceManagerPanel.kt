@@ -193,7 +193,7 @@ fun SourceManagerPanel(viewModel: AppViewModel, focusUrlInput: Boolean = false) 
                         Icon(
                             Icons.Default.Warning,
                             contentDescription = null,
-                            tint = Color(0xFFFFB74D),
+                            tint = tvPalette.warning,
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
@@ -467,7 +467,7 @@ private fun SourceItem(
                     Icon(Icons.Default.Edit, contentDescription = "编辑", tint = MaterialTheme.colorScheme.primary)
                 }
                 IconButton(onClick = onDelete, modifier = Modifier.tvFocusBorder()) {
-                    Icon(Icons.Default.Delete, contentDescription = "删除", tint = Color(0xFFE57373))
+                    Icon(Icons.Default.Delete, contentDescription = "删除", tint = tvPalette.dangerSoft)
                 }
             }
             if (editing) {
@@ -543,7 +543,7 @@ private fun EpgSourceItem(
                     Icon(Icons.Default.Edit, contentDescription = "编辑", tint = MaterialTheme.colorScheme.primary)
                 }
                 IconButton(onClick = onDelete, modifier = Modifier.tvFocusBorder()) {
-                    Icon(Icons.Default.Delete, contentDescription = "删除", tint = Color(0xFFE57373))
+                    Icon(Icons.Default.Delete, contentDescription = "删除", tint = tvPalette.dangerSoft)
                 }
             }
             if (editing) {
@@ -998,7 +998,7 @@ private fun SourceManagerPanelAptv(viewModel: AppViewModel) {
                         Icon(
                             Icons.Default.Warning,
                             contentDescription = null,
-                            tint = Color(0xFFFFB74D),
+                            tint = tvPalette.warning,
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))

@@ -570,14 +570,14 @@ private fun EpgItem(
 @Composable
 private fun ReminderBadge() {
     Surface(
-        color = Color(0xFFFFC107).copy(alpha = 0.2f),
+        color = tvPalette.warning.copy(alpha = 0.2f),
         shape = RoundedCornerShape(3.dp),
         modifier = Modifier.clip(RoundedCornerShape(3.dp))
     ) {
         Icon(
             imageVector = Icons.Default.Notifications,
             contentDescription = "已设提醒",
-            tint = Color(0xFFFFC107),
+            tint = tvPalette.warning,
             modifier = Modifier
                 .padding(horizontal = 3.dp, vertical = 1.dp)
                 .size(10.dp)
@@ -602,7 +602,7 @@ private fun LiveBadge() {
     )
 
     Surface(
-        color = Color(0xFFF44336).copy(alpha = alpha),
+        color = tvPalette.danger.copy(alpha = alpha),
         shape = RoundedCornerShape(3.dp),
         modifier = Modifier.clip(RoundedCornerShape(3.dp))
     ) {

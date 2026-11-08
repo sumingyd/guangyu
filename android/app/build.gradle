@@ -175,6 +175,13 @@ android {
     sourceSets {
         main {
             jniLibs.srcDirs = ['src/main/jniLibs']
+            /* 跨端配色单一真源：直接把仓库根 themes/ 挂进 assets（打包后为 assets/palette.json），
+             * 不在 Android 侧另存/复制一份，PC 与 Android 永远读同一个文件。
+             * directory 不存在时（例如单独构建 android 目录）跳过，运行时回退内置默认配色。 */
+            def themeDir = new File(rootProject.projectDir.parentFile, 'themes')
+            if (themeDir.isDirectory()) {
+                assets.srcDirs += themeDir
+            }
         }
     }
 

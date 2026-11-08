@@ -21,101 +21,59 @@ import com.iptv.scanner.editor.pro.ui.LocalAptvStyle
 /**
  * IPTV 应用主题。支持深色/浅色/跟随系统三种模式。
  *
- * 统一主色调为蓝色（Blue），绿色仅用于语义性的「成功/有效」状态。
+ * 所有色值都来自跨端单一真源 `themes/palette.json`（见 [PaletteTokens]），
+ * 本文件只负责把语义 token 映射到 MaterialTheme 的槽位，不再保存色值。
  *
- * - primary → 蓝色 #4A9EFF（深色）/ #1A73E8（浅色）
- * - surface → 深色 #16213E / 浅色 #F5F5F5
- * - success → 绿色 #4CAF50（仅语义状态，非主色调）
- * - error #F44336 → 错误色
- * - warning #FF9800 → 警告色
+ * - primary → accent.base
+ * - background/surface/surfaceVariant → background.window/base/base_alt
+ * - onSurface/onSurfaceVariant → text.primary/secondary
+ * - error/tertiary/secondary → state.danger/warning/info
  */
 
-// 主色板（深色）
-private val DarkPrimary = Color(0xFF1A1A2E)
-private val DarkPrimaryDark = Color(0xFF0F0F1E)
-private val DarkSurface = Color(0xFF121220)       // 与 background 接近，避免页面间色差
-private val DarkSurfaceVariant = Color(0xFF1A1A2E)  // 略亮，用于卡片/列表项背景
-private val DarkBackground = Color(0xFF0A0A14)
-
-// 主色板（浅色）
-private val LightPrimary = Color(0xFF3F51B5)
-private val LightPrimaryDark = Color(0xFF303F9F)
-private val LightSurface = Color(0xFFF5F5F5)
-private val LightSurfaceVariant = Color(0xFFEEEEEE)
-private val LightBackground = Color(0xFFFAFAFA)
-
-// 主强调色 — 统一蓝色，区分深/浅色模式
-private val AccentDark = Color(0xFF4A9EFF)     // 深色模式主色
-private val AccentLight = Color(0xFF1A73E8)    // 浅色模式主色
-private val AccentDimDark = Color(0xFF1565C0)  // 深色模式 primaryContainer
-private val AccentDimLight = Color(0xFF1565C0) // 浅色模式 primaryContainer
-private val OnAccent = Color(0xFFFFFFFF)
-
-// 语义色 — 绿色仅用于「成功/有效」状态
-private val SuccessColor = Color(0xFF4CAF50)
-
-// 文字色（深色）
-private val DarkTextPrimary = Color(0xFFE0E0E0)
-private val DarkTextSecondary = Color(0xFF9E9E9E)
-
-// 文字色（浅色）
-private val LightTextPrimary = Color(0xFF212121)
-private val LightTextSecondary = Color(0xFF757575)
-
-// 状态色
-private val ErrorColor = Color(0xFFF44336)
-private val WarningColor = Color(0xFFFF9800)
-private val InfoColor = Color(0xFF4A9EFF)
-
-// 播放器专用色 — accent 统一使用 colorScheme.primary
-val PlayerScrim = Color(0xAA000000)          // 控制层半透明背景
-val PlayerScrimSolid = Color(0xF0000000)      // 控制层不透明背景
-val PlayerBadgeLive = Color(0xFFE53935)       // 直播 LIVE 徽章
-val PlayerBadgeCatchup = Color(0xFFFF9800)    // 回看徽章
-val SuccessGreen = Color(0xFF4CAF50)          // 语义色：成功/有效
-
-private val IptvDarkColorScheme = darkColorScheme(
-    primary = AccentDark,
-    onPrimary = OnAccent,
-    primaryContainer = AccentDimDark,
-    onPrimaryContainer = OnAccent,
-    secondary = InfoColor,
-    onSecondary = OnAccent,
-    secondaryContainer = DarkSurfaceVariant,
-    onSecondaryContainer = DarkTextPrimary,
-    tertiary = WarningColor,
-    onTertiary = OnAccent,
-    background = DarkBackground,
-    onBackground = DarkTextPrimary,
-    surface = DarkSurface,
-    onSurface = DarkTextPrimary,
-    surfaceVariant = DarkSurfaceVariant,
-    onSurfaceVariant = DarkTextSecondary,
-    error = ErrorColor,
-    onError = OnAccent,
-    outline = DarkTextSecondary,
+private fun darkScheme(p: PaletteTokens) = darkColorScheme(
+    primary = p.accentBase,
+    onPrimary = p.accentOn,
+    primaryContainer = p.accentPressed,
+    onPrimaryContainer = p.accentOn,
+    secondary = p.info,
+    onSecondary = p.accentOn,
+    secondaryContainer = p.baseAlt,
+    onSecondaryContainer = p.textPrimary,
+    tertiary = p.warning,
+    onTertiary = p.accentOn,
+    background = p.window,
+    onBackground = p.textPrimary,
+    surface = p.base,
+    onSurface = p.textPrimary,
+    surfaceVariant = p.baseAlt,
+    onSurfaceVariant = p.textSecondary,
+    error = p.danger,
+    onError = p.accentOn,
+    outline = p.borderDefault,
+    outlineVariant = p.borderStrong,
 )
 
-private val IptvLightColorScheme = lightColorScheme(
-    primary = AccentLight,
-    onPrimary = OnAccent,
-    primaryContainer = AccentDimLight,
-    onPrimaryContainer = OnAccent,
-    secondary = InfoColor,
-    onSecondary = OnAccent,
-    secondaryContainer = LightSurfaceVariant,
-    onSecondaryContainer = LightTextPrimary,
-    tertiary = WarningColor,
-    onTertiary = OnAccent,
-    background = LightBackground,
-    onBackground = LightTextPrimary,
-    surface = LightSurface,
-    onSurface = LightTextPrimary,
-    surfaceVariant = LightSurfaceVariant,
-    onSurfaceVariant = LightTextSecondary,
-    error = ErrorColor,
-    onError = OnAccent,
-    outline = LightTextSecondary,
+private fun lightScheme(p: PaletteTokens) = lightColorScheme(
+    primary = p.accentBase,
+    onPrimary = p.accentOn,
+    primaryContainer = p.accentPressed,
+    onPrimaryContainer = p.accentOn,
+    secondary = p.info,
+    onSecondary = p.accentOn,
+    secondaryContainer = p.baseAlt,
+    onSecondaryContainer = p.textPrimary,
+    tertiary = p.warning,
+    onTertiary = p.accentOn,
+    background = p.window,
+    onBackground = p.textPrimary,
+    surface = p.base,
+    onSurface = p.textPrimary,
+    surfaceVariant = p.baseAlt,
+    onSurfaceVariant = p.textSecondary,
+    error = p.danger,
+    onError = p.accentOn,
+    outline = p.borderDefault,
+    outlineVariant = p.borderStrong,
 )
 
 /**
@@ -132,8 +90,16 @@ fun IptvTheme(
         "system" -> isSystemInDarkTheme()
         else -> true  // "dark" 或默认
     }
+    // 读取 assets/palette.json（仅首次），并同步给非 Composable 代码使用的 TvColors
+    val context = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.runtime.remember(context) {
+        PaletteLoader.ensureLoaded(context.applicationContext)
+    }
+    TvColors.dark = PaletteLoader.dark()
+    TvColors.light = PaletteLoader.light()
+    TvColors.isDark = useDark
     MaterialTheme(
-        colorScheme = if (useDark) IptvDarkColorScheme else IptvLightColorScheme,
+        colorScheme = if (useDark) darkScheme(TvColors.dark) else lightScheme(TvColors.light),
         content = content
     )
 }
@@ -200,30 +166,31 @@ data class PlayerOverlayColors(
 @Composable
 @ReadOnlyComposable
 fun rememberPlayerOverlayColors(): PlayerOverlayColors {
+    val p = if (isDarkTheme()) TvColors.dark else TvColors.light
+    val aptv = LocalAptvStyle.current
+    val accent = if (aptv) AptvAccent else p.accentBase
     // 暗玻璃覆盖层（底栏/侧栏/信息弹窗）：永远白字白图标。
-    // 浅色分支的硬编码黑字是给实底浅色面板用的，落在暗玻璃上不可读
+    // 浅色主题的 panel.text_primary 是深色，落在暗玻璃上不可读，故强制用暗色模式的文字色。
     if (LocalDarkOverlay.current) {
-        val aptv = LocalAptvStyle.current
-        val accent = if (aptv) AptvAccent else AccentDark
+        val dp = TvColors.dark
         return PlayerOverlayColors(
-            scrim = Color(0x66000000),
-            topBarBg = Color(0xF0303548),
-            infoBarBg = Color(0xD0181C28),
-            iconTint = Color.White,
-            iconTintActive = if (aptv) AptvAccent else Color(0xFFFFA500),
-            textPrimary = Color(0xFFE9EDF4),
-            textSecondary = Color(0xFF9AA4B2),
+            scrim = dp.overlay,
+            topBarBg = dp.panelControlBackground,
+            infoBarBg = dp.panelControlBackgroundAlt,
+            iconTint = dp.panelTextPrimary,
+            iconTintActive = accent,
+            textPrimary = dp.panelTextPrimary,
+            textSecondary = dp.panelTextSecondary,
             accent = accent,
-            trackInactive = Color(0xFF3A3A5C),
+            trackInactive = dp.sliderTrack,
             badgeBg = accent.copy(alpha = 0.15f),
-            badgeText = Color(0xFFE9EDF4),
-            divider = Color(0xFF2A2A4E),
+            badgeText = dp.panelTextPrimary,
+            divider = dp.panelDivider,
         )
     }
-    val dark = isDarkTheme()
-    if (LocalAptvStyle.current) {
+    if (aptv) {
         return PlayerOverlayColors(
-            scrim = Color(0x66000000),
+            scrim = p.overlay,
             topBarBg = MaterialTheme.colorScheme.surface,
             infoBarBg = MaterialTheme.colorScheme.surfaceVariant,
             iconTint = MaterialTheme.colorScheme.onSurface,
@@ -237,37 +204,20 @@ fun rememberPlayerOverlayColors(): PlayerOverlayColors {
             divider = MaterialTheme.colorScheme.outline,
         )
     }
-    return if (dark) {
-        PlayerOverlayColors(
-            scrim = Color(0x66000000),
-            topBarBg = Color(0xF0303548),      // TAB/控制栏：更亮的深蓝灰
-            infoBarBg = Color(0xD0181C28),      // 活动区域：更深，与 TAB 形成对比      // 与信息栏同色
-            iconTint = Color.White,
-            iconTintActive = Color(0xFFFFA500),
-            textPrimary = Color.White,
-            textSecondary = Color(0xFFAAAAAA),
-            accent = AccentDark,  // 与 colorScheme.primary 一致
-            trackInactive = Color(0xFF3A3A5C),
-            badgeBg = AccentDark.copy(alpha = 0.15f),
-            badgeText = Color(0xFF8AB4F8),
-            divider = Color(0xFF2A2A4E),
-        )
-    } else {
-        PlayerOverlayColors(
-            scrim = Color(0x66FFFFFF),
-            topBarBg = Color(0xC8F0F2F5),       // TAB：略灰白，不要太亮
-            infoBarBg = Color(0xD0E8EAED),       // 活动区域：恢复之前的浅灰白
-            iconTint = Color(0xFF212121),
-            iconTintActive = Color(0xFFE65100),
-            textPrimary = Color(0xFF212121),
-            textSecondary = Color(0xFF666666),
-            accent = AccentLight,  // 与 colorScheme.primary 一致
-            trackInactive = Color(0xFFCCCCCC),
-            badgeBg = AccentLight.copy(alpha = 0.12f),
-            badgeText = Color(0xFF616161),
-            divider = Color(0xFFBDBDBD),         // 更深的分隔线，浅色模式下可见
-        )
-    }
+    return PlayerOverlayColors(
+        scrim = p.overlay,
+        topBarBg = p.panelControlBackground,
+        infoBarBg = p.panelControlBackgroundAlt,
+        iconTint = p.panelTextPrimary,
+        iconTintActive = accent,
+        textPrimary = p.panelTextPrimary,
+        textSecondary = p.panelTextSecondary,
+        accent = accent,
+        trackInactive = p.sliderTrack,
+        badgeBg = accent.copy(alpha = 0.15f),
+        badgeText = p.panelTextPrimary,
+        divider = p.panelDivider,
+    )
 }
 
 // -----------------------------------------------------------------
@@ -315,7 +265,7 @@ fun GlassPanel(
         cornerRadius = cornerRadius,
         staticGlass = true,
         overlayDark = overlayDark,
-        fallbackColor = Color(0xF0222222),
+        fallbackColor = TvColors.p.panelBackground.copy(alpha = 0.96f),
         modifier = modifier
     ) {
         if (overlayDark) {

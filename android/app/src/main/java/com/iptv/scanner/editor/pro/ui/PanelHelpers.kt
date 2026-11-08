@@ -432,9 +432,9 @@ internal fun AvSyncWaveform(
             // 最新的点
             val lastVal = history.last()
             val lastColor = when {
-                kotlin.math.abs(lastVal) < 0.04f -> Color(0xFF4CAF50)
-                kotlin.math.abs(lastVal) < 0.2f -> Color(0xFFFFC107)
-                else -> Color(0xFFF44336)
+                kotlin.math.abs(lastVal) < 0.04f -> tvPalette.success
+                kotlin.math.abs(lastVal) < 0.2f -> tvPalette.warning
+                else -> tvPalette.danger
             }
             drawCircle(
                 color = lastColor,
@@ -447,7 +447,7 @@ internal fun AvSyncWaveform(
 @Composable
 internal fun SourceBadge(source: String) {
     val color = when (source) {
-        "OpenSubtitles" -> Color(0xFF4CAF50)
+        "OpenSubtitles" -> tvPalette.success
         "SubHD" -> MaterialTheme.colorScheme.surfaceVariant
         "SubtitleCat" -> MaterialTheme.colorScheme.tertiary
         else -> MaterialTheme.colorScheme.onSurfaceVariant

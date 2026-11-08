@@ -128,8 +128,8 @@ internal fun LandscapeHomeScreen(
                                             androidx.compose.ui.graphics.Color(0xFF0B0F1A),
                                             androidx.compose.ui.graphics.Color(0xFF151B2C)
                                         ) else listOf(
-                                            androidx.compose.ui.graphics.Color(0xFFE9EEF7),
-                                            androidx.compose.ui.graphics.Color(0xFFF9FBFF)
+                                            tvPalette.textTertiary,
+                                            tvPalette.textPrimary
                                         )
                                     )
                                 )
@@ -822,7 +822,7 @@ private fun LandscapeSystemOverviewPanel(viewModel: AppViewModel) {
                                     .size(8.dp)
                                     .clip(androidx.compose.foundation.shape.CircleShape)
                                     .background(
-                                        if (src.enabled) Color(0xFF34D399)
+                                        if (src.enabled) tvPalette.success
                                         else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
                                     )
                             )
@@ -837,7 +837,7 @@ private fun LandscapeSystemOverviewPanel(viewModel: AppViewModel) {
                             )
                             Text(
                                 text = if (src.enabled) "启用中" else "已停用",
-                                color = if (src.enabled) Color(0xFF34D399)
+                                color = if (src.enabled) tvPalette.success
                                         else MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 11.sp
                             )

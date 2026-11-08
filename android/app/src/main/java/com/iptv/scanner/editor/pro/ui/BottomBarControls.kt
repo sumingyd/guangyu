@@ -446,7 +446,7 @@ internal fun PortraitInfoBarV2(viewModel: AppViewModel) {
                 Icon(
                     imageVector = if (favorites.contains(currentIdx)) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                     contentDescription = "收藏",
-                    tint = if (favorites.contains(currentIdx)) Color(0xFFFFC107) else oc.iconTint,
+                    tint = if (favorites.contains(currentIdx)) tvPalette.favorite else oc.iconTint,
                     modifier = Modifier.size(22.dp)
                 )
             }

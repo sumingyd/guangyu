@@ -227,7 +227,7 @@ Surface(
                     ) {
                         Text(
                             text = "仅可浏览应用目录。授予权限后可浏览全部存储",
-                            color = Color(0xFFFFB74D),
+                            color = tvPalette.warning,
                             fontSize = 12.sp,
                             modifier = Modifier.weight(1f)
                         )
@@ -374,8 +374,8 @@ Surface(
                                 else -> Icons.Default.Description
                             }
                             val iconTint = when {
-                                file.isDirectory -> Color(0xFF66BB6A)
-                                isTarget -> Color(0xFFFFB74D)
+                                file.isDirectory -> tvPalette.success
+                                isTarget -> tvPalette.warning
                                 else -> MaterialTheme.colorScheme.onSurfaceVariant
                             }
                             Icon(
@@ -387,7 +387,7 @@ Surface(
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = file.name,
-                                    color = if (isTarget) Color(0xFFFFB74D) else MaterialTheme.colorScheme.onSurface,
+                                    color = if (isTarget) tvPalette.warning else MaterialTheme.colorScheme.onSurface,
                                     fontSize = 14.sp,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -416,11 +416,11 @@ Surface(
                                 }
                                 Text(
                                     text = label,
-                                    color = Color(0xFFFFB74D),
+                                    color = tvPalette.warning,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
                                     modifier = Modifier
-                                        .background(Color(0x33FFB74D), RoundedCornerShape(4.dp))
+                                        .background(tvPalette.warning.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
                                         .padding(horizontal = 6.dp, vertical = 2.dp)
                                 )
                             }

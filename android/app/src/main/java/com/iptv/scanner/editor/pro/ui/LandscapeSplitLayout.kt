@@ -199,8 +199,8 @@ internal fun TvSplitLayout(
                             androidx.compose.ui.graphics.Color(0xFF0B0F1A),
                             androidx.compose.ui.graphics.Color(0xFF151B2C)
                         ) else listOf(
-                            androidx.compose.ui.graphics.Color(0xFFE9EEF7),
-                            androidx.compose.ui.graphics.Color(0xFFF9FBFF)
+                            tvPalette.textTertiary,
+                            tvPalette.textPrimary
                         )
                     )
                 )
@@ -482,7 +482,7 @@ internal fun TvSplitLayout(
                             Icon(
                                 if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                                 contentDescription = "收藏",
-                                tint = if (isFavorite) Color(0xFFFFC107) else oc.iconTint,
+                                tint = if (isFavorite) tvPalette.favorite else oc.iconTint,
                                 modifier = Modifier.size(17.dp)
                             )
                         }
@@ -566,7 +566,7 @@ private fun SplitSidePanel(viewModel: AppViewModel) {
                 Icon(
                     if (favorites.contains(currentIdx)) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                     contentDescription = "收藏",
-                    tint = if (favorites.contains(currentIdx)) Color(0xFFFFC107) else oc.iconTint,
+                    tint = if (favorites.contains(currentIdx)) tvPalette.favorite else oc.iconTint,
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -724,8 +724,8 @@ private fun SplitBadgeRow(viewModel: AppViewModel, isFavorite: Boolean) {
     // 播放状态徽章（与全屏底栏一致：直播/时移/回看）
     val statusBadge = when {
         !fileLoaded -> null
-        playbackState.mode == PlayMode.TIMESHIFT -> "时移" to Color(0xFF42A5F5)
-        showExitCatchup -> "回看" to Color(0xFFFFA500)
+        playbackState.mode == PlayMode.TIMESHIFT -> "时移" to tvPalette.info
+        showExitCatchup -> "回看" to tvPalette.warning
         else -> "直播" to AptvAccent
     }
 
@@ -741,10 +741,10 @@ private fun SplitBadgeRow(viewModel: AppViewModel, isFavorite: Boolean) {
             item { SplitBadge(label, tint = color) }
         }
         if (paused && fileLoaded) {
-            item { SplitBadge("暂停", tint = Color(0xFFBDBDBD)) }
+            item { SplitBadge("暂停", tint = tvPalette.textDisabled) }
         }
         if (isFavorite) {
-            item { SplitBadge("已收藏", tint = Color(0xFFFFC107)) }
+            item { SplitBadge("已收藏", tint = tvPalette.favorite) }
         }
         items(mediaBadges.size) { i -> SplitBadge(mediaBadges[i]) }
     }
@@ -804,7 +804,7 @@ private fun SplitEpgBlock(
         if (effectiveProgram != null && effectiveProgram.title.isNotEmpty()) {
             // 当前行：LIVE 徽章 + 时间 + 标题 + 细进度条
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Surface(color = Color(0xFFE53935), shape = RoundedCornerShape(3.dp)) {
+                Surface(color = tvPalette.danger, shape = RoundedCornerShape(3.dp)) {
                     Text(
                         text = "LIVE",
                         color = Color.White,

@@ -367,7 +367,7 @@ fun ExitConfirmDialog(viewModel: AppViewModel) {
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
                     // 立即退出（红色强调）
-                    ExitOptionRow("立即退出", tint = if (isAptv) AptvAccent else Color(0xFFEF5350)) {
+                    ExitOptionRow("立即退出", tint = if (isAptv) AptvAccent else tvPalette.danger) {
                         viewModel.dismissExitConfirm()
                         // 先停止播放，避免 Activity finish 后 mpv 在后台继续播放
                         viewModel.stopPlay()
@@ -765,9 +765,9 @@ fun ReminderPanel(viewModel: AppViewModel) {
                     onClick = { viewModel.clearReminders() },
                     modifier = Modifier.tvFocusBorder()
                 ) {
-                    Icon(Icons.Default.Close, contentDescription = null, tint = Color(0xFFFF5252))
+                    Icon(Icons.Default.Close, contentDescription = null, tint = tvPalette.danger)
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("清空", color = Color(0xFFFF5252))
+                    Text("清空", color = tvPalette.danger)
                 }
             }
         }
@@ -829,7 +829,7 @@ private fun ReminderRow(
     val isPast = remainingMs < 0  // 已开始（但未结束）
 
     val titleColor = when {
-        isUpcoming -> Color(0xFFFFC107)  // 黄色高亮
+        isUpcoming -> tvPalette.warning  // 黄色高亮
         isPast -> MaterialTheme.colorScheme.onSurfaceVariant
         else -> MaterialTheme.colorScheme.onSurface
     }
@@ -881,7 +881,7 @@ private fun ReminderRow(
                     else -> "已过期"
                 }
                 val remainingColor = when {
-                    isUpcoming -> Color(0xFFFFC107)
+                    isUpcoming -> tvPalette.warning
                     isPast -> MaterialTheme.colorScheme.onSurfaceVariant
                     else -> MaterialTheme.colorScheme.primary
                 }
@@ -892,7 +892,7 @@ private fun ReminderRow(
             Icon(
                 Icons.Default.Close,
                 contentDescription = "删除",
-                tint = Color(0xFFE57373),
+                tint = tvPalette.dangerSoft,
                 modifier = Modifier.size(16.dp)
             )
         }
@@ -925,9 +925,9 @@ fun ResumePanel(viewModel: AppViewModel) {
                     onClick = { viewModel.clearResumeList() },
                     modifier = Modifier.tvFocusBorder()
                 ) {
-                    Icon(Icons.Default.Close, contentDescription = null, tint = Color(0xFFFF5252))
+                    Icon(Icons.Default.Close, contentDescription = null, tint = tvPalette.danger)
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("清空", color = Color(0xFFFF5252))
+                    Text("清空", color = tvPalette.danger)
                 }
             }
         }
@@ -1056,12 +1056,12 @@ private fun ResumeRow(
                     }
                 } else {
                     Surface(
-                        color = Color(0xFF4CAF50).copy(alpha = 0.15f),
+                        color = tvPalette.success.copy(alpha = 0.15f),
                         shape = RoundedCornerShape(3.dp)
                     ) {
                         Text(
                             text = "本地",
-                            color = Color(0xFF4CAF50),
+                            color = tvPalette.success,
                             fontSize = 10.sp,
                             modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                         )
@@ -1081,7 +1081,7 @@ private fun ResumeRow(
             Icon(
                 Icons.Default.Close,
                 contentDescription = "删除",
-                tint = Color(0xFFE57373),
+                tint = tvPalette.dangerSoft,
                 modifier = Modifier.size(16.dp)
             )
         }
@@ -1121,11 +1121,11 @@ fun BookmarkPanel(viewModel: AppViewModel) {
                     },
                     modifier = Modifier.tvFocusBorder()
                 ) {
-                    Icon(Icons.Default.Close, contentDescription = null, tint = Color(0xFFFF5252))
+                    Icon(Icons.Default.Close, contentDescription = null, tint = tvPalette.danger)
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         if (showCurrent) "清除当前" else "清空全部",
-                        color = Color(0xFFFF5252)
+                        color = tvPalette.danger
                     )
                 }
             }
@@ -1281,7 +1281,7 @@ private fun BookmarkRow(
             Icon(
                 Icons.Default.Close,
                 contentDescription = "删除",
-                tint = Color(0xFFE57373),
+                tint = tvPalette.dangerSoft,
                 modifier = Modifier.size(16.dp)
             )
         }
@@ -1311,8 +1311,8 @@ internal fun SpectrumCanvas(spectrum: FloatArray, modifier: Modifier = Modifier)
         val barBrush = androidx.compose.ui.graphics.Brush.verticalGradient(
             colors = listOf(
                 primaryColor,
-                Color(0xFFFF8A50),
-                Color(0xFFFFC66B)
+                tvPalette.warning,
+                tvPalette.warning
             ),
             startY = bottomY - maxBarHeight,
             endY = bottomY
@@ -1339,7 +1339,7 @@ internal fun SpectrumCanvas(spectrum: FloatArray, modifier: Modifier = Modifier)
             peaks[i] = maxOf(peaks[i] - 0.009f, amplitude)
             val peakY = bottomY - (peaks[i] * maxBarHeight).coerceAtLeast(3f) - actualBarWidth * 0.9f
             drawRoundRect(
-                color = Color(0xFFFFC66B).copy(alpha = 0.9f),
+                color = tvPalette.warning.copy(alpha = 0.9f),
                 topLeft = androidx.compose.ui.geometry.Offset(x, peakY),
                 size = androidx.compose.ui.geometry.Size(actualBarWidth, actualBarWidth * 0.28f),
                 cornerRadius = androidx.compose.ui.geometry.CornerRadius(actualBarWidth * 0.14f, actualBarWidth * 0.14f)
@@ -1500,7 +1500,7 @@ fun LyricsPanel(viewModel: AppViewModel) {
                 ) {
                     Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("清除", fontSize = 12.sp, color = Color(0xFFE57373))
+                    Text("清除", fontSize = 12.sp, color = tvPalette.dangerSoft)
                 }
             }
 
@@ -1556,7 +1556,7 @@ fun LyricsPanel(viewModel: AppViewModel) {
                         Text(
                             text = line.text,
                             color = when {
-                                isCurrent -> Color(0xFF4CAF50)
+                                isCurrent -> tvPalette.success
                                 isPast -> MaterialTheme.colorScheme.onSurfaceVariant
                                 else -> MaterialTheme.colorScheme.onSurfaceVariant
                             },

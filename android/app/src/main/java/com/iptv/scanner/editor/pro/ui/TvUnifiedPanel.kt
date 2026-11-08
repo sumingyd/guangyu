@@ -92,7 +92,7 @@ import com.iptv.scanner.editor.pro.ui.theme.isLiquidBlurSupported
 import java.util.Locale
 
 // 侧边栏风格配色（主色统一为竖屏 APTV 橙红 AptvAccent）
-private val ACCENT_CYAN = Color(0xFF00BCD4)
+private val ACCENT_CYAN = tvPalette.info
 private val ICON_BG = Color(0x32FFFFFF)
 
 /** 面板可读性底色：玻璃霜层上垫深色底，避免亮色视频背景下文字看不清 */
@@ -545,7 +545,7 @@ private fun SourceSwitchColumn(
         cornerRadius = 10.dp,
         staticGlass = true,
         overlayDark = true,
-        fallbackColor = Color(0xE6222226),
+        fallbackColor = tvPalette.panelBackground.copy(alpha = 0.90f),
         modifier = modifier.fillMaxHeight()
     ) {
         DarkOverlayTheme {
@@ -666,7 +666,7 @@ private fun QuickMenuColumn(
         cornerRadius = 10.dp,
         staticGlass = true,
         overlayDark = true,
-        fallbackColor = Color(0xE6222226),
+        fallbackColor = tvPalette.panelBackground.copy(alpha = 0.90f),
         modifier = modifier.fillMaxHeight()
     ) {
         DarkOverlayTheme {
@@ -1036,7 +1036,7 @@ private fun TvChannelItem(
             Icon(
                 imageVector = Icons.Default.Favorite,
                 contentDescription = "收藏",
-                tint = Color(0xFFFFD700),
+                tint = tvPalette.favorite,
                 modifier = Modifier.size(14.dp)
             )
         }
@@ -1400,8 +1400,8 @@ private fun TvEpgItem(
                 Text("回看", color = ACCENT_CYAN, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
             }
         } else if (isCurrent) {
-            Surface(color = Color(0xFFFF5252).copy(alpha = 0.2f), shape = RoundedCornerShape(3.dp)) {
-                Text("直播", color = Color(0xFFFF5252), fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+            Surface(color = tvPalette.danger.copy(alpha = 0.2f), shape = RoundedCornerShape(3.dp)) {
+                Text("直播", color = tvPalette.danger, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
             }
         } else {
             if (hasReminder) {

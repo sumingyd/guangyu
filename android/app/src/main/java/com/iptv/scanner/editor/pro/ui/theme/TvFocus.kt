@@ -65,13 +65,14 @@ fun Modifier.tvFocusBorder(cornerRadius: Int = 8, focusedScale: Float = 1.07f): 
             drawContent()
             if (isFocused) {
                 val stroke = 2.5.dp.toPx()
-                // 半透明白底蒙层（很淡，保持内容可读）
+                val pal = TvColors.p
+                // 半透明底蒙层 + 聚焦描边，均取自 palette 的 focus token
                 drawRoundRect(
-                    color = Color(0x26FFFFFF),
+                    color = pal.focusRing,
                     cornerRadius = CornerRadius(cornerRadius.dp.toPx())
                 )
                 drawRoundRect(
-                    color = Color.White,
+                    color = pal.focusIndicator,
                     topLeft = Offset(stroke / 2f, stroke / 2f),
                     size = Size(size.width - stroke, size.height - stroke),
                     cornerRadius = CornerRadius(cornerRadius.dp.toPx()),
@@ -88,12 +89,13 @@ fun Modifier.tvFocusBorder(cornerRadius: Int = 8, focusedScale: Float = 1.07f): 
  */
 fun Modifier.tvGlassSelected(cornerRadius: Int = 10): Modifier = composed {
     val shape = RoundedCornerShape(cornerRadius.dp)
+    val pal = TvColors.p
     this
-        .background(Color.White.copy(alpha = 0.20f), shape)
-        .border(1.dp, Color.White.copy(alpha = 0.45f), shape)
+        .background(pal.borderFrostedStrong, shape)
+        .border(1.dp, pal.focusRing, shape)
         .background(
             androidx.compose.ui.graphics.Brush.verticalGradient(
-                0f to Color.White.copy(alpha = 0.22f),
+                0f to pal.borderHighlightLight,
                 1f to Color.Transparent
             ),
             shape
@@ -128,12 +130,13 @@ fun Modifier.tvFocusable(cornerRadius: Int = 8, focusedScale: Float = 1.07f): Mo
             drawContent()
             if (isFocused) {
                 val stroke = 2.5.dp.toPx()
+                val pal = TvColors.p
                 drawRoundRect(
-                    color = Color(0x26FFFFFF),
+                    color = pal.focusRing,
                     cornerRadius = CornerRadius(cornerRadius.dp.toPx())
                 )
                 drawRoundRect(
-                    color = Color.White,
+                    color = pal.focusIndicator,
                     topLeft = Offset(stroke / 2f, stroke / 2f),
                     size = Size(size.width - stroke, size.height - stroke),
                     cornerRadius = CornerRadius(cornerRadius.dp.toPx()),

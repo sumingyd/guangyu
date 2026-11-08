@@ -103,7 +103,7 @@ import com.iptv.scanner.editor.pro.ui.theme.tvFocusBorder
 import com.iptv.scanner.editor.pro.ui.theme.tvGlassSelected
 import com.iptv.scanner.editor.pro.ui.theme.GlassPanel
 
-private val ACCENT_CYAN = Color(0xFF00BCD4)
+private val ACCENT_CYAN = tvPalette.info
 
 /**
  * 主菜单面板：与 PC 端主菜单（panelMenu）对齐。

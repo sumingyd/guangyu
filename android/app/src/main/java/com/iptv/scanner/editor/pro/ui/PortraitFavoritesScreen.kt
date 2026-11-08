@@ -264,9 +264,9 @@ internal fun PortraitAptvChannelCard(
                 // 右上角延迟标签（APTV 招牌元素：绿=快/黄=中/红=慢）
                 if (latency != null && latency > 0) {
                     val latColor = when {
-                        latency < 200 -> Color(0xFF4CAF50)
-                        latency < 500 -> Color(0xFFFFC107)
-                        else -> Color(0xFFF44336)
+                        latency < 200 -> tvPalette.success
+                        latency < 500 -> tvPalette.warning
+                        else -> tvPalette.danger
                     }
                     androidx.compose.material3.Surface(
                         color = Color.Black.copy(alpha = 0.65f),

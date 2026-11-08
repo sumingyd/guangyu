@@ -538,8 +538,8 @@ private fun TvBottomBarStyleA(
     // 侧边栏风格状态标签
     val statusTag = when {
         !fileLoaded -> null
-        playbackMode == PlayMode.TIMESHIFT -> "时移" to Color(0xFF2979FF)
-        showExitCatchup -> "回看" to Color(0xFFFFA500)
+        playbackMode == PlayMode.TIMESHIFT -> "时移" to tvPalette.info
+        showExitCatchup -> "回看" to tvPalette.warning
         else -> "直播" to AptvAccent
     }
 
@@ -648,7 +648,7 @@ private fun TvBottomBarStyleA(
                                     val end = timeFmt.format(java.util.Date(currentProgram.stopTs * 1000L))
                                     "$start-$end"
                                 }
-                                Text(text = timeRange, color = Color(0xFFa0a0a0), fontSize = 13.sp)
+                                Text(text = timeRange, color = tvPalette.textSecondary, fontSize = 13.sp)
                                 Spacer(modifier = Modifier.width(8.dp))
                             }
                             Text(
@@ -709,7 +709,7 @@ private fun TvBottomBarStyleA(
                             } else ""
                         }
                         if (posText.isNotEmpty()) {
-                            Text(text = posText, color = Color(0xFFa0a0a0), fontSize = 12.sp)
+                            Text(text = posText, color = tvPalette.textSecondary, fontSize = 12.sp)
                         }
                         if (remainText != null) {
                             Spacer(modifier = Modifier.width(6.dp))
@@ -763,7 +763,7 @@ private fun TvBottomBarStyleA(
                                 val nextEnd = remember(nextProgram) {
                                     timeFmt.format(java.util.Date(nextProgram!!.stopTs * 1000L))
                                 }
-                                Text(text = "$nextStart-$nextEnd", color = Color(0xFFa0a0a0), fontSize = 13.sp)
+                                Text(text = "$nextStart-$nextEnd", color = tvPalette.textSecondary, fontSize = 13.sp)
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = nextProgram!!.title,
@@ -776,7 +776,7 @@ private fun TvBottomBarStyleA(
                                 val dateText = remember(tick) { dateFmt.format(java.util.Date(tick)) }
                                 Text(
                                     text = dateText,
-                                    color = Color(0xFFa0a0a0),
+                                    color = tvPalette.textSecondary,
                                     fontSize = 13.sp,
                                     modifier = Modifier.weight(1f)
                                 )
@@ -817,8 +817,8 @@ private fun TvBottomBarStyleB(
 
     val statusTag = when {
         !fileLoaded -> null
-        playbackMode == PlayMode.TIMESHIFT -> "时移" to Color(0xFF2979FF)
-        showExitCatchup -> "回看" to Color(0xFFFFA500)
+        playbackMode == PlayMode.TIMESHIFT -> "时移" to tvPalette.info
+        showExitCatchup -> "回看" to tvPalette.warning
         else -> "直播" to AptvAccent
     }
 
@@ -940,8 +940,8 @@ private fun TvBottomBarStyleC(
 
     val statusTag = when {
         !fileLoaded -> null
-        playbackMode == PlayMode.TIMESHIFT -> "时移" to Color(0xFF2979FF)
-        showExitCatchup -> "回看" to Color(0xFFFFA500)
+        playbackMode == PlayMode.TIMESHIFT -> "时移" to tvPalette.info
+        showExitCatchup -> "回看" to tvPalette.warning
         else -> "直播" to AptvAccent
     }
 
@@ -980,7 +980,7 @@ private fun TvBottomBarStyleC(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = "${timeFmt.format(java.util.Date(currentProgram.startTs * 1000L))}-${timeFmt.format(java.util.Date(currentProgram.stopTs * 1000L))}",
-                        color = Color(0xFFa0a0a0), fontSize = 12.sp
+                        color = tvPalette.textSecondary, fontSize = 12.sp
                     )
                 }
             }
@@ -1055,8 +1055,8 @@ private fun TvBottomBarStyleD(
 
     val statusTag = when {
         !fileLoaded -> null
-        playbackMode == PlayMode.TIMESHIFT -> "时移" to Color(0xFF2979FF)
-        showExitCatchup -> "回看" to Color(0xFFFFA500)
+        playbackMode == PlayMode.TIMESHIFT -> "时移" to tvPalette.info
+        showExitCatchup -> "回看" to tvPalette.warning
         else -> "直播" to AptvAccent
     }
 
@@ -1176,8 +1176,8 @@ internal val TV_BOTTOM_BAR_STYLES: List<Pair<Int, String>> = listOf(
 /** 共享：状态标签（时移/回看/直播），无媒体时 null */
 private fun tvBarStatusTag(fileLoaded: Boolean, playbackMode: PlayMode, showExitCatchup: Boolean): Pair<String, Color>? = when {
     !fileLoaded -> null
-    playbackMode == PlayMode.TIMESHIFT -> "时移" to Color(0xFF2979FF)
-    showExitCatchup -> "回看" to Color(0xFFFFA500)
+    playbackMode == PlayMode.TIMESHIFT -> "时移" to tvPalette.info
+    showExitCatchup -> "回看" to tvPalette.warning
     else -> "直播" to AptvAccent
 }
 
@@ -1420,7 +1420,7 @@ private fun TvBottomBarStyleE(
 
 /** 共享：秒级刷新时钟文本（HH:mm:ss） */
 @Composable
-private fun TvBarClockText(color: Color = Color(0xFFCCCCCC), sp: TextUnit = 13.sp) {
+private fun TvBarClockText(color: Color = tvPalette.textTertiary, sp: TextUnit = 13.sp) {
     var tick by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { tick = System.currentTimeMillis(); delay(1000L) } }
     val fmt = remember { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()) }
@@ -1429,14 +1429,14 @@ private fun TvBarClockText(color: Color = Color(0xFFCCCCCC), sp: TextUnit = 13.s
 
 /** 共享：大时钟块（HH:mm:ss 大字 + 日期星期小字，右对齐），广播电视/OSD 风格用 */
 @Composable
-private fun TvBarBigClock(sp: TextUnit = 22.sp, color: Color = Color(0xFFEEEEEE), alignEnd: Boolean = true) {
+private fun TvBarBigClock(sp: TextUnit = 22.sp, color: Color = tvPalette.textPrimary, alignEnd: Boolean = true) {
     var tick by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { tick = System.currentTimeMillis(); delay(1000L) } }
     val timeFmt = remember { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()) }
     val dateFmt = remember { java.text.SimpleDateFormat("MM月dd日 EEEE", java.util.Locale.CHINESE) }
     Column(horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start) {
         Text(text = remember(tick) { timeFmt.format(java.util.Date(tick)) }, color = color, fontSize = sp, fontWeight = FontWeight.Bold)
-        Text(text = remember(tick) { dateFmt.format(java.util.Date(tick)) }, color = Color(0xFF999999), fontSize = 10.sp)
+        Text(text = remember(tick) { dateFmt.format(java.util.Date(tick)) }, color = tvPalette.textSecondary, fontSize = 10.sp)
     }
 }
 
@@ -1447,7 +1447,7 @@ private fun TvBarEpgLine(
     program: IptvEpgProgram?,
     timeFmt: java.text.SimpleDateFormat,
     titleColor: Color,
-    labelColor: Color = Color(0xFF999999),
+    labelColor: Color = tvPalette.textSecondary,
     titleSp: TextUnit = 12.sp
 ) {
     if (program == null || program.title.isEmpty()) return
@@ -1481,9 +1481,9 @@ private fun TvBarDescText(program: IptvEpgProgram?, maxLines: Int = 2, color: Co
 @Composable
 private fun TvBarRecBadge() {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(modifier = Modifier.size(6.dp).clip(androidx.compose.foundation.shape.CircleShape).background(Color(0xFFFF3B30)))
+        Box(modifier = Modifier.size(6.dp).clip(androidx.compose.foundation.shape.CircleShape).background(tvPalette.danger))
         Spacer(modifier = Modifier.width(4.dp))
-        Text(text = "REC", color = Color(0xFFFF3B30), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Text(text = "REC", color = tvPalette.danger, fontSize = 10.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -1545,7 +1545,7 @@ private fun TvBottomBarStyleF(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         val range = tvBarProgramRange(currentProgram, timeFmt)
                         if (range != null) {
-                            Text(text = range, color = Color(0xFFa0a0a0), fontSize = 11.sp)
+                            Text(text = range, color = tvPalette.textSecondary, fontSize = 11.sp)
                             Spacer(modifier = Modifier.width(6.dp))
                         }
                         Text(
@@ -1558,9 +1558,9 @@ private fun TvBottomBarStyleF(
                 // 右侧：日期/时钟/网速 竖排
                 Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(1.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(text = remember(tick) { dateFmt.format(java.util.Date(tick)) }, color = Color(0xFFa0a0a0), fontSize = 10.sp)
+                        Text(text = remember(tick) { dateFmt.format(java.util.Date(tick)) }, color = tvPalette.textSecondary, fontSize = 10.sp)
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text(text = posText, color = Color(0xFFCCCCCC), fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text(text = posText, color = tvPalette.textTertiary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                     }
                     if (netSpeed != null) Text(text = "↓ $netSpeed", color = Color(0x99FFFFFF), fontSize = 10.sp)
                 }
@@ -1586,7 +1586,7 @@ private fun TvBottomBarStyleF(
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Surface(color = Color(0x22FFA500), shape = RoundedCornerShape(3.dp)) {
-                        Text("下", color = Color(0xFFFFA500), fontSize = 9.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+                        Text("下", color = tvPalette.warning, fontSize = 9.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
                     }
                     Spacer(modifier = Modifier.width(5.dp))
                     Text(
@@ -1656,7 +1656,7 @@ private fun TvBottomBarStyleG(
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 val posText = tvBarPosText(tick, timePos, playbackMode, showExitCatchup, fullTimeFmt)
                 if (posText.isNotEmpty()) {
-                    Text(text = posText, color = Color(0xFFa0a0a0), fontSize = 11.sp)
+                    Text(text = posText, color = tvPalette.textSecondary, fontSize = 11.sp)
                     Spacer(modifier = Modifier.width(8.dp))
                 }
                 if (progress != null) {
@@ -1675,7 +1675,7 @@ private fun TvBottomBarStyleG(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         val range = tvBarProgramRange(currentProgram, timeFmt)
                         if (range != null) {
-                            Text(text = range, color = Color(0xFFa0a0a0), fontSize = 11.sp)
+                            Text(text = range, color = tvPalette.textSecondary, fontSize = 11.sp)
                             Spacer(modifier = Modifier.width(6.dp))
                         }
                         Text(
@@ -1760,7 +1760,7 @@ private fun TvBottomBarStyleH(
                     Spacer(modifier = Modifier.weight(1f))
                     Text(
                         text = tvBarPosText(tick, timePos, playbackMode, showExitCatchup, fullTimeFmt),
-                        color = Color(0xFFa0a0a0), fontSize = 11.sp
+                        color = tvPalette.textSecondary, fontSize = 11.sp
                     )
                 }
                 Spacer(modifier = Modifier.height(4.dp))
@@ -1768,7 +1768,7 @@ private fun TvBottomBarStyleH(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val range = tvBarProgramRange(currentProgram, timeFmt)
                     if (range != null) {
-                        Text(text = range, color = Color(0xFFa0a0a0), fontSize = 11.sp)
+                        Text(text = range, color = tvPalette.textSecondary, fontSize = 11.sp)
                         Spacer(modifier = Modifier.width(6.dp))
                     }
                     Text(
@@ -1852,7 +1852,7 @@ private fun TvBottomBarStyleI(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val range = tvBarProgramRange(currentProgram, timeFmt)
                     if (range != null) {
-                        Text(text = range, color = Color(0xFFa0a0a0), fontSize = 10.sp)
+                        Text(text = range, color = tvPalette.textSecondary, fontSize = 10.sp)
                         Spacer(modifier = Modifier.width(5.dp))
                     }
                     Text(
@@ -1889,7 +1889,7 @@ private fun TvBottomBarStyleI(
             Column(modifier = Modifier.weight(0.9f), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     text = tvBarPosText(tick, timePos, playbackMode, showExitCatchup, fullTimeFmt),
-                    color = Color(0xFFCCCCCC), fontSize = 15.sp, fontWeight = FontWeight.Bold
+                    color = tvPalette.textTertiary, fontSize = 15.sp, fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 TvBarControls(viewModel, paused, barFocus, oc, buttonSize = 28.dp, playSize = 32.dp, iconSize = 15.dp, playIconSize = 18.dp, spacing = 2.dp)
@@ -1953,7 +1953,7 @@ private fun TvBottomBarStyleJ(
                 // 行2：当前节目 · 时段 · 时钟 · 剩余
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     val range = tvBarProgramRange(currentProgram, timeFmt)
-                    if (range != null) Text(text = range, color = Color(0xFFa0a0a0), fontSize = 11.sp)
+                    if (range != null) Text(text = range, color = tvPalette.textSecondary, fontSize = 11.sp)
                     Text(
                         text = currentProgram?.title?.ifEmpty { null } ?: "精彩节目",
                         color = oc.textSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
@@ -1961,7 +1961,7 @@ private fun TvBottomBarStyleJ(
                     Text(text = "·", color = Color(0x60FFFFFF), fontSize = 11.sp)
                     Text(
                         text = tvBarPosText(tick, timePos, playbackMode, showExitCatchup, fullTimeFmt),
-                        color = Color(0xFFa0a0a0), fontSize = 11.sp
+                        color = tvPalette.textSecondary, fontSize = 11.sp
                     )
                     val remainText = tvBarRemainText(tick, currentProgram)
                     if (remainText != null) Text(text = remainText, color = AptvAccent, fontSize = 10.sp)
@@ -2058,7 +2058,7 @@ private fun TvBottomBarStyleK(
                 Spacer(modifier = Modifier.weight(1f))
                 val range = tvBarProgramRange(currentProgram, timeFmt)
                 if (range != null) {
-                    Text(text = range, color = Color(0xFFa0a0a0), fontSize = 10.sp)
+                    Text(text = range, color = tvPalette.textSecondary, fontSize = 10.sp)
                     Spacer(modifier = Modifier.width(6.dp))
                 }
                 Text(
@@ -2072,7 +2072,7 @@ private fun TvBottomBarStyleK(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = tvBarPosText(tick, timePos, playbackMode, showExitCatchup, fullTimeFmt),
-                    color = Color(0xFFa0a0a0), fontSize = 10.sp
+                    color = tvPalette.textSecondary, fontSize = 10.sp
                 )
                 val remainText = tvBarRemainText(tick, currentProgram)
                 if (remainText != null) {
@@ -2143,7 +2143,7 @@ private fun TvBottomBarStyleL(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val range = tvBarProgramRange(currentProgram, timeFmt)
                     if (range != null) {
-                        Text(text = range, color = Color(0xFFa0a0a0), fontSize = 11.sp)
+                        Text(text = range, color = tvPalette.textSecondary, fontSize = 11.sp)
                         Spacer(modifier = Modifier.width(6.dp))
                     }
                     Text(
@@ -2176,10 +2176,10 @@ private fun TvBottomBarStyleL(
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     text = remember(tick) { fullTimeFmt.format(java.util.Date(tick)) },
-                    color = Color(0xFFCCCCCC), fontSize = 16.sp, fontWeight = FontWeight.Bold
+                    color = tvPalette.textTertiary, fontSize = 16.sp, fontWeight = FontWeight.Bold
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Text(text = remember(tick) { dateFmt.format(java.util.Date(tick)) }, color = Color(0xFFa0a0a0), fontSize = 9.sp)
+                    Text(text = remember(tick) { dateFmt.format(java.util.Date(tick)) }, color = tvPalette.textSecondary, fontSize = 9.sp)
                     if (netSpeed != null) Text(text = "↓$netSpeed", color = Color(0x99FFFFFF), fontSize = 9.sp)
                 }
             }
@@ -2326,7 +2326,7 @@ private fun TvBottomBarStyleN(
                     TvBarEpgLine("下一节目", nextProgram, timeFmt, oc.textSecondary, titleSp = 10.sp)
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         TvBarTags(statusTag, paused, fileLoaded, sp = 9.sp)
-                        if (netSpeed != null) Text(text = "↓ $netSpeed", color = Color(0xFF8CE99A), fontSize = 10.sp)
+                        if (netSpeed != null) Text(text = "↓ $netSpeed", color = tvPalette.success, fontSize = 10.sp)
                         val remainText = tvBarRemainText(tick, currentProgram)
                         if (remainText != null) Text(text = remainText, color = AptvAccent, fontSize = 10.sp)
                     }
@@ -2337,14 +2337,14 @@ private fun TvBottomBarStyleN(
                         if (fileLoaded && !paused) TvBarRecBadge()
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { TvBarBadgeTexts(mediaBadges.take(3), sp = 9.sp) }
                     }
-                    TvBarBigClock(sp = 20.sp, color = Color(0xFFEEEEEE))
+                    TvBarBigClock(sp = 20.sp, color = tvPalette.textPrimary)
                 }
             }
             Spacer(modifier = Modifier.height(5.dp))
             // 底部技术参数行：位置时间 | 徽章全列 | 控制按钮
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (posText.isNotEmpty()) {
-                    Text(text = posText, color = Color(0xFF888888), fontSize = 10.sp)
+                    Text(text = posText, color = tvPalette.textDisabled, fontSize = 10.sp)
                     Spacer(modifier = Modifier.width(8.dp))
                 }
                 Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(4.dp)) { TvBarBadgeTexts(mediaBadges.drop(3), sp = 9.sp) }
@@ -2425,7 +2425,7 @@ private fun TvBottomBarStyleO(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = remember(tick) { fullTimeFmt.format(java.util.Date(tick)) },
-                            color = Color(0xFFCCCCCC), fontSize = 12.sp, fontWeight = FontWeight.Medium
+                            color = tvPalette.textTertiary, fontSize = 12.sp, fontWeight = FontWeight.Medium
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         TvBarControls(viewModel, paused, barFocus, oc, buttonSize = 26.dp, playSize = 30.dp, iconSize = 14.dp, playIconSize = 16.dp, spacing = 2.dp)
@@ -2487,7 +2487,7 @@ private fun TvBottomBarStyleP(
                 )
                 Text(
                     text = remember(tick) { dateFmt.format(java.util.Date(tick)) },
-                    color = Color(0xFF999999), fontSize = 9.sp
+                    color = tvPalette.textSecondary, fontSize = 9.sp
                 )
             }
             Spacer(modifier = Modifier.width(12.dp))
@@ -2496,7 +2496,7 @@ private fun TvBottomBarStyleP(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val range = tvBarProgramRange(currentProgram, timeFmt)
                     if (range != null) {
-                        Text(text = range, color = Color(0xFF999999), fontSize = 11.sp)
+                        Text(text = range, color = tvPalette.textSecondary, fontSize = 11.sp)
                         Spacer(modifier = Modifier.width(6.dp))
                     }
                     Text(
@@ -2524,7 +2524,7 @@ private fun TvBottomBarStyleP(
                                 .clip(RoundedCornerShape(2.5.dp))
                                 .background(
                                     Brush.horizontalGradient(
-                                        listOf(AptvAccent, Color(0xFF3D82F7), Color(0xFF30C08D))
+                                        listOf(AptvAccent, tvPalette.info, tvPalette.success)
                                     )
                                 )
                         )
@@ -2560,7 +2560,7 @@ private fun TvBottomBarStyleP(
             }
             Spacer(modifier = Modifier.width(12.dp))
             // 右：大时钟
-            TvBarBigClock(sp = 22.sp, color = Color(0xFFFF6A4D))
+            TvBarBigClock(sp = 22.sp, color = tvPalette.dangerSoft)
         }
     }
 }
@@ -2739,7 +2739,7 @@ private fun TvBottomBarStyleR(
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(
                     text = remember(tick) { fullTimeFmt.format(java.util.Date(tick)) },
-                    color = Color(0xFFCCCCCC), fontSize = 16.sp, fontWeight = FontWeight.Bold
+                    color = tvPalette.textTertiary, fontSize = 16.sp, fontWeight = FontWeight.Bold
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { TvBarBadgeTexts(mediaBadges.take(2), sp = 9.sp) }
                 if (netSpeed != null) Text(text = "↓ $netSpeed", color = Color(0x99FFFFFF), fontSize = 9.sp)
@@ -2757,7 +2757,7 @@ private fun TvBarTimelineSlot(program: IptvEpgProgram?, timeFmt: java.text.Simpl
         Spacer(modifier = Modifier.width(6.dp))
         Text(
             text = program?.let { if (it.stopTs > 0) "${timeFmt.format(java.util.Date(it.startTs * 1000L))} - ${timeFmt.format(java.util.Date(it.stopTs * 1000L))}" else "" } ?: "--:-- - --:--",
-            color = Color(0xFF777777), fontSize = 10.sp
+            color = tvPalette.textDisabled, fontSize = 10.sp
         )
         Spacer(modifier = Modifier.width(6.dp))
         Text(

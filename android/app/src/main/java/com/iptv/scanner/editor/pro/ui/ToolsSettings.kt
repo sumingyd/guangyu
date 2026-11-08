@@ -395,7 +395,7 @@ internal fun PortraitToolsScreen(
                             Icon(
                                 Icons.Default.CheckCircle,
                                 contentDescription = null,
-                                tint = if (s.enabled) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                                tint = if (s.enabled) tvPalette.success else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
                                 modifier = Modifier.size(13.dp)
                             )
                         }

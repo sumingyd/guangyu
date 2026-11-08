@@ -249,7 +249,7 @@ private fun MappingEntryRow(
                 }
             }
             IconButton(onClick = onDelete, modifier = Modifier.size(32.dp).tvFocusBorder()) {
-                Icon(Icons.Default.Close, contentDescription = "删除", tint = Color(0xFFE57373), modifier = Modifier.size(16.dp))
+                Icon(Icons.Default.Close, contentDescription = "删除", tint = tvPalette.dangerSoft, modifier = Modifier.size(16.dp))
             }
         }
     }
@@ -465,9 +465,9 @@ fun ScanPanel(viewModel: AppViewModel) {
                         onClick = { viewModel.stopScan() },
                         modifier = Modifier.tvFocusBorder()
                     ) {
-                        Icon(Icons.Default.Close, contentDescription = null, tint = Color(0xFFFF5252))
+                        Icon(Icons.Default.Close, contentDescription = null, tint = tvPalette.danger)
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("停止扫描", color = Color(0xFFFF5252))
+                        Text("停止扫描", color = tvPalette.danger)
                     }
                 } else {
                     OutlinedButton(
@@ -493,7 +493,7 @@ fun ScanPanel(viewModel: AppViewModel) {
             if (scanError.isNotEmpty()) {
                 Text(
                     text = scanError,
-                    color = Color(0xFFFF5252),
+                    color = tvPalette.danger,
                     fontSize = 12.sp,
                     modifier = Modifier.padding(vertical = 4.dp)
                 )
@@ -511,8 +511,8 @@ fun ScanPanel(viewModel: AppViewModel) {
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text("已扫描: ${status.scanned}/${status.total}", color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
-                    Text("有效: ${status.valid}", color = Color(0xFF4CAF50), fontSize = 13.sp)
-                    Text("无效: ${status.invalid}", color = Color(0xFFFF5252), fontSize = 13.sp)
+                    Text("有效: ${status.valid}", color = tvPalette.success, fontSize = 13.sp)
+                    Text("无效: ${status.invalid}", color = tvPalette.danger, fontSize = 13.sp)
                 }
                 LinearProgressIndicator(
                     progress = { progress },
@@ -578,9 +578,9 @@ fun ScanPanel(viewModel: AppViewModel) {
                     modifier = Modifier.tvFocusBorder().height(32.dp)
                 ) {
                     Icon(Icons.Default.FileDownload, contentDescription = null,
-                        tint = Color(0xFF4CAF50), modifier = Modifier.size(16.dp))
+                        tint = tvPalette.success, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("导出", color = Color(0xFF4CAF50), fontSize = 11.sp)
+                    Text("导出", color = tvPalette.success, fontSize = 11.sp)
                 }
                 // 清空结果
                 IconButton(
@@ -588,7 +588,7 @@ fun ScanPanel(viewModel: AppViewModel) {
                     modifier = Modifier.tvFocusBorder().size(32.dp)
                 ) {
                     Icon(Icons.Default.DeleteOutline, contentDescription = "清空结果",
-                        tint = Color(0xFFFF5252), modifier = Modifier.size(18.dp))
+                        tint = tvPalette.danger, modifier = Modifier.size(18.dp))
                 }
             }
             LazyColumn(
@@ -624,13 +624,13 @@ private fun ScanResultRow(result: ScanResult, onDelete: () -> Unit = {}) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Surface(
-                    color = if (result.valid) Color(0xFF4CAF50).copy(alpha = 0.2f)
-                            else Color(0xFFFF5252).copy(alpha = 0.2f),
+                    color = if (result.valid) tvPalette.success.copy(alpha = 0.2f)
+                            else tvPalette.danger.copy(alpha = 0.2f),
                     shape = RoundedCornerShape(3.dp)
                 ) {
                     Text(
                         text = if (result.valid) "有效" else "无效",
-                        color = if (result.valid) Color(0xFF4CAF50) else Color(0xFFFF5252),
+                        color = if (result.valid) tvPalette.success else tvPalette.danger,
                         fontSize = 10.sp,
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                     )
@@ -717,7 +717,7 @@ fun RecentFilesPanel(viewModel: AppViewModel) {
                     ) {
                         Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("清空", color = Color(0xFFE57373), fontSize = 12.sp)
+                        Text("清空", color = tvPalette.dangerSoft, fontSize = 12.sp)
                     }
                 }
             // 最近打开列表
@@ -778,7 +778,7 @@ fun RecentFilesPanel(viewModel: AppViewModel) {
                             Icon(
                                 Icons.Default.Close,
                                 contentDescription = "移除",
-                                tint = Color(0xFFE57373),
+                                tint = tvPalette.dangerSoft,
                                 modifier = Modifier.size(16.dp)
                             )
                         }

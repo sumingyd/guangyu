@@ -282,7 +282,7 @@ internal fun ReminderPopup(
                 Icon(
                     Icons.Default.Notifications,
                     contentDescription = null,
-                    tint = if (isAptv) AptvAccent else Color(0xFFFFC107),
+                    tint = if (isAptv) AptvAccent else tvPalette.favorite,
                     modifier = Modifier
                         .width(48.dp)
                         .height(48.dp)
@@ -628,7 +628,7 @@ private fun MediaBadge(
     isHighlight: Boolean = false
 ) {
     // 统一颜色：所有 badge 用 AptvAccent，除 HDR/HLG 高亮外
-    val fg = if (isHighlight) Color(0xFFFF9800)
+    val fg = if (isHighlight) tvPalette.warning
              else AptvAccent
     // 徽章：轻玻璃小卡（半透明白底+白描边），文字色保留原语义
     Surface(
