@@ -324,39 +324,49 @@ class MpvPlayback:
             # gpu-api和gpu-context必须在vo之前设置
             # 否则mpv内部锁定渲染后端后，gpu-context设置会被拒绝(错误码-7)
             # 第三阶段：支持 Vulkan GPU API，可在某些 GPU 上获得更好的性能
-            gpu_api = str(self._facade._playback_settings.get('gpu_api', 'auto')).lower()
+            gpu_api = str(self._facade._playback_settings.get('gpu_api', 'auto')).strip().lower()
+            if gpu_api not in ('auto', 'opengl', 'vulkan', 'd3d11'):
+                gpu_api = 'auto'
             if is_windows():
-                if gpu_api == 'vulkan':
+                # 用户显式选择优先，只有 auto 才走平台默认(d3d11)
+                effective_api = 'd3d11' if gpu_api == 'auto' else gpu_api
+                if effective_api == 'vulkan':
+                    # 实测(mpv 0.41)：Vulkan 必须配 gpu-context=winvk；配 win(WGL) 会
+                    # 报 "Failed initializing any suitable GPU context!" 直接无画面
                     _mpv_set_option_string(self._facade.mpv_handle, 'gpu-api', 'vulkan')
-                    _mpv_set_option_string(self._facade.mpv_handle, 'gpu-context', 'win')
+                    _mpv_set_option_string(self._facade.mpv_handle, 'gpu-context', 'winvk')
                     self._facade.logger.info("使用 Vulkan GPU API（用户配置）")
+                elif effective_api == 'opengl':
+                    _mpv_set_option_string(self._facade.mpv_handle, 'gpu-api', 'opengl')
+                    _mpv_set_option_string(self._facade.mpv_handle, 'gpu-context', 'win')
+                    self._facade.logger.info("使用 OpenGL GPU API（用户配置）")
                 else:
                     _mpv_set_option_string(self._facade.mpv_handle, 'gpu-api', 'd3d11')
                     _mpv_set_option_string(self._facade.mpv_handle, 'd3d11-sync-interval', '1')
-                # d3d11-output-csp 控制 swapchain 的初始色彩空间和底层 DXGI 格式：
-                # - srgb → R8G8B8A8_UNORM（仅支持 sRGB，运行时无法切换到 PQ）
-                # - pq   → R10G10B10A2_UNORM（支持 PQ 和 sRGB 之间动态切换）
-                # - auto → 根据初始 target-trc 选择（默认 auto 时通常选 sRGB）
-                #
-                # 根因：d3d11-output-csp=auto 在初始化时创建了 R8G8B8A8_UNORM 格式的 swapchain，
-                # 此格式不支持 PQ 色彩空间。运行时设置 target-trc=pq 后，target-colorspace-hint=yes
-                # 会让 mpv 调用 SetColorSpace1 尝试切换到 PQ，但 R8G8B8A8_UNORM 格式不支持 PQ，
-                # 切换失败，PQ 信号在 sRGB swapchain 上显示为极暗画面（用户反馈的"HDR直通画面暗"）。
-                #
-                # 修复：对于 HDR 模式（passthrough/scrgb/auto），设置 d3d11-output-csp=pq，
-                # 让 mpv 创建 R10G10B10A2_UNORM 格式的 swapchain，运行时可通过 SetColorSpace1
-                # 在 PQ 和 sRGB 之间动态切换。reinit_for_hdr_change() 切换 HDR 模式时会重新
-                # 初始化 mpv，所以根据新的 hdr_mode 设置正确的 d3d11-output-csp。
-                # 对于 tonemap/disable 模式，使用 srgb 即可。
-                #
-                # 注意：Windows 显示合成器总是支持 HDR 交换链（即使显示器是 SDR），
-                # 所以 d3d11-output-csp=pq 能成功创建 swapchain。当系统 HDR 未启用时，
-                # _apply_hdr_on_file_loaded() 会回退到 tonemap（target-trc=srgb），
-                # target-colorspace-hint=yes 会让 mpv 将 swapchain 切换回 sRGB。
-                if hdr_mode in ('passthrough', 'scrgb', 'auto'):
-                    _mpv_set_option_string(self._facade.mpv_handle, 'd3d11-output-csp', 'pq')
-                else:
-                    _mpv_set_option_string(self._facade.mpv_handle, 'd3d11-output-csp', 'srgb')
+                    # d3d11-output-csp 控制 swapchain 的初始色彩空间和底层 DXGI 格式：
+                    # - srgb → R8G8B8A8_UNORM（仅支持 sRGB，运行时无法切换到 PQ）
+                    # - pq   → R10G10B10A2_UNORM（支持 PQ 和 sRGB 之间动态切换）
+                    # - auto → 根据初始 target-trc 选择（默认 auto 时通常选 sRGB）
+                    #
+                    # 根因：d3d11-output-csp=auto 在初始化时创建了 R8G8B8A8_UNORM 格式的 swapchain，
+                    # 此格式不支持 PQ 色彩空间。运行时设置 target-trc=pq 后，target-colorspace-hint=yes
+                    # 会让 mpv 调用 SetColorSpace1 尝试切换到 PQ，但 R8G8B8A8_UNORM 格式不支持 PQ，
+                    # 切换失败，PQ 信号在 sRGB swapchain 上显示为极暗画面（用户反馈的"HDR直通画面暗"）。
+                    #
+                    # 修复：对于 HDR 模式（passthrough/scrgb/auto），设置 d3d11-output-csp=pq，
+                    # 让 mpv 创建 R10G10B10A2_UNORM 格式的 swapchain，运行时可通过 SetColorSpace1
+                    # 在 PQ 和 sRGB 之间动态切换。reinit_for_hdr_change() 切换 HDR 模式时会重新
+                    # 初始化 mpv，所以根据新的 hdr_mode 设置正确的 d3d11-output-csp。
+                    # 对于 tonemap/disable 模式，使用 srgb 即可。
+                    #
+                    # 注意：Windows 显示合成器总是支持 HDR 交换链（即使显示器是 SDR），
+                    # 所以 d3d11-output-csp=pq 能成功创建 swapchain。当系统 HDR 未启用时，
+                    # _apply_hdr_on_file_loaded() 会回退到 tonemap（target-trc=srgb），
+                    # target-colorspace-hint=yes 会让 mpv 将 swapchain 切换回 sRGB。
+                    if hdr_mode in ('passthrough', 'scrgb', 'auto'):
+                        _mpv_set_option_string(self._facade.mpv_handle, 'd3d11-output-csp', 'pq')
+                    else:
+                        _mpv_set_option_string(self._facade.mpv_handle, 'd3d11-output-csp', 'srgb')
                 _mpv_set_option_string(self._facade.mpv_handle, 'target-colorspace-hint', 'yes')
                 # 预设 SDR 默认值，避免 mpv auto 检测到 bt.1886（gamma≈2.4）
                 # 而 _apply_wcg_config/_reset_hdr_params 设置 srgb（gamma≈2.2）时
@@ -388,25 +398,36 @@ class MpvPlayback:
                         self._facade.logger.warning(f"设置gpu-context={ctx_val}失败(错误码:{ret_ctx})")
                 _mpv_set_option_string(self._facade.mpv_handle, 'force-window', 'no')
             elif is_linux():
-                if gpu_api == 'vulkan':
+                # 用户显式选择优先，只有 auto 才走平台默认(opengl)
+                if gpu_api == 'd3d11':
                     self._facade.logger.warning(
-                        "Linux 下暂不支持 gpu-api=vulkan，已改用 opengl（配置被忽略）"
+                        "Linux 不支持 gpu-api=d3d11，已回退 opengl"
                     )
+                    effective_api = 'opengl'
+                else:
+                    effective_api = 'opengl' if gpu_api == 'auto' else gpu_api
                 if hdr_mode in ('passthrough', 'scrgb'):
                     self._facade.logger.warning(
                         f"Linux/X11 下无法输出 HDR 直通信号（hdr_output_mode={hdr_mode}），将按 SDR 渲染"
                     )
-                _mpv_set_option_string(self._facade.mpv_handle, 'gpu-api', 'opengl')
-                ret_ctx = _mpv_set_option_string(self._facade.mpv_handle, 'gpu-context', 'x11')
-                if ret_ctx < 0:
-                    self._facade.logger.warning(f"设置gpu-context=x11失败(错误码:{ret_ctx})，尝试x11egl")
-                    ret_ctx = _mpv_set_option_string(self._facade.mpv_handle, 'gpu-context', 'x11egl')
-                    if ret_ctx < 0:
-                        self._facade.logger.error(f"设置gpu-context=x11egl也失败(错误码:{ret_ctx})，wid嵌入可能无法工作")
-                    else:
-                        self._facade.logger.info("设置gpu-context=x11egl成功")
+                _mpv_set_option_string(self._facade.mpv_handle, 'gpu-api', effective_api)
+                if effective_api == 'vulkan':
+                    # Vulkan 的 X11 上下文由 mpv 自行探测（不同版本上下文名不同），
+                    # 这里不写死 gpu-context，避免因上下文与 API 不匹配导致 VO 初始化失败
+                    self._facade.logger.warning(
+                        "Linux 下 gpu-api=vulkan 为实验性配置，若黑屏请切回 opengl"
+                    )
                 else:
-                    self._facade.logger.info("设置gpu-context=x11成功")
+                    ret_ctx = _mpv_set_option_string(self._facade.mpv_handle, 'gpu-context', 'x11')
+                    if ret_ctx < 0:
+                        self._facade.logger.warning(f"设置gpu-context=x11失败(错误码:{ret_ctx})，尝试x11egl")
+                        ret_ctx = _mpv_set_option_string(self._facade.mpv_handle, 'gpu-context', 'x11egl')
+                        if ret_ctx < 0:
+                            self._facade.logger.error(f"设置gpu-context=x11egl也失败(错误码:{ret_ctx})，wid嵌入可能无法工作")
+                        else:
+                            self._facade.logger.info("设置gpu-context=x11egl成功")
+                    else:
+                        self._facade.logger.info("设置gpu-context=x11成功")
                 _mpv_set_option_string(self._facade.mpv_handle, 'force-window', 'no')
 
             # 注意：_use_render_api 保存在 facade（MpvPlayerController）上，

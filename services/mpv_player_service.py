@@ -116,6 +116,10 @@ def _load_playback_settings():
         config = ConfigManager()
         s = config.load_playback_settings()
         settings.update(s)
+        # gpu_api 单一来源：Playback 有值则用，否则回退旧 VideoEQ，最后才 auto
+        if not str(s.get('gpu_api') or '').strip():
+            eq = config.load_video_eq()
+            settings['gpu_api'] = str(eq.get('gpu_api') or '').strip() or 'auto'
     except Exception as e:
         import logging as _logging
         _logging.getLogger('services.mpv_player_service').warning(

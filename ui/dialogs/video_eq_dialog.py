@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QInputDialog
 from ui.floating_dialog import FloatingDialog
 from ui.styles import AppStyles
 from core.log_manager import global_logger as logger
+from utils.platform_utils import is_linux, is_macos
 
 
 class VideoEqualizerDialog(FloatingDialog):
@@ -299,13 +300,23 @@ class VideoEqualizerDialog(FloatingDialog):
         gpu_label = QLabel(tr('gpu_api_label', 'GPU 渲染后端:'))
         gpu_row.addWidget(gpu_label)
         self.gpu_api_combo = QComboBox()
-        self.gpu_api_combo.addItem(tr('gpu_api_auto', '自动 (D3D11)'), 'auto')
+        auto_label = (tr('gpu_api_auto_linux', '自动 (OpenGL)') if is_linux()
+                      else tr('gpu_api_auto', '自动 (D3D11)'))
+        self.gpu_api_combo.addItem(auto_label, 'auto')
         self.gpu_api_combo.addItem(tr('gpu_api_d3d11', 'D3D11 (默认)'), 'd3d11')
+        self.gpu_api_combo.addItem(tr('gpu_api_opengl', 'OpenGL'), 'opengl')
         self.gpu_api_combo.addItem(tr('gpu_api_vulkan', 'Vulkan (实验性)'), 'vulkan')
         self.gpu_api_combo.setToolTip(
             tr('gpu_api_hint',
                'Vulkan 可能在部分 GPU 上获得更好性能，需重启播放器生效')
         )
+        if is_macos():
+            # macOS 强制 vo=libmpv（render API），gpu-api 不参与渲染，选项无意义
+            self.gpu_api_combo.setEnabled(False)
+            self.gpu_api_combo.setToolTip(
+                tr('gpu_api_unavailable_macos',
+                   'macOS 使用 libmpv 渲染（vo=libmpv），GPU 后端由系统决定，此选项不生效')
+            )
         gpu_row.addWidget(self.gpu_api_combo)
         gpu_row.addStretch()
         layout.addLayout(gpu_row)

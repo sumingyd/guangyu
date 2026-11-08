@@ -50,7 +50,12 @@ class VideoEqStore:
         """保存视频图像参数到 VideoEQ 节"""
         f = self._facade
         for key, value in settings.items():
-            if isinstance(value, bool):
+            if key == 'gpu_api':
+                # Playback 为唯一权威键；VideoEQ 保留一份供旧配置回退
+                val = str(value or '').strip() or 'auto'
+                f.set_value('VideoEQ', key, val)
+                f.set_value('Playback', key, val)
+            elif isinstance(value, bool):
                 f.set_value('VideoEQ', key, 'yes' if value else 'no')
             elif isinstance(value, float):
                 f.set_value('VideoEQ', key, f"{value:.3f}")
@@ -94,6 +99,9 @@ class VideoEqStore:
                     f.config.set('VideoEQ', key, value)
         if need_save:
             f.save_config()
+        canonical_gpu_api = (f.get_value('Playback', 'gpu_api', '') or '').strip()
+        if canonical_gpu_api:
+            result['gpu_api'] = canonical_gpu_api
         return result
 
     def save_subtitle_style(self, settings: dict):
