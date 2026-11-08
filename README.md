@@ -872,7 +872,6 @@ guangyu/
 │   ├── mpv_player_service.py # MPV 播放引擎（libmpv，HDR/翻转/旋转/A-V同步/运动补偿/分辨率提升/AI着色器）
 │   ├── hardware_detect_service.py # 硬件检测服务（CPU/GPU/RAM 检测 + 智能推荐）
 │   ├── mpv_validator_service.py # MPV 频道验证服务（旧版）
-│   ├── network_preheat_service.py # 网络预热服务
 │   ├── scanner_service.py     # 频道扫描服务
 │   ├── stream_quality_scorer.py # 流质量评分服务
 │   ├── subtitle_download_service.py # 在线字幕下载服务（3源聚合+IMDB中转）

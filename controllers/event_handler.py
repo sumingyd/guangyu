@@ -905,18 +905,6 @@ class EventHandler:
             except Exception as e:
                 logger.debug(f"停止台标缓存定时器失败: {e}")
 
-        # 6.6 停止DNS预取/连接预热
-        for svc_name in ('_dns_prefetcher', '_connection_preheater'):
-            svc = getattr(self.window, svc_name, None)
-            if svc:
-                for method_name in ('shutdown', 'stop'):
-                    if hasattr(svc, method_name):
-                        try:
-                            getattr(svc, method_name)()
-                        except Exception as e:
-                            logger.debug(f"停止{svc_name}失败: {e}")
-                        break
-
         # 6.7 停止EPG提醒服务
         epg_reminder = getattr(self.window, 'epg_reminder_ctrl', None)
         if epg_reminder and hasattr(epg_reminder, '_reminder_service'):

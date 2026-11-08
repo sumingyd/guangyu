@@ -159,7 +159,6 @@ HIDDEN_IMPORTS = [
     "services.mpv_player_service",
     "services.ffprobe_validator_service",
     "services.mpv_validator_service",
-    "services.network_preheat_service",
     "services.scanner_service",
     "services.thumbnail_service",
     "services.url_parser_service",

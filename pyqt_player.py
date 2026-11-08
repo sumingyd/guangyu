@@ -971,10 +971,6 @@ class IPTVPlayer(
         self._thumbnail_service = ThumbnailService(self)
         self._thumbnail_service.thumbnail_ready.connect(self._on_thumbnail_ready)
 
-        from services.network_preheat_service import DnsPrefetcher, ConnectionPreheater
-        self._dns_prefetcher = DnsPrefetcher(self)
-        self._connection_preheater = ConnectionPreheater(self)
-
         self._source_timeout_timer = None
         self._current_source_index = {}
         self._timeshift_start_time = None
