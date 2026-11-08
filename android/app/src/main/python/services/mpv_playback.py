@@ -549,7 +549,6 @@ class MpvPlayback:
                 pt_val = passthrough_map.get(passthrough, '')
                 if pt_val:
                     _mpv_set_property_string(self._facade.mpv_handle, 'audio-spdif', pt_val)
-                    _mpv_set_property_string(self._facade.mpv_handle, 'audio-passthrough', pt_val)
                     self._facade.logger.info(f"音频直通已启用: {passthrough} -> {pt_val}")
 
             cpu_count = os.cpu_count() or 1

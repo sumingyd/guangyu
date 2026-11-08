@@ -1,4 +1,4 @@
-"""网络设置域存储 — 网络/扫描/验证/服务器/映射/排序/URL 历史。"""
+"""网络设置域存储 — 网络/扫描/服务器/映射/URL 历史。"""
 
 
 class NetworkSettingsStore:
@@ -44,36 +44,6 @@ class NetworkSettingsStore:
     def load_scan_retry_settings(self):
         return {
             'enable_retry': self._facade._parse_bool(self._facade.get_value('ScanRetry', 'enable_retry', 'False'))
-        }
-
-    def save_sort_config(self, sort_config):
-        for key, value in sort_config.items():
-            self._facade.set_value('Sort', key, str(value))
-        return self._facade.save_config()
-
-    def load_sort_config(self):
-        f = self._facade
-        return {
-            'enabled': f._parse_bool(f.get_value('Sort', 'enabled', 'False')),
-            'primary_key': f.get_value('Sort', 'primary_key', 'name'),
-            'primary_order': f.get_value('Sort', 'primary_order', 'asc'),
-            'secondary_key': f.get_value('Sort', 'secondary_key', 'none'),
-            'secondary_order': f.get_value('Sort', 'secondary_order', 'asc'),
-            'group_by': f.get_value('Sort', 'group_by', 'none'),
-            'group_order': f.get_value('Sort', 'group_order', 'asc'),
-        }
-
-    def save_validation_settings(self, auto_validate: bool = False, validate_timeout: int = 10):
-        """保存验证相关设置"""
-        self._facade.set_value('Validation', 'auto_validate', str(auto_validate))
-        self._facade.set_value('Validation', 'validate_timeout', str(validate_timeout))
-        return self._facade.save_config()
-
-    def load_validation_settings(self) -> dict:
-        f = self._facade
-        return {
-            'auto_validate': f._parse_bool(f.get_value('Validation', 'auto_validate', 'False')),
-            'validate_timeout': f._parse_int(f.get_value('Validation', 'validate_timeout', '10'), 10)
         }
 
     def save_scan_engine_settings(self, engine: str):

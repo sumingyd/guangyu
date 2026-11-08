@@ -973,7 +973,7 @@ class SettingsFileOperations:
             except Exception as e:
                 global_logger.debug(f"即时应用 deinterlace={new_di} 失败: {e}")
 
-        # audio_passthrough 需要特殊处理（映射到 audio-spdif + audio-passthrough）
+        # audio_passthrough 需要特殊处理（映射到 audio-spdif）
         old_pt = old_playback.get('audio_passthrough', 'never')
         new_pt = new_playback.get('audio_passthrough', 'never')
         if old_pt != new_pt:
@@ -988,10 +988,8 @@ class SettingsFileOperations:
                     pt_val = passthrough_map.get(new_pt, '')
                     if pt_val:
                         pc.set_property_string('audio-spdif', pt_val)
-                        pc.set_property_string('audio-passthrough', pt_val)
                 else:
                     pc.set_property_string('audio-spdif', '')
-                    pc.set_property_string('audio-passthrough', '')
             except Exception as e:
                 global_logger.debug(f"即时应用 audio-passthrough={new_pt} 失败: {e}")
 

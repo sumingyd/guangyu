@@ -84,11 +84,6 @@ AUDIO_CODEC_MAP = {
 def _load_playback_settings():
     settings = {
         'hwdec': 'auto-copy',
-        'cache_secs': 1.0,
-        'demuxer_max_bytes_mib': 16,
-        'demuxer_max_back_bytes_mib': 4,
-        'enable_protocol_adaptive': True,
-        'hls_start_at_live_edge': False,
         'hls_readahead_secs': 0,
         'user_agent': DEFAULT_USER_AGENT,
         'tls_verify': False,

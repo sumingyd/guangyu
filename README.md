@@ -851,7 +851,6 @@ guangyu/
 ├── services/                   # 服务层
 │   ├── audio_visual_service.py # 音频可视化服务（7种3D样式 + FFT + 歌词）
 │   ├── autocrop_service.py    # 自动裁剪黑边服务（PIL+numpy 边缘分析）
-│   ├── batch_edit_service.py  # 批量编辑服务
 │   ├── channel_classifier.py  # 频道自动分类服务（正则规则引擎）
 │   ├── channel_cleaner.py     # 频道名称清理服务
 │   ├── channel_dedup_service.py # 频道去重服务

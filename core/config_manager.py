@@ -108,12 +108,6 @@ class ConfigManager(Singleton):
     def load_scan_retry_settings(self):
         return self._network_settings_store.load_scan_retry_settings()
 
-    def save_sort_config(self, sort_config):
-        return self._network_settings_store.save_sort_config(sort_config)
-
-    def load_sort_config(self):
-        return self._network_settings_store.load_sort_config()
-
     def load_config(self):
         with self._lock:
             if os.path.exists(self.config_file):
@@ -290,38 +284,6 @@ class ConfigManager(Singleton):
 
     def load_ui_settings(self, defaults: dict | None = None) -> dict:
         return self._window_layout_store.load_ui_settings(defaults)
-
-    def save_player_settings(self, volume: int, mute: bool = False, aspect_ratio: str = 'default'):
-        """保存播放器设置"""
-        self.set_value('Player', 'volume', str(volume))
-        self.set_value('Player', 'mute', str(mute))
-        self.set_value('Player', 'aspect_ratio', aspect_ratio)
-        return self.save_config()
-
-    def load_player_settings(self) -> dict:
-        return {
-            'volume': self._parse_int(self.get_value('Player', 'volume', '50'), 50),
-            'mute': self._parse_bool(self.get_value('Player', 'mute', 'False')),
-            'aspect_ratio': self.get_value('Player', 'aspect_ratio', 'default') or 'default'
-        }
-
-    def save_list_settings(self, auto_save: bool = True, backup_count: int = 3):
-        """保存列表相关设置"""
-        self.set_value('List', 'auto_save', str(auto_save))
-        self.set_value('List', 'backup_count', str(backup_count))
-        return self.save_config()
-
-    def load_list_settings(self) -> dict:
-        return {
-            'auto_save': self._parse_bool(self.get_value('List', 'auto_save', 'True'), True),
-            'backup_count': self._parse_int(self.get_value('List', 'backup_count', '3'), 3)
-        }
-
-    def save_validation_settings(self, auto_validate: bool = False, validate_timeout: int = 10):
-        return self._network_settings_store.save_validation_settings(auto_validate, validate_timeout)
-
-    def load_validation_settings(self) -> dict:
-        return self._network_settings_store.load_validation_settings()
 
     def save_scan_engine_settings(self, engine: str):
         return self._network_settings_store.save_scan_engine_settings(engine)
@@ -618,11 +580,6 @@ class ConfigManager(Singleton):
     def save_playback_settings(self, settings=None):
         defaults = {
             'hwdec': 'auto-copy',
-            'cache_secs': 1.0,
-            'demuxer_max_bytes_mib': 16,
-            'demuxer_max_back_bytes_mib': 4,
-            'enable_protocol_adaptive': True,
-            'hls_start_at_live_edge': False,
             'hls_readahead_secs': 0,
             'user_agent': ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
                            'AppleWebKit/537.36 (KHTML, like Gecko) '
@@ -674,11 +631,6 @@ class ConfigManager(Singleton):
     def load_playback_settings(self):
         defaults = {
             'hwdec': 'auto-copy',
-            'cache_secs': 1.0,
-            'demuxer_max_bytes_mib': 16,
-            'demuxer_max_back_bytes_mib': 4,
-            'enable_protocol_adaptive': True,
-            'hls_start_at_live_edge': False,
             'hls_readahead_secs': 0,
             'user_agent': ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
                            'AppleWebKit/537.36 (KHTML, like Gecko) '
@@ -799,34 +751,6 @@ class ConfigManager(Singleton):
 
     def clear_all_bookmarks(self):
         return self._bookmark_store.clear_all_bookmarks()
-
-    def save_timeshift_settings(self, settings):
-        for key, value in settings.items():
-            self.set_value('Timeshift', key, str(value))
-        return self.save_config()
-
-    def load_timeshift_settings(self):
-        return {
-            'enabled': self._parse_bool(self.get_value('Timeshift', 'enabled', 'True'), True),
-            'default_offset_minutes': self._parse_int(self.get_value('Timeshift', 'default_offset_minutes', '30'), 30),
-            'url_format': self.get_value('Timeshift', 'url_format', ''),
-            'time_encoding': self.get_value('Timeshift', 'time_encoding', 'unix'),
-            'start_key': self.get_value('Timeshift', 'start_key', 'startTime'),
-            'end_key': self.get_value('Timeshift', 'end_key', 'endTime'),
-            'layout': self.get_value('Timeshift', 'layout', 'start_end'),
-        }
-
-    def save_channel_merge_settings(self, settings):
-        for key, value in settings.items():
-            self.set_value('ChannelMerge', key, str(value))
-        return self.save_config()
-
-    def load_channel_merge_settings(self):
-        return {
-            'enabled': self._parse_bool(self.get_value('ChannelMerge', 'enabled', 'True'), True),
-            'merge_mode': self.get_value('ChannelMerge', 'merge_mode', 'append'),
-            'prefer_source': self.get_value('ChannelMerge', 'prefer_source', 'file'),
-        }
 
     # ---------- 字幕样式与控制 ----------
 

@@ -139,7 +139,6 @@ HIDDEN_IMPORTS = [
     "models.channel_mappings",
     "models.channel_model",
     "services",
-    "services.batch_edit_service",
     "services.channel_classifier",
     "services.channel_cleaner",
     "services.channel_rating_service",
