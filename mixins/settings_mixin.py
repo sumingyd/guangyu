@@ -21,6 +21,9 @@ class SettingsMixin:
     def show_about(self):
         self.settings_ops.show_about()
 
+    def open_log_directory(self):
+        self.settings_ops.open_log_directory()
+
     def player_settings(self):
         self.settings_ops.player_settings()
 

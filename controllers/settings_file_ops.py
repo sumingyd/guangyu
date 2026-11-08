@@ -1098,6 +1098,40 @@ class SettingsFileOperations:
         from ui.dialogs.about_dialog import AboutDialog
         AboutDialog(self.window).exec()
 
+    def open_log_directory(self):
+        """用系统文件管理器打开日志目录（app.log / crash.log 所在位置）。"""
+        import subprocess
+        import sys
+        from utils.app_paths import get_log_dir
+        from core.log_manager import global_logger as _logger
+
+        log_dir = get_log_dir()
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+        except OSError as e:
+            _logger.warning(f"创建日志目录失败: {log_dir}: {e}")
+            QMessageBox.warning(
+                self.window,
+                self._tr("log_directory_title", "日志目录"),
+                self._tr("log_directory_create_failed",
+                         "无法创建日志目录：\n{path}").format(path=log_dir))
+            return
+
+        try:
+            if sys.platform == 'win32':
+                subprocess.Popen(['explorer', os.path.normpath(log_dir)])
+            elif sys.platform == 'darwin':
+                subprocess.Popen(['open', log_dir])
+            else:
+                subprocess.Popen(['xdg-open', log_dir])
+        except OSError as e:
+            _logger.warning(f"打开日志目录失败: {log_dir}: {e}")
+            QMessageBox.information(
+                self.window,
+                self._tr("log_directory_title", "日志目录"),
+                self._tr("log_directory_open_failed",
+                         "无法自动打开文件管理器，请手动访问：\n{path}").format(path=log_dir))
+
     def show_usage_instructions(self):
         dialog = FloatingDialog(self.window, stay_on_top=False)
         tr = self._tr

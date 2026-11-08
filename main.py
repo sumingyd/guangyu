@@ -8,8 +8,23 @@ setup_environment()
 # 尽早安装异常兜底与数据迁移：即使后续 Qt 导入/初始化失败也能留下 crash.log
 from utils.crash_handler import install_crash_handler
 from utils.app_paths import migrate_legacy_data
-install_crash_handler()
+_crash_log_path = install_crash_handler()
 migrate_legacy_data()
+
+
+def _log_locations(crash_log_path: str) -> None:
+    """把日志目录与各日志文件的绝对路径写进日志开头，便于用户对照排查。"""
+    try:
+        from core.log_manager import global_logger
+        from utils.app_paths import get_log_dir
+        global_logger.info(f"日志目录: {get_log_dir()}")
+        global_logger.info(f"运行日志: {global_logger.log_file}")
+        global_logger.info(f"崩溃日志: {crash_log_path}")
+    except Exception:
+        pass
+
+
+_log_locations(_crash_log_path)
 
 from PySide6.QtCore import QEvent, QObject, QTimer, Qt, QtMsgType, qInstallMessageHandler
 from PySide6.QtGui import QColor, QIcon, QPixmap

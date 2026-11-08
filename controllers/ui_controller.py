@@ -1612,6 +1612,10 @@ class UIController:
             except Exception as e:
                 logger.debug(f"创建日志菜单失败: {e}")
 
+            open_log_dir = QAction(tr("menu_open_log_dir", "打开日志目录"), self.window)
+            open_log_dir.triggered.connect(self.window.open_log_directory)
+            help_menu.addAction(open_log_dir)
+
         except Exception as e:
             logger.error(f"创建菜单栏失败: {str(e)}")
 
