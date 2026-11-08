@@ -286,11 +286,16 @@ fun MainPlayerScreen(viewModel: AppViewModel) {
             }
             !showHome -> {
                 // 竖屏有首页可回；横屏（TV 风格）：全屏→分屏→首页→退出确认
-                // TV 无独立首页：全屏即主页，BACK 打开自带的频道列表侧边栏
-                if (layoutLandscape) {
-                    if (uiMode.isTV) {
-                        viewModel.setLandscapeSidebarVisible(true)
-                    } else if (!viewModel.landscapeSplitMode.value) {
+                // TV 无独立首页：全屏即主页，分屏是最后一层，退回全屏后再按 BACK 进入退出确认
+                // （不能重新打开侧边栏，否则 BACK 会在关/开侧边栏之间死循环）
+                if (uiMode.isTV) {
+                    if (viewModel.landscapeSplitMode.value) {
+                        viewModel.setLandscapeSplitMode(false)
+                    } else {
+                        viewModel.showExitConfirm()
+                    }
+                } else if (layoutLandscape) {
+                    if (!viewModel.landscapeSplitMode.value) {
                         viewModel.setLandscapeSplitMode(true)
                     } else {
                         viewModel.showHomeScreen()

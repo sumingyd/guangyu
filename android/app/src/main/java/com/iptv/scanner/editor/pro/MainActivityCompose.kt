@@ -521,10 +521,16 @@ class MainActivityCompose : ComponentActivity() {
                 return true
             }
             // 播放器模式返回首页（横屏：全屏→回分屏，分屏→回首页；竖屏直接回首页）
-            // TV 无独立首页：全屏即主页，BACK 打开自带的频道列表侧边栏
+            // TV 无独立首页：全屏即主页，分屏是最后一层可关闭的层，退回全屏后再按 BACK
+            // 必须落到退出确认（此前这里无条件重新打开侧边栏，导致 BACK 在
+            // 「关侧边栏→再开侧边栏」之间死循环，退出确认永远弹不出来）
             if (!viewModel.showHome.value) {
                 if (isTvMode()) {
-                    viewModel.setLandscapeSidebarVisible(true)
+                    if (viewModel.landscapeSplitMode.value) {
+                        viewModel.setLandscapeSplitMode(false)
+                    } else {
+                        viewModel.showExitConfirm()
+                    }
                 } else if (isLandscapeMode() && !viewModel.landscapeSplitMode.value) {
                     viewModel.setLandscapeSplitMode(true)
                 } else {

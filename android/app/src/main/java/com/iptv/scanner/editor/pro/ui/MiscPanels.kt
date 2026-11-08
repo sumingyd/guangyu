@@ -304,11 +304,20 @@ fun ExitConfirmDialog(viewModel: AppViewModel) {
     val activity = context as? android.app.Activity
     val isAptv = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
 
+    // 遥控器操作：弹窗出现后把焦点默认落到「取消」（安全项，避免误按 OK 直接退出），
+    // 并把整列选项设为焦点组，方向键在弹窗内上下切换。此前没有任何初始焦点，
+    // 电视端打开后焦点仍留在背后的播放页，遥控器无法确认/取消。
+    val cancelFocusRequester = remember { FocusRequester() }
+
     // iOS 风格玻璃退出弹窗：圆角玻璃卡片 + 居中标题 + 竖排选项（独立窗口走静态玻璃）
         val glass = LocalLiquidGlass.current &&
             com.iptv.scanner.editor.pro.ui.theme.isLiquidBlurSupported() &&
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
         Dialog(onDismissRequest = { viewModel.dismissExitConfirm() }) {
+            LaunchedEffect(Unit) {
+                kotlinx.coroutines.delay(50)
+                runCatching { cancelFocusRequester.requestFocus() }
+            }
             com.iptv.scanner.editor.pro.ui.theme.LiquidGlassSurface(
                 enabled = glass,
                 cornerRadius = 22.dp,
@@ -320,7 +329,7 @@ fun ExitConfirmDialog(viewModel: AppViewModel) {
             ) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.padding(top = 22.dp, bottom = 12.dp)
+                    modifier = Modifier.padding(top = 22.dp, bottom = 12.dp).focusGroup()
                 ) {
                     Text("退出应用", fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
                     Spacer(Modifier.height(6.dp))
@@ -366,7 +375,7 @@ fun ExitConfirmDialog(viewModel: AppViewModel) {
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
                     // 取消（加粗）
-                    ExitOptionRow("取消", bold = true) {
+                    ExitOptionRow("取消", bold = true, modifier = Modifier.focusRequester(cancelFocusRequester)) {
                         viewModel.dismissExitConfirm()
                     }
                 }
@@ -376,9 +385,15 @@ fun ExitConfirmDialog(viewModel: AppViewModel) {
 
 /** 退出弹窗选项行：全宽点击 + 居中文字（iOS ActionSheet 样式） */
 @Composable
-private fun ExitOptionRow(label: String, tint: Color = Color.Unspecified, bold: Boolean = false, onClick: () -> Unit) {
+private fun ExitOptionRow(
+    label: String,
+    tint: Color = Color.Unspecified,
+    bold: Boolean = false,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .tvFocusBorder(cornerRadius = 10)
             .clickable { onClick() }
