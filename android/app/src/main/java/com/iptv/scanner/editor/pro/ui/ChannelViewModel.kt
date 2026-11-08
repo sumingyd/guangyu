@@ -39,8 +39,6 @@ import com.iptv.scanner.editor.pro.mpv.MpvController
 import com.iptv.scanner.editor.pro.player.CatchupHelper
 import com.iptv.scanner.editor.pro.player.CatchupProgram
 import com.iptv.scanner.editor.pro.player.ExoPlayerWrapper
-import com.iptv.scanner.editor.pro.player.FccHelper
-import com.iptv.scanner.editor.pro.player.FccService
 import com.iptv.scanner.editor.pro.player.PlayMode
 import com.iptv.scanner.editor.pro.player.SubPlayer
 import com.iptv.scanner.editor.pro.player.SubPlayerState
@@ -279,6 +277,9 @@ internal fun AppViewModel.startCatchup(program: IptvEpgProgram, channelIdx: Int 
     timeoutSwitchJob?.cancel()
     timeoutSwitchJob = null
 
+    // 回看是单播点播流：向旧 FCC 端点补发 LEAVE，避免代理继续推送直播组播
+    fccService.onStop()
+
     // 播放 catchup URL
     mpv.playFile(catchupUrl)
 
@@ -348,6 +349,9 @@ internal fun AppViewModel.startLiveTimeshift(sliderSec: Double): Boolean {
     fileErrorSwitchJob = null
     timeoutSwitchJob?.cancel()
     timeoutSwitchJob = null
+
+    // 时移同样是单播点播流：向旧 FCC 端点补发 LEAVE
+    fccService.onStop()
 
     // 播放 timeshift URL
     mpv.playFile(catchupUrl)

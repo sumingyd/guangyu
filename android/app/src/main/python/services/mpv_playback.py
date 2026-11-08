@@ -6,6 +6,7 @@ import threading
 
 from PySide6.QtCore import QTimer
 from core.log_manager import global_logger as logger
+from services.fcc_service import is_fcc_url
 from utils.platform_utils import (
     is_windows, is_macos, is_linux, is_android,
 )
@@ -736,30 +737,6 @@ class MpvPlayback:
             self._facade.logger.debug(f"路径规范化失败，使用原始URL: {e}")
         return url
 
-    def _prefetch_next_channels(self, next_urls):
-        prefetch_count = self._facade._playback_settings.get('fcc_prefetch_count', 2)
-        urls_to_prefetch = []
-        for i, next_url in enumerate(next_urls[:prefetch_count]):
-            if not next_url or not next_url.strip():
-                continue
-            urls_to_prefetch.append(next_url)
-
-        if not urls_to_prefetch:
-            return
-
-        try:
-            import services.network_preheat_service  # noqa: F401
-            for next_url in urls_to_prefetch:
-                dns_prefetcher = getattr(self, '_dns_prefetcher', None)
-                if dns_prefetcher:
-                    dns_prefetcher.prefetch(next_url)
-                conn_preheater = getattr(self, '_connection_preheater', None)
-                if conn_preheater:
-                    conn_preheater.preheat(next_url)
-            self._facade.logger.debug(f"预取{len(urls_to_prefetch)}个相邻频道的DNS/TCP连接")
-        except Exception as e:
-            self._facade.logger.debug(f"预取相邻频道失败(非致命): {e}")
-
     def _process_events(self):
         if self._facade._terminated:
             return
@@ -1016,10 +993,11 @@ class MpvPlayback:
             return
         u = url.lower()
 
-        # FCC 频道检测：rtp2httpd 等 FCC 代理已预先加入组播并转发流，
+        # FCC 频道检测：统一走 fcc_service.resolve_fcc 的权威口径
+        # （参数大小写不敏感、位置任意，兼容 /rtp/、/udp/ 路径与直连组播）。
         # 数据到达速度快且编码通常为 H.264/H.265，可使用更小的探测参数加速首帧。
         # 非 FCC 频道保留大 probesize 以兼容 CAVS 等编码。
-        is_fcc = '?fcc=' in u
+        is_fcc = is_fcc_url(url)
 
         is_network = (u.startswith(('http://', 'https://', 'rtmp://', 'rtsp://', 'rtp://', 'udp://')) or
                       '.m3u8' in u)
@@ -1045,6 +1023,35 @@ class MpvPlayback:
             a = str(_analyze_override) if _analyze_override > 0 else str(analyzeduration)
             self._facade._set_mpv_string('demuxer-lavf-probesize', p)
             self._facade._set_mpv_string('demuxer-lavf-analyzeduration', a)
+
+        def _apply_http_options(apply_proxy=True):
+            """应用 Referer / 自定义 Header / UA / HTTP 代理。
+
+            保守策略：mpegts-over-HTTP（含 FCC 代理的 /rtp/ URL）不接管
+            http_proxy，避免把本应直连局域网的代理流量绕到外部代理，导致
+            原本可播的频道不可播；同时显式清空，防止上一个频道的代理残留。
+            """
+            headers = settings.get('http_headers', '') or ''
+            if headers:
+                header_val = headers.replace('\r\n', '\n').replace('\n', '\\n')
+                self._facade._set_mpv_string('http-header-fields', header_val)
+                self._facade.logger.debug("[mpv] http-headers set")
+            else:
+                self._facade._set_mpv_string('http-header-fields', '')
+
+            ua = settings.get('user_agent', DEFAULT_USER_AGENT)
+            if ua:
+                self._facade._set_mpv_string('user-agent', ua)
+
+            referer = settings.get('http_referer', '') or ''
+            self._facade._set_mpv_string('referrer', referer)
+            if referer:
+                self._facade.logger.debug(f"[mpv] referrer set: {referer[:50]}")
+
+            proxy = (settings.get('http_proxy', '') or '') if apply_proxy else ''
+            self._facade._set_mpv_string('http-proxy', proxy)
+            if proxy:
+                self._facade.logger.debug(f"[mpv] http-proxy set: {proxy[:50]}")
 
         is_vod = ('playseek' in u or 'starttime=' in u or 'endtime=' in u or
                   'catchup' in u or 'timeshift' in u or 'playback' in u)
@@ -1103,6 +1110,9 @@ class MpvPlayback:
             self._facade._set_cache_param('demuxer-max-bytes', f'{max_bytes_mib}MiB')
             self._facade._set_mpv_string('demuxer-max-back-bytes', f'{max_bytes_mib}MiB')
             self._facade._set_cache_param('demuxer-readahead-secs', '300')
+            if u.startswith(('http://', 'https://')):
+                # mpegts-over-HTTP（FCC 代理典型形态）也要应用 Referer/自定义 Header/UA
+                _apply_http_options(apply_proxy=False)
             self._facade.logger.debug(
                 f"[mpv] ts demux=mpegts cache={cache_secs}s "
                 f"back={max_bytes_mib}MiB dur={program_duration}s fcc={is_fcc}"
@@ -1147,32 +1157,7 @@ class MpvPlayback:
         self._facade.logger.debug(f"[mpv] generic http cache=yes seekable=yes fcc={is_fcc}")
 
         if (u.startswith('http://') or u.startswith('https://')):
-            headers = settings.get('http_headers', '')
-            if headers:
-                header_val = headers.replace('\r\n', '\n').replace('\n', '\\n')
-                self._facade._set_mpv_string('http-header-fields', header_val)
-                self._facade.logger.debug("[mpv] http-headers set")
-
-            ua = settings.get('user_agent', DEFAULT_USER_AGENT)
-            if ua:
-                self._facade._set_mpv_string('user-agent', ua)
-
-            # HTTP Referer
-            referer = settings.get('http_referer', '') or ''
-            if referer:
-                self._facade._set_mpv_string('referrer', referer)
-                self._facade.logger.debug(f"[mpv] referrer set: {referer[:50]}")
-            else:
-                self._facade._set_mpv_string('referrer', '')
-
-            # HTTP/HTTPS 代理
-            proxy = settings.get('http_proxy', '') or ''
-            if proxy:
-                # mpv 的 http-proxy 选项对 HTTP/HTTPS 流生效
-                self._facade._set_mpv_string('http-proxy', proxy)
-                self._facade.logger.debug(f"[mpv] http-proxy set: {proxy[:50]}")
-            else:
-                self._facade._set_mpv_string('http-proxy', '')
+            _apply_http_options(apply_proxy=True)
 
     def _start_live_info_timer(self):
         if hasattr(self._facade, '_live_info_timer') and self._facade._live_info_timer:
@@ -1865,52 +1850,6 @@ class MpvPlayback:
             self._facade._safe_emit(self._facade.play_error, error_msg)
             return False
 
-    def play_with_prefetch(self, url, next_urls=None, program_duration=0):
-        try:
-            self._facade.current_url = url
-            self._facade._user_stopped = False
-            self._facade._switching_channel = True
-
-            if not self._facade.mpv_handle or self._facade._terminated:
-                self._facade._safe_emit(self._facade.play_error, "mpv播放器未初始化")
-                return False
-
-            self._facade._setup_protocol_options(url, program_duration)
-
-            is_vod = 'starttime=' in url.lower() or 'endtime=' in url.lower() or 'playseek' in url.lower()
-            if is_vod:
-                self._facade._set_mpv_string('prefetch-playlist', 'no')
-            else:
-                self._facade._set_mpv_string('prefetch-playlist', 'yes')
-
-            mpv_url = self._facade._normalize_url(url)
-            with self._facade._lock:
-                if not self._facade.mpv_handle or self._facade._terminated:
-                    return False
-                result = _mpv_send_command(self._facade.mpv_handle, ['loadfile', mpv_url])
-
-            if result < 0:
-                self._facade.logger.error(f"预取播放失败: {result}")
-                return False
-
-            self._facade._set_mpv_string('pause', 'no')
-            if self._facade._current_speed != 1.0:
-                self._facade._set_mpv_string('speed', str(self._facade._current_speed))
-
-            self._facade.is_paused = False
-            self._facade.is_playing = True
-            self._facade._safe_emit(self._facade.play_state_changed, True)
-            self._facade._schedule_media_info_start()
-
-            if next_urls:
-                self._facade._prefetch_next_channels(next_urls)
-
-            self._facade.logger.debug(f"开始播放(预取模式): {url}")
-            return True
-        except Exception as e:
-            self._facade.logger.error(f"预取播放失败: {str(e)}")
-            return self._facade.play(url)
-
     def reinit_for_hdr_change(self, new_hdr_mode):
         try:
             from utils.hdr_detect import clear_hdr_cache
@@ -1959,6 +1898,14 @@ class MpvPlayback:
         # 旧流已停、新实例不加载任何内容，却仍被当作直播，且没有自动恢复路径。
         if saved_url:
             from PySide6.QtCore import QTimer
+            # HDR 重建会销毁旧 mpv 实例，FCC 会话可能已被代理释放；
+            # 重播前强制重发 JOIN，避免留下“已退出但不通知”的空档。
+            fcc_notifier = getattr(self._facade, '_fcc_notifier', None)
+            if fcc_notifier is not None:
+                try:
+                    fcc_notifier.on_channel_change(saved_url, force=True)
+                except Exception as e:
+                    self._facade.logger.debug(f"HDR切换后重发FCC通知失败: {e}")
             self._facade.play(saved_url)
             pos = saved_position
             seek_retries = [0]

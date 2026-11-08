@@ -42,6 +42,10 @@ data class IptvChannel(
     @SerialName("catchup_days") val catchupDays: String = "",
     @SerialName("catchup_source") val catchupSource: String = "",
     @SerialName("catchup_correction") val catchupCorrection: String = "",
+    /**
+     * m3u 的 fcc 扩展字段，仅用于保留反序列化契约。
+     * FCC 运行时判定只看播放 URL 中的 `fcc=` 参数（见 FccHelper.resolve），不读取本字段。
+     */
     @SerialName("fcc") val fcc: String = "",
     @SerialName("resolution") val resolution: String = "",
     /** valid: True=有效, False=无效, null=未检测 */

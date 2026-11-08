@@ -39,7 +39,6 @@ import com.iptv.scanner.editor.pro.mpv.MpvController
 import com.iptv.scanner.editor.pro.player.CatchupHelper
 import com.iptv.scanner.editor.pro.player.CatchupProgram
 import com.iptv.scanner.editor.pro.player.ExoPlayerWrapper
-import com.iptv.scanner.editor.pro.player.FccHelper
 import com.iptv.scanner.editor.pro.player.FccService
 import com.iptv.scanner.editor.pro.player.PlayMode
 import com.iptv.scanner.editor.pro.player.SubPlayer
@@ -606,8 +605,12 @@ if (consecutiveTimeoutCount > maxConsecutive) {
         }
         Log.i(TAG, "onFileError: reconnecting to same channel: $retryUrl")
         if (retryIdx >= 0) {
+            // 同址重连时 onChannelChange 会因端点相同早退，必须强制重发 JOIN，
+            // 让代理重新把组播数据推给新连接
+            fccService.resendJoin(retryUrl)
             playChannel(retryIdx, silent = true)
         } else {
+            fccService.resendJoin(retryUrl)
             mpv.playFile(retryUrl)
         }
     }
@@ -1696,8 +1699,8 @@ internal var currentIsLocalFile: Boolean
         subSyncJob?.cancel()
         reminderCheckJob?.cancel()
         resumeSaveJob?.cancel()
-        // 关闭 FCC 持久化 UDP socket
-        try { FccHelper.closeUdpSocket() } catch (_: Throwable) {}
+        // 关闭 FCC：先同步向旧端点补发 LEAVE，再关闭持久化 UDP socket
+        try { fccService.shutdown() } catch (_: Throwable) {}
         // 清理主播放器（MPV 需要 stop + detach，避免 native 资源泄漏）
         // Activity.onDestroy 已先调用一次，这里兜底确保释放
         try {

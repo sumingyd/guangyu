@@ -92,7 +92,7 @@ object CatchupHelper {
             effectiveSource = catchupSource
         }
 
-        return when (effectiveType) {
+        val built = when (effectiveType) {
             "append" -> buildAppendUrl(liveUrl, effectiveSource, correctedStartMs, correctedEndMs)
             "flussonic", "fs" -> buildFlussonicUrl(liveUrl, effectiveSource, correctedStartMs, correctedEndMs)
             "xc", "xtream" -> buildXcUrl(liveUrl, effectiveSource, correctedStartMs, correctedEndMs)
@@ -115,6 +115,47 @@ object CatchupHelper {
                     null
                 }
             }
+        }
+        // 回看/时移是单播点播流：剥离 fcc 参数，避免播放层把它当成 FCC 直播流套用
+        // 零超时与 FCC 探针参数。回退到 liveUrl 的情况仍是直播，保持原样。
+        return if (built != null && built != liveUrl) stripFccParam(built) else built
+    }
+
+    /**
+     * 剥离 URL 查询串中的 fcc 参数（大小写不敏感、位置任意），保留其余参数、
+     * fragment 与 VLC 风格的 `|` 头后缀。
+     */
+    fun stripFccParam(url: String): String {
+        val pipeIdx = url.indexOf('|')
+        val suffix = if (pipeIdx >= 0) url.substring(pipeIdx) else ""
+        val core = if (pipeIdx >= 0) url.substring(0, pipeIdx) else url
+        val q = core.indexOf('?')
+        if (q < 0) return url
+
+        val hashIdx = core.indexOf('#', q)
+        val fragment = if (hashIdx >= 0) core.substring(hashIdx) else ""
+        val path = core.substring(0, q)
+        val query = core.substring(q + 1, if (hashIdx >= 0) hashIdx else core.length)
+
+        var removed = false
+        val kept = query.split('&').filter { pair ->
+            if (pair.isEmpty()) return@filter false
+            val key = pair.substringBefore('=').trim()
+            if (key.equals("fcc", ignoreCase = true)) {
+                removed = true
+                false
+            } else {
+                true
+            }
+        }
+        if (!removed) return url
+
+        val newQuery = kept.joinToString("&")
+        return buildString {
+            append(path)
+            if (newQuery.isNotEmpty()) append('?').append(newQuery)
+            append(fragment)
+            append(suffix)
         }
     }
 
@@ -171,8 +212,13 @@ object CatchupHelper {
         // 与 PC 端对齐：source 为空时返回 liveUrl
         if (source.isEmpty()) return liveUrl
         val replaced = replaceCatchupVariables(source, startMs, endMs)
-        // source 以 ?/& 开头时直接拼接（与 PC 端一致）
-        if (replaced.startsWith("?") || replaced.startsWith("&")) return liveUrl + replaced
+        // source 以 ?/& 开头时按其分隔符语义拼接；liveUrl 已含查询串时必须用 &
+        // 并去掉 source 的前导分隔符，否则会拼出 `...?fcc=x?starttime=y` 的双问号非法 URL
+        if (replaced.startsWith("?") || replaced.startsWith("&")) {
+            val body = replaced.substring(1)
+            if (body.isEmpty()) return liveUrl
+            return if (liveUrl.contains('?')) "$liveUrl&$body" else "$liveUrl?$body"
+        }
         val sep = if (liveUrl.contains('?')) "&" else "?"
         return "$liveUrl$sep$replaced"
     }

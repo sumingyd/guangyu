@@ -4,6 +4,7 @@ import android.util.Log
 import `is`.xyz.mpv.MPVLib
 import com.iptv.scanner.editor.pro.data.UserPrefs
 import com.iptv.scanner.editor.pro.mpv.MpvProtocolConstants
+import com.iptv.scanner.editor.pro.player.FccHelper
 
 /**
  * 播放控制子控制器：playFile/stop/pause/seek/volume/mute/speed/音轨字幕切换/章节/AB循环/逐帧。
@@ -273,16 +274,29 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
         val u = url.lowercase()
         val isNetwork = u.startsWith("http://") || u.startsWith("https://") ||
                 u.startsWith("rtsp://") || u.startsWith("rtp://") || u.startsWith("udp://") ||
-                ".m3u8" in u
-        if (!isNetwork) return
+                u.startsWith("rtmp://") || ".m3u8" in u
+        if (!isNetwork) {
+            // 本地文件不参与网络协议调优，但必须复位上一频道（可能是 FCC/TS 流）留下的
+            // demuxer 与零超时参数，否则会继承 mpegts 强制解封装或永不超时的行为
+            resetProtocolOptions()
+            return
+        }
 
-        val isFcc = "?fcc=" in u
+        // FCC 判定统一走 FccHelper.resolve：调优与代理通知共用同一结果。
+        // 不允许这里再单独做字符串匹配，否则会出现“调优生效但通知静默”的分叉。
+        val fccPlan = FccHelper.resolve(url)
+        // 回看/时移是单播点播流，不得套用 FCC 的零超时与探针参数
+        val isVod = isVodLikeUrl(u)
+        val isFcc = fccPlan.isFcc && !isVod
+        if (fccPlan.isFcc && isVod) {
+            Log.i(TAG, "setupProtocolOptions: VOD/catchup 流，跳过 FCC 调优 url=$url")
+        }
         try {
             if (!u.startsWith("rtsp://")) {
                 MPVLib.setPropertyString("user-agent", MpvProtocolConstants.USER_AGENT)
             }
             if (isFcc) {
-                MPVLib.setPropertyString("stream-lavf-o", "verify=1,rw_timeout=${MpvProtocolConstants.RW_TIMEOUT_MS}")
+                MPVLib.setPropertyString("stream-lavf-o", "verify=1,rw_timeout=${MpvProtocolConstants.RW_TIMEOUT_US}")
                 MPVLib.setPropertyString("demuxer-read-timeout", "0")
                 MPVLib.setPropertyString("source-timeout", "0")
                 MPVLib.setPropertyString("network-timeout", "0")
@@ -327,21 +341,15 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
                     MPVLib.setPropertyString("demuxer", "lavf")
                     MPVLib.setPropertyString("demuxer-lavf-format", "mpegts")
                     MPVLib.setPropertyString("demuxer-lavf-buffersize", "128000")
-                    if (isFcc) {
-                        MPVLib.setPropertyString("demuxer-lavf-probesize", "2000000")
-                        MPVLib.setPropertyString("demuxer-lavf-analyzeduration", "1")
-                        MPVLib.setPropertyString("demuxer-readahead-secs", "10")
-                        MPVLib.setPropertyString("cache-secs", "60")
-                    } else {
-                        MPVLib.setPropertyString("demuxer-lavf-probesize", "2000000")
-                        MPVLib.setPropertyString("demuxer-lavf-analyzeduration", "1")
-                        MPVLib.setPropertyString("demuxer-readahead-secs", "15")
-                        MPVLib.setPropertyString("cache-secs", "120")
-                    }
+                    MPVLib.setPropertyString("demuxer-lavf-probesize", "2000000")
+                    MPVLib.setPropertyString("demuxer-lavf-analyzeduration", "1")
+                    // FCC 流缓冲更短，减少换台后首帧等待
+                    MPVLib.setPropertyString("demuxer-readahead-secs", if (isFcc) "10" else "15")
+                    MPVLib.setPropertyString("cache-secs", if (isFcc) "60" else "120")
                     MPVLib.setPropertyString("cache", "yes")
                     MPVLib.setPropertyString("force-seekable", "yes")
                     MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
-                    Log.i(TAG, "TS/UDP/RTP options: probesize=${if (isFcc) "2M" else "2M"}, readahead=${if (isFcc) "10s" else "15s"}, fcc=$isFcc")
+                    Log.i(TAG, "TS/UDP/RTP options: probesize=2M, analyzeduration=1s, readahead=${if (isFcc) 10 else 15}s, fcc=$isFcc")
                 }
                 else -> {
                     MPVLib.setPropertyString("demuxer-lavf-format", "")
@@ -363,6 +371,31 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
             }
         } catch (e: Throwable) {
             Log.w(TAG, "setupProtocolOptions failed: ${e.message}")
+        }
+    }
+
+    /**
+     * 回看 / 时移 / 点播类 URL 判定，与 PC 端 is_vod 关键字保持一致。
+     * 这类流是单播点播，不能套用 FCC 的零超时参数。
+     */
+    private fun isVodLikeUrl(lowerUrl: String): Boolean =
+        "playseek" in lowerUrl || "starttime=" in lowerUrl || "endtime=" in lowerUrl ||
+                "timeshift" in lowerUrl || "catchup" in lowerUrl || "playback" in lowerUrl
+
+    /**
+     * 复位 [setupProtocolOptions] 会改写的协议/超时参数，避免本地文件或
+     * 新协议流继承上一频道的 demuxer 与零超时设置。
+     */
+    private fun resetProtocolOptions() {
+        try {
+            MPVLib.setPropertyString("stream-lavf-o", "verify=1")
+            MPVLib.setPropertyString("demuxer-read-timeout", "5")
+            MPVLib.setPropertyString("source-timeout", "8")
+            MPVLib.setPropertyString("network-timeout", "8")
+            MPVLib.setPropertyString("demuxer", "auto")
+            MPVLib.setPropertyString("demuxer-lavf-format", "")
+        } catch (e: Throwable) {
+            Log.w(TAG, "resetProtocolOptions failed: ${e.message}")
         }
     }
 

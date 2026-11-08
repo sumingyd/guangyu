@@ -107,6 +107,13 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     @Volatile
     private var _voCache: String = "gpu"
 
+    /**
+     * 换台期间抑制 setVoAndHwdec 对**旧** URL 的二次 loadfile。
+     * 由 playChannel 在应用频道 vo/hwdec 之前置位，playFile 之后释放。
+     */
+    @Volatile
+    private var voReloadSuppressed = false
+
     private val unavailableProperties = mutableSetOf<String>()
 
     // -----------------------------------------------------------------
@@ -237,6 +244,30 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     // -----------------------------------------------------------------
     // vo / hwdec（门面保留，涉及 _voCache/_hwdecCache 和 reattachSurfaceWithVo）
     // -----------------------------------------------------------------
+
+    /**
+     * 换台前调用：抑制紧接着的那次 setVoAndHwdec 对当前（旧）URL 的二次 loadfile。
+     *
+     * playChannel 的流程是「应用频道 vo/hwdec → playFile 新 URL」，如果不抑制，
+     * setVoAndHwdec 会先把旧 URL 重新 loadfile，与 FCC JOIN 新组播的时序冲突。
+     * 必须在 playFile 之后调用 [releaseVoReloadSuppression]，避免标记滞留影响后续手动切换。
+     */
+    fun suppressVoReloadOnSwitch() {
+        voReloadSuppressed = true
+    }
+
+    /**
+     * 释放 [suppressVoReloadOnSwitch] 的标记。投递到 UI 线程队列尾部，
+     * 保证排在 setVoAndHwdec 的 UI 任务之后执行（两者共用同一个 View 的 Handler 队列）。
+     */
+    fun releaseVoReloadSuppression() {
+        if (mpvView == null) {
+            voReloadSuppressed = false
+            return
+        }
+        postOnUiThread { voReloadSuppressed = false }
+    }
+
     fun setVoAndHwdec(vo: String, hwdec: String): String? {
         val hasFile = _fileLoaded.value
         // houdini 转译层（x86 模拟器）强制软解：硬解码器 teardown 会 SIGSEGV
@@ -249,7 +280,15 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 _voCache = vo
 
                 val path = MPVLib.getPropertyString("path")
-                if (path != null && path.isNotEmpty()) {
+                // 保守处理换台时序：抑制标记，或已有新的 loadfile 在途时，
+                // 都不对旧 URL 二次 loadfile，交给随后的 playFile 一次性加载新 URL。
+                val suppressed = voReloadSuppressed
+                val superseded = playbackController.switchingChannel &&
+                        playbackController.pendingLoadUrl.isNotEmpty() &&
+                        playbackController.pendingLoadUrl != path
+                if (suppressed || superseded) {
+                    Log.i(TAG, "setVoAndHwdec: 换台在途，跳过对旧 URL 的重载 (path=$path, pending=${playbackController.pendingLoadUrl})")
+                } else if (path != null && path.isNotEmpty()) {
                     MPVLib.command(arrayOf("loadfile", path))
                     MPVLib.setPropertyBoolean("pause", false)
                 }

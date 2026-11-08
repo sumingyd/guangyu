@@ -39,8 +39,6 @@ import com.iptv.scanner.editor.pro.mpv.MpvController
 import com.iptv.scanner.editor.pro.player.CatchupHelper
 import com.iptv.scanner.editor.pro.player.CatchupProgram
 import com.iptv.scanner.editor.pro.player.ExoPlayerWrapper
-import com.iptv.scanner.editor.pro.player.FccHelper
-import com.iptv.scanner.editor.pro.player.FccService
 import com.iptv.scanner.editor.pro.player.PlayMode
 import com.iptv.scanner.editor.pro.player.SubPlayer
 import com.iptv.scanner.editor.pro.player.SubPlayerState

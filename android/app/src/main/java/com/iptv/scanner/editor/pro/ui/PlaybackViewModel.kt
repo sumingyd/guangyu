@@ -39,8 +39,6 @@ import com.iptv.scanner.editor.pro.mpv.MpvController
 import com.iptv.scanner.editor.pro.player.CatchupHelper
 import com.iptv.scanner.editor.pro.player.CatchupProgram
 import com.iptv.scanner.editor.pro.player.ExoPlayerWrapper
-import com.iptv.scanner.editor.pro.player.FccHelper
-import com.iptv.scanner.editor.pro.player.FccService
 import com.iptv.scanner.editor.pro.player.PlayMode
 import com.iptv.scanner.editor.pro.player.SubPlayer
 import com.iptv.scanner.editor.pro.player.SubPlayerState
@@ -551,9 +549,13 @@ internal fun AppViewModel.playChannel(idx: Int, silent: Boolean = false) {
         // 如果在 loadfile 之后发送（旧实现），代理不知道新频道，
         // mpv 连接后代理才开始加入组播，导致数秒延迟。
         fccService.onChannelChange(channel.url)
-        // 先应用频道专属设置（vo/hwdec），避免 loadfile 后再重建 VO 触发二次 loadfile
+        // 先应用频道专属设置（vo/hwdec），避免 loadfile 后再重建 VO 触发二次 loadfile。
+        // 换台期间抑制 setVoAndHwdec 对旧 URL 的重载：否则会把旧流重新 loadfile，
+        // 与「先 JOIN 新组播、再加载新 URL」的 FCC 时序冲突（L6）。
+        (_player.value as? MpvController)?.suppressVoReloadOnSwitch()
         applyChannelSettingsIfNeeded(idx)
         mpv.playFile(channel.url)
+        (_player.value as? MpvController)?.releaseVoReloadSuppression()
         // 超时换源必须在等待加载前启动：加载成功后定时器到点检查
         // fileLoaded 为 true 自动空转；卡死时才能触发换源
         startTimeoutSwitchSource(idx)

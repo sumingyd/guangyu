@@ -572,6 +572,9 @@ viewModel.mpv.setMute(savedMute)
                         viewModel.clearPendingSwitchPlayUrl()
                         view.post {
                             Log.i("MainPlayerScreen", "playFile after MPV attach: $pendingUrl")
+                            // 内核切换会重建 View 并重新 loadfile，旧端点可能已被代理回收；
+                            // 恢复播放前强制重发 JOIN（同址也重发）
+                            viewModel.fccService.resendJoin(pendingUrl)
                             viewModel.mpv.playFile(pendingUrl)
                         }
                     }
@@ -595,6 +598,8 @@ viewModel.mpv.setMute(savedMute)
                         viewModel.clearPendingSwitchPlayUrl()
                         exoView.post {
                             Log.i("MainPlayerScreen", "playFile after EXO attach: $pendingUrl")
+                            // 同 MPV：内核切换恢复播放前强制重发 JOIN
+                            viewModel.fccService.resendJoin(pendingUrl)
                             viewModel.mpv.playFile(pendingUrl)
                         }
                     }
