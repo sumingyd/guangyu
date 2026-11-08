@@ -1222,12 +1222,12 @@ class UIController:
             if edit_menu:
                 undo_stack = getattr(self.window, 'undo_stack', None)
                 # 撤销动作
-                undo_action = QAction(tr("menu_undo", "Undo\tCtrl+Z"), self.window)
+                undo_action = QAction(tr("menu_undo", "Undo"), self.window)
                 undo_action.setEnabled(False)
                 undo_action.triggered.connect(lambda: undo_stack.undo() if undo_stack else None)
                 edit_menu.addAction(undo_action)
                 # 重做动作
-                redo_action = QAction(tr("menu_redo", "Redo\tCtrl+Shift+Z"), self.window)
+                redo_action = QAction(tr("menu_redo", "Redo\tCtrl+Y"), self.window)
                 redo_action.setEnabled(False)
                 redo_action.triggered.connect(lambda: undo_stack.redo() if undo_stack else None)
                 edit_menu.addAction(redo_action)
@@ -1409,7 +1409,7 @@ class UIController:
             view_menu.addAction(hide_all_floating)
             self.window._hide_floating_action = hide_all_floating
 
-            show_osd = QAction(tr("menu_osd_toggle", "OSD Mask\tTab"), self.window)
+            show_osd = QAction(tr("menu_osd_toggle", "OSD Mask"), self.window)
             show_osd.setCheckable(True)
             show_osd.setChecked(self.window._osd_visible)
             show_osd.triggered.connect(lambda c: self.window.toggle_osd(c))

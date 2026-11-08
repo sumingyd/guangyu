@@ -59,14 +59,17 @@ class EventHandler:
         return False
 
     def _is_player_focus(self) -> bool:
-        """焦点是否在视频区域/主窗口空白处（此时可安全接管方向键）"""
+        """焦点是否属于播放器窗口（主窗口及其子控件），此时可安全接管方向键/空格。
+
+        判定按窗口级而非具体控件级：视频控件自身是 NoFocus，永远不会成为
+        QApplication.focusWidget()，若只认视频控件则方向键在正常启动态恒失效。
+        三块悬浮面板都是独立的 Qt::Tool 顶层窗口，其 focus_widget.window()
+        不是主窗口，因此面板内的方向键仍由面板自身（列表/网格）处理。
+        """
         focus_widget = QApplication.focusWidget()
         if focus_widget is None:
             return self.window.isActiveWindow()
-        if focus_widget is self.window:
-            return True
-        return (focus_widget is getattr(self.window, 'video_widget', None)
-                or focus_widget is getattr(self.window, 'video_frame', None))
+        return focus_widget.window() is self.window
 
     def _is_multi_screen_active(self) -> bool:
         """多画面是否激活（激活时方向键/空格由网格单元格处理）"""
@@ -175,7 +178,9 @@ class EventHandler:
                            Qt.Key.Key_PageUp, Qt.Key.Key_PageDown,
                            Qt.Key.Key_A, Qt.Key.Key_B, Qt.Key.Key_C,
                            Qt.Key.Key_BracketLeft, Qt.Key.Key_BracketRight,
-                           Qt.Key.Key_J)
+                           Qt.Key.Key_J,
+                           # 悬浮面板显隐（分发逻辑中有 Key_M，此处需对齐）
+                           Qt.Key.Key_M)
             main_only_keys = (Qt.Key.Key_Up, Qt.Key.Key_Down,
                               Qt.Key.Key_Left, Qt.Key.Key_Right)
             # Backspace 已被上方 _is_input_widget_focused() 检查拦截，此处无需重复判断
