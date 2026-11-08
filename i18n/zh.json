@@ -778,7 +778,7 @@
   "network_enhance_group_referer": "HTTP Referer",
   "network_enhance_headers_hint": "每行一个 HTTP 头，格式：Key: Value",
   "network_enhance_proxy": "代理 URL",
-  "network_enhance_proxy_hint": "支持格式：\n  http://host:port\n  https://host:port\n  socks5://host:port\n  socks5h://host:port（DNS 通过代理解析）\n留空则不使用代理。",
+  "network_enhance_proxy_hint": "仅支持 HTTP 代理：\n  http://host:port\n  https://host:port\nmpv 不支持 socks5://、socks5h://（会被忽略并直连），\n如只有 SOCKS5 请使用其本地 HTTP/混合端口。\n留空则不使用代理。",
   "network_enhance_referer": "Referer",
   "network_enhance_referer_hint": "用于绕过防盗链。留空则不设置。",
   "network_enhance_saved": "网络设置已保存",

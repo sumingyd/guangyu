@@ -183,6 +183,36 @@ def sanitize_http_header_value(value: str) -> str:
         return sanitized
 
 
+def build_mpv_http_header_fields(headers: str, referer: str = '') -> str:
+    """把多行 HTTP 头文本转换为 mpv ``http-header-fields`` 可解析的字符串。
+
+    mpv 的 http-header-fields 是 string list：条目之间用**真实换行**分隔。
+    实测（mpv 0.41）：
+    - 传入字面的反斜杠+n 不会被当作分隔符，只会污染第一个头的值；
+    - 值内的逗号会被当作条目分隔符，必须转义（逗号前加反斜杠）；
+    - 反斜杠本身不参与转义，原样保留，因此不能重复转义；
+    - 逐条 ``add`` 该属性返回 invalid parameter，不可用。
+
+    因此这里按行拆分、丢弃空行、仅转义逗号，最后用真实换行拼接。
+    referer 非空且列表里尚无 Referer 时追加一条。
+    """
+    items = []
+    has_referer = False
+    text = (headers or '').replace('\r\n', '\n').replace('\r', '\n')
+    for raw in text.split('\n'):
+        line = raw.strip()
+        if not line:
+            continue
+        if line.lower().startswith('referer:'):
+            has_referer = True
+        items.append(line.replace(',', '\\,'))
+    if referer:
+        referer = referer.strip()
+        if referer and not has_referer:
+            items.append(f'Referer: {referer}'.replace(',', '\\,'))
+    return '\n'.join(items)
+
+
 def format_file_size(size_bytes: float) -> str:
     """格式化文件大小"""
     if size_bytes == 0:

@@ -1,19 +1,20 @@
 import os
 from typing import Dict, Any, Optional
 from PySide6.QtGui import QIcon
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 from core.log_manager import global_logger as logger
 from controllers.main_window_protocol import MainWindowProtocol
 from ui.styles import AppStyles
 from services.fcc_service import FCCService
+from services.mpv_common import DEFAULT_NETWORK_TIMEOUT_SEC
 from utils.delay_constants import DelayMs
 
 
 class PlaybackController:
 
     # loadfile 之后等待 FILE_LOADED 的兜底超时；优先取播放设置中的真实网络超时
-    SOURCE_TIMEOUT_MS = 10000
+    SOURCE_TIMEOUT_MS = DEFAULT_NETWORK_TIMEOUT_SEC * 1000
 
     def __init__(self, main_window: MainWindowProtocol):
         self.window: MainWindowProtocol = main_window

@@ -7,6 +7,7 @@ from collections import deque
 from typing import Optional
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QWidget
+from utils.general_utils import build_mpv_http_header_fields
 from services.mpv_common import (
     MPV_EVENT_FILE_LOADED,
     MPV_EVENT_END_FILE,
@@ -113,9 +114,11 @@ def _capture_single(url: str, timeout: int = 8, wid: int = 0, force: bool = Fals
             from services.ffprobe_validator_service import FfprobeStreamValidator
             headers = FfprobeStreamValidator.get_headers()
             if headers:
-                import json
-                headers_json = json.dumps(headers).encode('utf-8')
-                _mpv_set_option_string(handle, 'http-header-fields', headers_json)
+                header_val = build_mpv_http_header_fields(
+                    '\n'.join(f'{k}: {v}' for k, v in headers.items())
+                )
+                if header_val:
+                    _mpv_set_option_string(handle, 'http-header-fields', header_val)
         except Exception as e:
             logger.debug(f"设置 HTTP headers 失败: {e}")
 

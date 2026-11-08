@@ -18,11 +18,11 @@ from core.log_manager import global_logger as logger
 
 # 代理格式提示
 PROXY_FORMAT_HINT = (
-    "Supported formats:\n"
+    "HTTP proxy only:\n"
     "  http://host:port\n"
     "  https://host:port\n"
-    "  socks5://host:port\n"
-    "  socks5h://host:port (DNS via proxy)\n"
+    "SOCKS5 is not supported by mpv (it is ignored and traffic goes direct).\n"
+    "Use a local HTTP/mixed port if you only have SOCKS5.\n"
     "Leave empty to disable proxy."
 )
 

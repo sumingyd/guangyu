@@ -42,6 +42,7 @@ from ui.theme_manager import get_theme_manager
 from utils.delay_constants import DelayMs
 from core.version import CURRENT_VERSION
 from services.m3u_parser import load_m3u_file
+from services.mpv_common import DEFAULT_NETWORK_TIMEOUT_SEC
 from controllers.main_window_protocol import MainWindowProtocol
 
 
@@ -903,12 +904,11 @@ class SettingsFileOperations:
         """即时应用可运行时修改的播放参数到 mpv。
 
         参数分类（基于 mpv 文档与项目代码）：
-        - 运行时可改 property（framedrop/video-sync/hwdec/audio-passthrough）：
-          直接 set_property_string 即时生效
+        - 运行时可改 property（framedrop/video-sync/hwdec/tls-verify/
+          network-timeout/audio-passthrough）：直接 set_property_string 即时生效
         - 下次切台即生效（rtsp-transport/cache-secs/demuxer-*）：
           在 _setup_protocol_options 中每次播放时重新应用，无需此处处理
-        - 必须重启 mpv 的 option（vo/tls-verify/network-timeout）：
-          运行时改不生效，记录日志提示用户
+        - 必须重启 mpv 的 option（vo）：运行时改不生效，记录日志提示用户
         """
         if not hasattr(pc, 'set_property_string'):
             return
@@ -940,6 +940,25 @@ class SettingsFileOperations:
                 pc.set_property_string(mpv_prop, str(new_val))
             except Exception as e:
                 global_logger.debug(f"即时应用 {mpv_prop}={new_val} 失败: {e}")
+
+        # TLS 校验：mpv 支持运行时写入 tls-verify（已实测），不必重启
+        old_tls = old_playback.get('tls_verify')
+        new_tls = new_playback.get('tls_verify')
+        if old_tls != new_tls and new_tls is not None:
+            try:
+                pc.set_property_string('tls-verify', 'yes' if new_tls else 'no')
+            except Exception as e:
+                global_logger.debug(f"即时应用 tls-verify={new_tls} 失败: {e}")
+
+        # 网络超时：与看门狗同口径，Auto(0) 时也写入默认值（mpv 自身默认 60s）
+        old_net = old_playback.get('network_timeout_sec')
+        new_net = new_playback.get('network_timeout_sec')
+        if old_net != new_net and new_net is not None:
+            try:
+                net_to = new_net if new_net and new_net > 0 else DEFAULT_NETWORK_TIMEOUT_SEC
+                pc.set_property_string('network-timeout', str(net_to))
+            except Exception as e:
+                global_logger.debug(f"即时应用 network-timeout={new_net} 失败: {e}")
 
         # 反交错：使用 vf 滤镜（yadif=mode=1 bob）代替 deinterlace 属性，保持帧率不变
         old_di = old_playback.get('deinterlace', 'no')
@@ -976,8 +995,8 @@ class SettingsFileOperations:
             except Exception as e:
                 global_logger.debug(f"即时应用 audio-passthrough={new_pt} 失败: {e}")
 
-        # 必须重启 mpv 的 option 变化记录日志（vo/tls-verify/network-timeout）
-        restart_required_keys = ('vo', 'tls_verify', 'network_timeout_sec')
+        # 必须重启 mpv 的 option 变化记录日志（tls-verify/network-timeout 已改为运行时生效）
+        restart_required_keys = ('vo',)
         for key in restart_required_keys:
             if old_playback.get(key) != new_playback.get(key):
                 global_logger.info(

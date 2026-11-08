@@ -4,6 +4,7 @@ import threading
 import time
 from typing import Dict
 from core.log_manager import global_logger
+from utils.general_utils import build_mpv_http_header_fields
 from services.mpv_common import (
     MPV_EVENT_FILE_LOADED,
     MPV_EVENT_END_FILE,
@@ -20,6 +21,7 @@ from services.mpv_common import (
     set_property_string as _mpv_set_property_string,
     set_option_string as _mpv_set_option_string,
     send_command as _mpv_send_command,
+    DEFAULT_NETWORK_TIMEOUT_SEC,
     wait_for_specific_event,
     wait_for_event,
     get_property_string as _mpv_get_property_string,
@@ -65,10 +67,9 @@ def _create_lightweight_mpv():
             playback = {}
 
         net_timeout = playback.get('network_timeout_sec', 0)
-        if net_timeout > 0:
-            _mpv_set_option_string(handle, 'network-timeout', str(net_timeout))
-        else:
-            _mpv_set_option_string(handle, 'network-timeout', '10')
+        if not net_timeout or net_timeout <= 0:
+            net_timeout = DEFAULT_NETWORK_TIMEOUT_SEC
+        _mpv_set_option_string(handle, 'network-timeout', str(net_timeout))
 
         user_agent = MpvStreamValidator.get_user_agent()
         if not user_agent:
@@ -78,13 +79,9 @@ def _create_lightweight_mpv():
 
         http_headers = playback.get('http_headers', '')
         referer = MpvStreamValidator.get_referer()
-        if http_headers:
-            header_val = http_headers.replace('\r\n', '\n').replace('\n', '\\n')
-            if referer and 'eferer' not in header_val:
-                header_val += f'\\nReferer: {referer}'
+        header_val = build_mpv_http_header_fields(http_headers, referer)
+        if header_val:
             _mpv_set_option_string(handle, 'http-header-fields', header_val)
-        elif referer:
-            _mpv_set_option_string(handle, 'http-header-fields', f'Referer: {referer}')
 
         if not initialize_mpv(handle):
             destroy_mpv(handle)

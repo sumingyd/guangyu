@@ -7,6 +7,7 @@ import threading
 from PySide6.QtCore import QTimer
 from core.log_manager import global_logger as logger
 from services.fcc_service import is_fcc_url
+from utils.general_utils import build_mpv_http_header_fields
 from utils.platform_utils import (
     is_windows, is_macos, is_linux, is_android,
 )
@@ -40,6 +41,7 @@ from services.mpv_common import (
     observe_property as _mpv_observe_property,
     get_property_node as _mpv_get_property_node,
     DEFAULT_USER_AGENT,
+    DEFAULT_NETWORK_TIMEOUT_SEC,
 )
 
 
@@ -486,8 +488,10 @@ class MpvPlayback:
             _mpv_set_property_string(self._facade.mpv_handle, 'audio-device', 'auto')
 
             net_to = self._facade._playback_settings.get('network_timeout_sec', 0)
-            if net_to > 0:
-                _mpv_set_property_string(self._facade.mpv_handle, 'network-timeout', str(net_to))
+            if not net_to or net_to <= 0:
+                # Auto：显式写入与看门狗/校验器相同的值，避免 mpv 用自身默认 60s
+                net_to = DEFAULT_NETWORK_TIMEOUT_SEC
+            _mpv_set_property_string(self._facade.mpv_handle, 'network-timeout', str(net_to))
 
             # 性能与卡顿优化：
             # - framedrop：视频输出慢时丢帧策略，默认 vo（VO 慢时丢帧），用户可配置
@@ -1032,12 +1036,10 @@ class MpvPlayback:
             原本可播的频道不可播；同时显式清空，防止上一个频道的代理残留。
             """
             headers = settings.get('http_headers', '') or ''
-            if headers:
-                header_val = headers.replace('\r\n', '\n').replace('\n', '\\n')
-                self._facade._set_mpv_string('http-header-fields', header_val)
+            header_val = build_mpv_http_header_fields(headers)
+            self._facade._set_mpv_string('http-header-fields', header_val)
+            if header_val:
                 self._facade.logger.debug("[mpv] http-headers set")
-            else:
-                self._facade._set_mpv_string('http-header-fields', '')
 
             ua = settings.get('user_agent', DEFAULT_USER_AGENT)
             if ua:
@@ -1131,8 +1133,11 @@ class MpvPlayback:
             # 可能导致部分 HLS 流（含损坏分片）无法正确识别编码
             _probe(5000000, 5)
 
-            if settings.get('hls_start_at_live_edge', False):
-                self._facade._set_mpv_string('hls-playlist-start', 'no')
+            if u.startswith(('http://', 'https://')):
+                # HLS 与 TS/通用分支对齐：应用 Referer/自定义 Header/UA/代理，
+                # 否则冷启动直接播 HLS 时防盗链头不生效、代理永不生效
+                _apply_http_options(apply_proxy=True)
+
             readahead = settings.get('hls_readahead_secs', 0)
             if readahead > 0:
                 self._facade._set_cache_param('demuxer-readahead-secs', str(readahead))
@@ -2055,19 +2060,22 @@ class MpvPlayback:
             self._facade.logger.error(f"切换章节失败: {e}")
             return False
 
-    def set_http_headers(self, headers: str):
+    def set_http_headers(self, headers: str) -> bool:
+        """设置自定义 HTTP 头（运行时下发，对下次 loadfile 起作用）"""
         try:
             self._facade._playback_settings['http_headers'] = headers or ''
+            header_val = build_mpv_http_header_fields(headers)
+            return self._facade._set_mpv_string('http-header-fields', header_val) >= 0
         except Exception as e:
             self._facade.logger.debug(f"设置 HTTP Headers 失败: {e}")
+            return False
 
     def set_http_proxy(self, proxy: str) -> bool:
         """设置 HTTP/HTTPS 代理（运行时生效，对下次 loadfile 起作用）
         支持格式：
           http://host:port
           https://host:port
-          socks5://host:port
-          socks5h://host:port
+        注意：libmpv/ffmpeg 不支持 socks5://、socks5h://，实测会被忽略并直连。
         """
         try:
             self._facade._playback_settings['http_proxy'] = proxy or ''

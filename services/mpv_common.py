@@ -13,6 +13,10 @@ DEFAULT_USER_AGENT = (
     "Chrome/120.0.0.0 Safari/537.36"
 )
 
+# 网络超时“自动”口径：mpv 的 network-timeout、源超时看门狗、流校验器共用同一值，
+# 避免出现 mpv 等 60s（其默认值）而 UI 10s 就判失败的口径分裂。
+DEFAULT_NETWORK_TIMEOUT_SEC = 10
+
 _mpv_loaded = False
 _env_initialized = False
 
