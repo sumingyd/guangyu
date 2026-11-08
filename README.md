@@ -44,7 +44,7 @@
 
 - **MPV 引擎驱动**：基于 libmpv 的高性能流媒体播放
 
-- **FCC 快速换台**：支持 IPTV 组播 FCC（Fast Channel Change）代理，换台时自动向 FCC 代理发送 LEAVE/JOIN 通知，消除 IGMP 加入延迟；对齐 PC 端 MPV 配置（`probesize`/`analyzeduration`/`demuxer-cache-wait`/`cache-pause-initial=no`），实现 UDP 流秒开换台，消除切台黑屏
+- **FCC 快速换台**：识别频道 URL 中的 `fcc=<IP>:<端口>` 参数（大小写不敏感、位置任意，兼容 `/rtp/`、`/udp/` 路径与直连组播），换台时向旧 FCC 端点发送 LEAVE、向新端点发送 JOIN，并对 FCC 流使用更小的 `probesize`/`analyzeduration` 以缩短首帧时间；实际加速效果取决于 FCC 服务器或代理是否支持该通知协议
 
 - **完整播放控制**：播放（▶）、暂停（▮▮）、停止（■）、音量调节、静音切换
 
@@ -491,7 +491,7 @@ Android 端采用 **Kotlin Compose + Chaquopy Python 两层架构**，与 PC 端
 
 - **DLNA 投屏**：SSDP 搜索局域网渲染设备（电视/盒子），AVTransport SOAP 推流投屏
 
-- **视频播放**：支持播放/暂停/停止、音量、倍速、画面比例、音轨/字幕切换、hwdec 软硬解切换、**FCC 秒开换台**（组播场景自动向 FCC 代理发送 LEAVE/JOIN 通知 + `probesize`/`analyzeduration` 优化，消除切台黑屏）
+- **视频播放**：支持播放/暂停/停止、音量、倍速、画面比例、音轨/字幕切换、hwdec 软硬解切换、**FCC 换台优化**（识别 URL 中的 `fcc=` 参数，按端点发送 LEAVE/JOIN 并调小 `probesize`/`analyzeduration`；实际效果依赖服务端支持）
 
 - **HDR 模式切换**：禁用/自动/色调映射/直通 4 种模式，文件加载时自动检测 HDR（gamma=pq/hlg 或 sig-peak>1.0）并应用
 

@@ -303,15 +303,18 @@ _HEADER_CATCHUP_MAP = {
 
 
 def _extract_fcc_to_channel(url: str, channel: Dict[str, Any]):
-    """从频道URL中提取FCC代理地址并保存到频道字典"""
+    """从频道URL中提取FCC代理地址并保存到频道字典。
+
+    统一走 services.fcc_service.resolve_fcc 的权威口径（大小写不敏感、
+    参数位置任意、兼容 /rtp/ 与 /udp/ 路径）。该字段仅作展示/跨端序列化用，
+    播放链路不再以它作为 FCC 判定依据。
+    """
     try:
-        from urllib.parse import urlparse, parse_qs
-        if '?fcc=' in url.lower():
-            parsed = urlparse(url)
-            qs = parse_qs(parsed.query)
-            fcc_val = qs.get('fcc', [None])
-            if fcc_val and fcc_val[0]:
-                channel['fcc'] = fcc_val[0]
+        from services.fcc_service import resolve_fcc
+        resolution = resolve_fcc(url, log_errors=False)
+        if resolution.is_fcc and resolution.endpoint:
+            ip, port = resolution.endpoint
+            channel['fcc'] = f'[{ip}]:{port}' if ':' in ip else f'{ip}:{port}'
     except Exception as e:
         logger.debug(f"_extract_fcc_to_channel: {e}")
 

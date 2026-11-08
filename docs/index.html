@@ -528,9 +528,9 @@ footer { border-top: 1px solid var(--line-soft); padding: 44px 0 56px; }
   <div class="page scene-inner">
     <p class="scene-eyebrow">01 · Playback</p>
     <h2>秒开换台，<br>如你所见。</h2>
-    <p class="sub">libmpv 高性能驱动，组播 FCC 代理消除切台黑屏——UDP 流按下换台键的瞬间，画面已经就位。</p>
+    <p class="sub">libmpv 高性能驱动，识别频道 URL 中的 FCC 参数并按端点发送 LEAVE/JOIN 通知，配合更小的探测参数缩短首帧时间——实际效果取决于 FCC 服务器或代理是否支持该协议。</p>
     <div class="cap-list">
-      <div class="cap"><span class="ci">A1</span><div><h4>FCC 快速换台</h4><p>IPTV 组播 FCC（Fast Channel Change）代理，换台时自动 LEAVE / JOIN，消除 IGMP 加入延迟。</p></div></div>
+      <div class="cap"><span class="ci">A1</span><div><h4>FCC 快速换台</h4><p>识别 IPTV 组播 FCC（Fast Channel Change）参数，换台时向旧端点发送 LEAVE、向新端点发送 JOIN，并对 FCC 流调小 probesize / analyzeduration。</p></div></div>
       <div class="cap"><span class="ci">A2</span><div><h4>MPV 引擎</h4><p>libmpv 内核 + FFprobe 流探测，probesize / 缓存参数全链路调优，秒开不等待。</p></div></div>
       <div class="cap"><span class="ci">A3</span><div><h4>HDR · WCG · 运动补偿</h4><p>5 种 HDR 显示模式、广色域、minterpolate 插帧与 AI 超分着色器，画质拉满。</p></div></div>
     </div>

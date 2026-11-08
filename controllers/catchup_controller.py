@@ -26,6 +26,28 @@ class CatchupController:
         self._pending_seek_after_cooldown: float | None = None
         self._cooldown_timer = None
 
+    def _fcc_leave(self):
+        """进入回看/时移前，向 FCC 代理补发直播源的 LEAVE。"""
+        playback_ctrl = getattr(self.window, 'playback_ctrl', None)
+        fcc = getattr(playback_ctrl, 'fcc', None)
+        if fcc:
+            try:
+                fcc.on_stop()
+            except Exception as e:
+                logger.debug(f"回看切换前发送FCC LEAVE失败: {e}")
+
+    def _fcc_switch(self, url: str):
+        """直接调用 player_controller.play 的直播路径也要同步 FCC 状态。"""
+        if not url:
+            return
+        playback_ctrl = getattr(self.window, 'playback_ctrl', None)
+        fcc = getattr(playback_ctrl, 'fcc', None)
+        if fcc:
+            try:
+                fcc.on_channel_change(url)
+            except Exception as e:
+                logger.debug(f"直播切换时同步FCC状态失败: {e}")
+
     @property
     def original_channel(self) -> dict | None:
         return self._original_channel
@@ -346,6 +368,7 @@ class CatchupController:
                     self.window.player_controller.set_speed(1.0)
                     self.window.speed_button.setText("1.0x")
 
+            self._fcc_leave()
             self.window.player_controller.play(catchup_url, f"{channel_name} - {title} ({self.window.language_manager.tr('catchup_osd', '回看')})")
             self.add_exit_catchup_button()
             if hasattr(self.window, 'media_ctrl'):
@@ -423,6 +446,7 @@ class CatchupController:
         elif self.window.player_controller and self.window.current_channel:
             url = self.window.current_channel.get('url', '')
             if url:
+                self._fcc_switch(url)
                 self.window.player_controller.play(url, channel_name)
 
         # 退出时移后已切回直播，保持直播态而非空闲态
@@ -555,6 +579,7 @@ class CatchupController:
             w._catchup_time_pos_offset = -float(position)
 
             if hasattr(w, 'player_controller') and w.player_controller:
+                self._fcc_leave()
                 w.player_controller.play(catchup_url, f"{channel_name} - {title} ({w.language_manager.tr('catchup_osd', '回看')})")
         except Exception as e:
 
@@ -759,6 +784,7 @@ class CatchupController:
             if hasattr(w, 'play_channel'):
                 w.play_channel(live_channel)
             elif w.player_controller and live_channel.get('url'):
+                self._fcc_switch(live_channel.get('url', ''))
                 w.player_controller.play(live_channel.get('url', ''), channel_name)
             return
 
@@ -837,6 +863,7 @@ class CatchupController:
         w._catchup_time_pos_offset = -float(start_offset)
 
         if hasattr(w, 'player_controller') and w.player_controller:
+            self._fcc_leave()
             w.player_controller.play(catchup_url, f"{channel_name} ({w.language_manager.tr('timeshift_resume', '时移续播')})")
 
     def start_live_timeshift_from_progress(self, slider_seconds, catchup_source, has_epg=True):
@@ -947,6 +974,7 @@ class CatchupController:
             w._progress_program_end = end_time
 
         if w.player_controller:
+            self._fcc_leave()
             w.player_controller.play(timeshift_url, f"{channel_name} ({w.language_manager.tr('timeshift_label', '时移')} {offset_str})")
         w._show_exit_timeshift_button()
         w.media_ctrl.update_catchup_indicator()

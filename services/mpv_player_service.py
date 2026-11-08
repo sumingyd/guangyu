@@ -87,7 +87,6 @@ def _load_playback_settings():
         'cache_secs': 1.0,
         'demuxer_max_bytes_mib': 16,
         'demuxer_max_back_bytes_mib': 4,
-        'fcc_prefetch_count': 2,
         'enable_protocol_adaptive': True,
         'hls_start_at_live_edge': False,
         'hls_readahead_secs': 0,
@@ -307,12 +306,6 @@ class MpvPlayerController(QObject):
 
     def play(self, url, channel_name=None, program_duration=0, **kwargs):
         return self._playback.play(url, channel_name, program_duration, **kwargs)
-
-    def play_with_prefetch(self, url, next_urls=None, program_duration=0):
-        return self._playback.play_with_prefetch(url, next_urls, program_duration)
-
-    def _prefetch_next_channels(self, next_urls):
-        return self._playback._prefetch_next_channels(next_urls)
 
     def stop(self):
         return self._playback.stop()

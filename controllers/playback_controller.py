@@ -276,7 +276,15 @@ class PlaybackController:
         url = channel.get('url', '')
         name = channel.get('name', '')
 
-        self.fcc.on_channel_change(url)
+        # 同一频道重连/重试：强制重发 JOIN，避免被“同地址早退”挡掉
+        same_as_current = bool(
+            self.current_channel and self.current_channel.get('url') == url)
+        self.fcc.on_channel_change(url, force=same_as_current)
+        # 把 FCC 通知器挂到播放器 facade 上，供 HDR 重建等绕过控制器的路径复用
+        try:
+            self.window.player_controller._fcc_notifier = self.fcc
+        except Exception as e:
+            logger.debug(f"挂载FCC通知器失败: {e}")
         self.window.player_controller.play(url)
 
         if not self._aspect_ratio_restored:

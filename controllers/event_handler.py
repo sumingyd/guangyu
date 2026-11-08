@@ -920,11 +920,12 @@ class EventHandler:
             except Exception as e:
                 logger.debug(f"停止EPG提醒服务失败: {e}")
 
-        # 6.8 停止FCC服务
-        fcc_service = getattr(self.window, '_fcc_service', None)
-        if fcc_service and hasattr(fcc_service, 'stop'):
+        # 6.8 停止FCC服务（真实持有者是 playback_controller.fcc）
+        playback_ctrl = getattr(self.window, 'playback_ctrl', None)
+        fcc_service = getattr(playback_ctrl, 'fcc', None)
+        if fcc_service and hasattr(fcc_service, 'on_stop'):
             try:
-                fcc_service.stop()
+                fcc_service.on_stop()
             except Exception as e:
                 logger.debug(f"停止FCC服务失败: {e}")
 
