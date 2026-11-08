@@ -6,6 +6,12 @@ from .log_manager import global_logger as logger
 from .config_manager import ConfigManager
 from utils.singleton import Singleton
 
+# 单个 EPG 源解压后的内容上限（仅用于防御压缩炸弹）。
+# 真实 XMLTV 源体积远超 64MB：sumingyd/epg.xml.gz 压缩包 8.6MB，解压后 105MB，
+# 旧上限 64MB 会把正常源判为异常，导致 EPG 永远下载失败。
+EPG_MAX_BYTES = 256 * 1024 * 1024
+EPG_MAX_MB = EPG_MAX_BYTES // (1024 * 1024)
+
 
 class SubscriptionManager(Singleton):
 
@@ -18,6 +24,8 @@ class SubscriptionManager(Singleton):
         self._epg_channel_names = {}
         self._last_epg_update = None
         self._epg_lock = threading.RLock()
+        # 最近一次 EPG 加载失败的可读原因（成功时为空串），供上层提示用户
+        self._last_epg_error = ''
         self._update_callbacks = []
         self._initialized = True
 
@@ -249,6 +257,7 @@ class SubscriptionManager(Singleton):
         merged_data = {}
         total_sources = len(sources)
         failed_sources = 0
+        failed_reasons = []
 
         for i, source in enumerate(sources):
             if status_callback:
@@ -268,19 +277,23 @@ class SubscriptionManager(Singleton):
                     self.update_epg_source_last_update(i, datetime.now().isoformat())
                 else:
                     failed_sources += 1
-                    logger.warning(f"EPG源加载失败或无数据: {source.get('name', '')}")
+                    reason = self._last_epg_error or '源无可用数据'
+                    failed_reasons.append(f"{source.get('name', '')}: {reason}")
+                    logger.warning(f"EPG源加载失败或无数据: {source.get('name', '')} - {reason}")
 
             except Exception as e:
                 failed_sources += 1
+                failed_reasons.append(f"{source.get('name', '')}: 异常 {e}")
                 logger.error(f"加载EPG源异常: {source.get('name', '')} - {str(e)}")
 
         # 全部源都失败时保留现有内存/磁盘缓存，避免网络异常把本地 EPG 清空
         if not merged_data:
-            logger.warning(f"所有EPG源均加载失败({failed_sources}/{total_sources})，保留现有EPG缓存")
+            detail = '；'.join(failed_reasons) if failed_reasons else '未知原因'
+            logger.warning(f"所有EPG源均加载失败({failed_sources}/{total_sources})，保留现有EPG缓存: {detail}")
             with self._epg_lock:
                 existing_channels = len(self._epg_data)
             if status_callback:
-                status_callback(f"EPG加载失败，继续使用缓存数据（{existing_channels} 个频道）")
+                status_callback(f"EPG加载失败（{detail}），继续使用缓存数据（{existing_channels} 个频道）")
             return False
         
         with self._epg_lock:
@@ -325,9 +338,10 @@ class SubscriptionManager(Singleton):
             data = self._load_single_epg(source['url'])
             
             if not data:
-                logger.warning(f"EPG源增量加载失败或无数据: {source.get('name', '')}")
+                reason = self._last_epg_error or '源无可用数据'
+                logger.warning(f"EPG源增量加载失败或无数据: {source.get('name', '')} - {reason}")
                 if status_callback:
-                    status_callback(f"EPG源加载失败: {source.get('name', '')}")
+                    status_callback(f"EPG源加载失败: {source.get('name', '')}（{reason}）")
                 return False
             
             with self._epg_lock:
@@ -408,9 +422,10 @@ class SubscriptionManager(Singleton):
 
                 return True
             else:
-                logger.warning("EPG补充源数据为空")
+                reason = self._last_epg_error or '源无可用数据'
+                logger.warning(f"EPG补充源数据为空: {epg_url} - {reason}")
                 if status_callback:
-                    status_callback("EPG数据为空")
+                    status_callback(f"EPG数据为空（{reason}）")
                 return False
 
         except Exception as e:
@@ -422,6 +437,8 @@ class SubscriptionManager(Singleton):
     def _load_single_epg(self, epg_url: str) -> dict:
         """加载单个EPG源的数据
 
+        失败时把可读原因写入 self._last_epg_error，供上层向用户展示真实原因。
+
         Args:
             epg_url: EPG源URL
 
@@ -429,6 +446,7 @@ class SubscriptionManager(Singleton):
             EPG数据字典
         """
         if not epg_url:
+            self._last_epg_error = '未配置EPG地址'
             return {}
         
         import requests
@@ -438,12 +456,12 @@ class SubscriptionManager(Singleton):
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': '*/*'
         }
-        # 限制单次 EPG 响应体大小，避免异常源/压缩炸弹打满内存
-        max_bytes = 64 * 1024 * 1024
 
         max_retries = 3
+        attempts = 0
         last_error = None
         for attempt in range(1, max_retries + 1):
+            attempts = attempt
             try:
                 logger.info(f"正在下载EPG数据: {epg_url}" + (f" (第{attempt}次尝试)" if attempt > 1 else ""))
                 # 标量超时：连接与读取各自最多 120s（http_session 统一按标量处理）
@@ -453,7 +471,8 @@ class SubscriptionManager(Singleton):
                     response.raise_for_status()
 
                     declared = response.headers.get('Content-Length', '')
-                    if declared.isdigit() and int(declared) > max_bytes:
+                    if declared.isdigit() and int(declared) > EPG_MAX_BYTES:
+                        self._last_epg_error = f"文件过大({int(declared) / 1048576:.1f}MB，上限{EPG_MAX_MB}MB)"
                         logger.error(f"EPG文件过大({declared}字节)，已跳过: {epg_url}")
                         return {}
 
@@ -462,10 +481,12 @@ class SubscriptionManager(Singleton):
                         if not chunk:
                             continue
                         buf.extend(chunk)
-                        if len(buf) > max_bytes:
-                            logger.error(f"EPG文件超过 {max_bytes} 字节上限，已中止下载: {epg_url}")
+                        if len(buf) > EPG_MAX_BYTES:
+                            self._last_epg_error = f"文件超过{EPG_MAX_MB}MB上限"
+                            logger.error(f"EPG文件超过 {EPG_MAX_BYTES} 字节上限，已中止下载: {epg_url}")
                             return {}
                     content = bytes(buf)
+                    downloaded_size = len(content)
 
                     content_encoding = response.headers.get('Content-Encoding', '')
                     url_is_gz = epg_url.lower().endswith('.gz')
@@ -475,9 +496,10 @@ class SubscriptionManager(Singleton):
                         from io import BytesIO
                         with gzip.GzipFile(fileobj=BytesIO(content)) as f:
                             # 解压同样设上限，防御压缩炸弹
-                            content = f.read(max_bytes + 1)
-                        if len(content) > max_bytes:
-                            logger.error(f"EPG解压后超过 {max_bytes} 字节上限，已跳过: {epg_url}")
+                            content = f.read(EPG_MAX_BYTES + 1)
+                        if len(content) > EPG_MAX_BYTES:
+                            self._last_epg_error = f"解压后{len(content) / 1048576:.1f}MB，超过{EPG_MAX_MB}MB上限"
+                            logger.error(f"EPG解压后超过 {EPG_MAX_BYTES} 字节上限，已跳过: {epg_url}")
                             return {}
 
                 try:
@@ -486,42 +508,58 @@ class SubscriptionManager(Singleton):
                     try:
                         epg_content = content.decode('gbk')
                     except UnicodeDecodeError:
+                        self._last_epg_error = '内容编码无法识别（非UTF-8/GBK）'
                         logger.error("无法解码EPG文件内容")
                         return {}
                 
                 if not epg_content.strip():
+                    self._last_epg_error = '下载内容为空'
+                    logger.warning(f"EPG下载内容为空: {epg_url}")
                     return {}
                 
-                logger.info(f"EPG数据下载成功: {len(content)} 字节")
+                logger.info(f"EPG数据下载成功: 解压后 {len(content)} 字节 (下载 {downloaded_size} 字节)")
                 parsed = self._parse_epg_content(epg_content)
                 if not parsed:
+                    self._last_epg_error = '解析后无节目数据'
                     logger.warning(f"EPG内容解析后为空: {epg_url}")
+                else:
+                    self._last_epg_error = ''
                 return parsed
 
             except requests.exceptions.HTTPError as e:
                 # 4xx（除 429 限流外）重试无意义，直接失败
                 status = getattr(getattr(e, 'response', None), 'status_code', 0) or 0
                 last_error = e
+                self._last_epg_error = f"请求返回 HTTP {status}"
                 logger.warning(f"EPG数据请求返回 HTTP {status}: {epg_url}")
                 if 400 <= status < 500 and status != 429:
                     break
                 if attempt < max_retries:
                     import time
                     time.sleep(2)
+            except requests.exceptions.Timeout as e:
+                last_error = e
+                self._last_epg_error = '请求超时(120s)'
+                logger.warning(f"EPG数据下载超时(第{attempt}次): {e}")
+                if attempt < max_retries:
+                    import time
+                    time.sleep(2)
             except requests.exceptions.RequestException as e:
                 last_error = e
+                self._last_epg_error = f"网络请求失败: {e}"
                 logger.warning(f"EPG数据下载失败(第{attempt}次): {e}")
                 if attempt < max_retries:
                     import time
                     time.sleep(2)
             except Exception as e:
                 last_error = e
+                self._last_epg_error = f"处理异常: {e}"
                 logger.error(f"加载EPG数据失败(第{attempt}次): {e}")
                 if attempt < max_retries:
                     import time
                     time.sleep(2)
         
-        logger.error(f"EPG数据下载最终失败(共{max_retries}次): {last_error}")
+        logger.error(f"EPG数据下载最终失败(共{attempts}次): {last_error}")
         return {}
     
     def _parse_epg_content(self, content: str) -> dict:

@@ -322,8 +322,14 @@ class SubscriptionController:
                 break
 
         def status_callback(msg):
-            logger.debug(f"EPG加载状态: {msg}")
+            # 失败原因要留在日志和状态栏里，不能再以 debug 级别吞掉
+            if '失败' in msg or '为空' in msg:
+                self._last_epg_failure_msg = msg
+                logger.warning(f"EPG加载状态: {msg}")
+            else:
+                logger.debug(f"EPG加载状态: {msg}")
 
+        self._last_epg_failure_msg = ''
         need_download_epg = not global_subscription_manager.is_epg_valid()
 
         if not need_download_epg:
@@ -376,7 +382,13 @@ class SubscriptionController:
                     from core.application_state import app_state
                     channels_count = len(app_state.channels)
                     tr = getattr(self.window.language_manager, 'tr', lambda x, y: y) if hasattr(self.window, 'language_manager') else lambda x, y: y
-                    self.window.status_bar_show_message(tr("channels_loaded", "Channels loaded: {count}").format(count=channels_count))
+                    epg_failure = getattr(self, '_last_epg_failure_msg', '')
+                    if epg_failure:
+                        # 带上真实原因（HTTP 状态码/超时/体积/解析失败等），避免只显示一句“下载失败”
+                        self.window.status_bar_show_message(epg_failure, 8000)
+                        self._last_epg_failure_msg = ''
+                    else:
+                        self.window.status_bar_show_message(tr("channels_loaded", "Channels loaded: {count}").format(count=channels_count))
 
             except Exception as e:
                 logger.error(f"刷新UI失败: {e}", exc_info=True)
