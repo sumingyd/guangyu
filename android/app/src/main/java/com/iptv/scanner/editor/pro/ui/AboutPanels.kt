@@ -245,6 +245,25 @@ fun UpdateDialog(viewModel: AppViewModel) {
     val progress = (apkState as? ApkDownloadState.Downloading)?.progress ?: 0
     val isAptv = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
     val accentColor = if (isAptv) AptvAccent else MaterialTheme.colorScheme.primary
+    val isTv = viewModel.uiMode.collectAsState().value.isTV
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    // 遥控器操作：弹窗打开后必须把焦点落到按钮上，并把按钮整组设为焦点组，
+    // 否则方向键/OK 会漏到背后播放页的全局按键逻辑（OK 会打开/关闭面板），
+    // 表现为「按 OK 弹窗就消失、按钮点不到」。与退出确认弹窗同一套修法：
+    // FocusRequester + 默认焦点 + focusGroup()。
+    val primaryFocus = remember { FocusRequester() }
+    var urlCopied by remember { mutableStateOf(false) }
+    val phase = when (apkState) {
+        is ApkDownloadState.Idle -> "idle"
+        is ApkDownloadState.Downloading -> "downloading"
+        is ApkDownloadState.Completed -> "completed"
+        is ApkDownloadState.Error -> "error"
+    }
+    LaunchedEffect(phase) {
+        kotlinx.coroutines.delay(50)
+        runCatching { primaryFocus.requestFocus() }
+    }
 
     AlertDialog(
         onDismissRequest = {
@@ -318,71 +337,117 @@ fun UpdateDialog(viewModel: AppViewModel) {
                             fontSize = 13.sp
                         )
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            "请重试，或点击「浏览器下载」跳转 GitHub 手动安装。",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 11.sp
-                        )
+                        if (isTv) {
+                            // TV 上没有可用浏览器（系统 VIEW 仅落到 BrowserStub），
+                            // 所以改为展示完整地址 + 提醒到手机/电脑打开，并支持一键复制。
+                            Text(
+                                "请先重试；若仍失败，请在手机或电脑浏览器中打开下方地址下载：",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 11.sp
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                info.downloadUrl,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 10.sp
+                            )
+                            if (urlCopied) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    "已复制下载地址，可在手机/电脑浏览器中粘贴打开。",
+                                    color = Color(0xFF4CAF50),
+                                    fontSize = 11.sp
+                                )
+                            }
+                        } else {
+                            Text(
+                                "请重试，或点击「浏览器下载」跳转 GitHub 手动安装。",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 11.sp
+                            )
+                        }
                     }
                 }
             }
         },
         confirmButton = {
-            when (apkState) {
-                is ApkDownloadState.Idle -> {
-                    TextButton(
-                        onClick = { viewModel.downloadAndInstallApk(info.downloadUrl) },
-                        modifier = Modifier.tvFocusBorder()
-                    ) { Text("立即更新", color = accentColor) }
-                }
-                is ApkDownloadState.Downloading -> {
-                    // 下载中只显示取消按钮
-                    TextButton(
-                        onClick = { viewModel.cancelApkDownload() },
-                        modifier = Modifier.tvFocusBorder()
-                    ) { Text("取消下载", color = Color(0xFFE57373)) }
-                }
-                is ApkDownloadState.Completed -> {
-                    TextButton(
-                        onClick = { viewModel.installDownloadedApk() },
-                        modifier = Modifier.tvFocusBorder()
-                    ) { Text("立即安装") }
-                }
-                is ApkDownloadState.Error -> {
-                    TextButton(
-                        onClick = { viewModel.downloadAndInstallApk(info.downloadUrl) },
-                        modifier = Modifier.tvFocusBorder()
-                    ) { Text("重试") }
-                }
-            }
-        },
-        dismissButton = {
-            when {
-                isDownloading -> {
-                    // 下载中不显示 dismissButton（避免误触关闭对话框）
-                }
-                apkState is ApkDownloadState.Completed -> {
-                    TextButton(
-                        onClick = { viewModel.dismissUpdateDialog() },
-                        modifier = Modifier.tvFocusBorder()
-                    ) { Text("关闭") }
-                }
-                else -> {
-                    val context = androidx.compose.ui.platform.LocalContext.current
-                    TextButton(
-                        onClick = {
-                            // 备用方案：跳转浏览器（用于下载失败或特殊场景）
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(info.downloadUrl))
-                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            try {
-                                context.startActivity(intent)
-                                viewModel.dismissUpdateDialog()
-                            } catch (e: Exception) {
-                                Log.e("UpdateDialog", "open browser failed", e)
-                            }
-                        },
-                        modifier = Modifier.tvFocusBorder()
-                    ) { Text(if (apkState is ApkDownloadState.Error) "浏览器下载" else "稍后提醒") }
+            // 所有按钮放在同一焦点组内：方向键在组内循环切换，OK 触发当前焦点项，
+            // 不让按键漏到弹窗背后的播放页全局逻辑。
+            Row(
+                modifier = Modifier.focusGroup(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                when (apkState) {
+                    is ApkDownloadState.Idle -> {
+                        TextButton(
+                            onClick = { viewModel.dismissUpdateDialog() },
+                            modifier = Modifier.tvFocusBorder()
+                        ) { Text("稍后提醒") }
+                        TextButton(
+                            onClick = { viewModel.downloadAndInstallApk(info.downloadUrl) },
+                            modifier = Modifier.tvFocusBorder().focusRequester(primaryFocus)
+                        ) { Text("立即更新", color = accentColor) }
+                    }
+                    is ApkDownloadState.Downloading -> {
+                        // 下载中只显示取消按钮
+                        TextButton(
+                            onClick = { viewModel.cancelApkDownload() },
+                            modifier = Modifier.tvFocusBorder().focusRequester(primaryFocus)
+                        ) { Text("取消下载", color = Color(0xFFE57373)) }
+                    }
+                    is ApkDownloadState.Completed -> {
+                        TextButton(
+                            onClick = { viewModel.dismissUpdateDialog() },
+                            modifier = Modifier.tvFocusBorder()
+                        ) { Text("关闭") }
+                        TextButton(
+                            onClick = { viewModel.installDownloadedApk() },
+                            modifier = Modifier.tvFocusBorder().focusRequester(primaryFocus)
+                        ) { Text("立即安装") }
+                    }
+                    is ApkDownloadState.Error -> {
+                        TextButton(
+                            onClick = { viewModel.dismissUpdateDialog() },
+                            modifier = Modifier.tvFocusBorder()
+                        ) { Text("关闭") }
+                        if (isTv) {
+                            // TV 无可用浏览器：改为复制下载地址（地址已在正文展示）
+                            TextButton(
+                                onClick = {
+                                    val cm = context.getSystemService(
+                                        android.content.Context.CLIPBOARD_SERVICE
+                                    ) as? android.content.ClipboardManager
+                                    cm?.setPrimaryClip(
+                                        android.content.ClipData.newPlainText(
+                                            "更新下载地址", info.downloadUrl
+                                        )
+                                    )
+                                    urlCopied = true
+                                },
+                                modifier = Modifier.tvFocusBorder()
+                            ) { Text(if (urlCopied) "已复制" else "复制链接") }
+                        } else {
+                            TextButton(
+                                onClick = {
+                                    // 备用方案：跳转浏览器（用于下载失败或特殊场景）
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(info.downloadUrl))
+                                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    try {
+                                        context.startActivity(intent)
+                                        viewModel.dismissUpdateDialog()
+                                    } catch (e: Exception) {
+                                        Log.e("UpdateDialog", "open browser failed", e)
+                                    }
+                                },
+                                modifier = Modifier.tvFocusBorder()
+                            ) { Text("浏览器下载") }
+                        }
+                        TextButton(
+                            onClick = { viewModel.downloadAndInstallApk(info.downloadUrl) },
+                            modifier = Modifier.tvFocusBorder().focusRequester(primaryFocus)
+                        ) { Text("重试") }
+                    }
                 }
             }
         }

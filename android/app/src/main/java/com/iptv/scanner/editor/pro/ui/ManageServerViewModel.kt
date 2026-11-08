@@ -928,18 +928,6 @@ internal fun AppViewModel.startValidate(timeout: Int = 10, threads: Int = 4) {
     }
 }
 
-internal fun AppViewModel.batchEditChannels(action: String, optionsJson: String = "{}") {
-    viewModelScope.launch {
-        val result = repository.batchEditChannels(action, optionsJson)
-        result.onSuccess { resp ->
-            showOsd("批量编辑", "已修改 ${resp.changed}/${resp.total} 条")
-            loadChannels()
-        }.onFailure { e ->
-            showOsd("批量编辑", "失败: ${e.message}")
-        }
-    }
-}
-
 internal fun AppViewModel.updateChannel(idx: Int, fields: Map<String, String>) {
     viewModelScope.launch {
         val result = repository.updateChannel(idx, fields)

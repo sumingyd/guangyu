@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
@@ -263,15 +264,34 @@ private fun AddMappingDialog(
     var logoUrl by remember { mutableStateOf("") }
     var groupName by remember { mutableStateOf("") }
 
+    // 遥控器：进入弹窗先把焦点落到第一个输入框（用户要用方向键+OK 输内容），
+    // 输入框与按钮各自成焦点组，避免按键漏到弹窗背后的播放页/外层面板；
+    // 等比延迟等待 Dialog 窗口真正拿到焦点后再 requestFocus，失败时重试一次。
+    val firstFieldFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(100)
+        if (runCatching { firstFieldFocus.requestFocus() }.isFailure) {
+            kotlinx.coroutines.delay(200)
+            runCatching { firstFieldFocus.requestFocus() }
+        }
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("添加用户映射") },
         text = {
-            Column {
+            // verticalScroll + imePadding：键盘弹出压缩窗口时可滚动，输入框不被遮挡
+            Column(
+                modifier = Modifier
+                    .focusGroup()
+                    .verticalScroll(rememberScrollState())
+                    .imePadding()
+            ) {
                 OutlinedTextField(
                     value = rawName, onValueChange = { rawName = it },
                     label = { Text("原始频道名") },
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).tvTextField(),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                        .tvTextField().focusRequester(firstFieldFocus),
                     singleLine = true
                 )
                 OutlinedTextField(
@@ -294,18 +314,23 @@ private fun AddMappingDialog(
                 )
             }
         },
+        // 两个按钮合并到同一焦点组：方向键可在「取消」「添加」间切换，OK 触发
         confirmButton = {
-            TextButton(
-                onClick = { onAdd(rawName, standardName, logoUrl, groupName) },
-                enabled = rawName.isNotBlank() && standardName.isNotBlank(),
-                modifier = Modifier.tvFocusBorder()
-            ) { Text("添加") }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = onDismiss,
-                modifier = Modifier.tvFocusBorder()
-            ) { Text("取消") }
+            Row(
+                modifier = Modifier.focusGroup(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.tvFocusBorder()
+                ) { Text("取消") }
+                TextButton(
+                    onClick = { onAdd(rawName, standardName, logoUrl, groupName) },
+                    enabled = rawName.isNotBlank() && standardName.isNotBlank(),
+                    modifier = Modifier.tvFocusBorder()
+                ) { Text("添加") }
+            }
         }
     )
 }

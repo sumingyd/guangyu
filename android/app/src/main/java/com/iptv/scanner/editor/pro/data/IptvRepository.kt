@@ -363,10 +363,6 @@ class IptvRepository private constructor() {
     suspend fun startValidate(timeout: Int = 10, threads: Int = 4): Result<Boolean> =
         callPyTyped<StartedResponse>("start_validate", timeout, threads).map { it.started }
 
-    /** 批量编辑频道 */
-    suspend fun batchEditChannels(action: String, optionsJson: String = "{}"): Result<BatchEditResponse> =
-        callPyTyped("batch_edit_channels", action, optionsJson)
-
     // -----------------------------------------------------------------
     // 频道映射
     // -----------------------------------------------------------------

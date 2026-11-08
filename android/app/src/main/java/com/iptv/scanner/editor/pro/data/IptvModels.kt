@@ -385,12 +385,6 @@ data class StartedResponse(
 )
 
 @Serializable
-data class BatchEditResponse(
-    @SerialName("changed") val changed: Int = 0,
-    @SerialName("total") val total: Int = 0,
-)
-
-@Serializable
 data class PlaybackSettingsResponse(
     @SerialName("settings") val settings: Map<String, String> = emptyMap(),
 )
