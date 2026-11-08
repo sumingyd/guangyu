@@ -1045,6 +1045,20 @@ internal fun AppViewModel.startSpectrumSampling() {
                     } else 0f
                     spectrum[i] = normalized
                 }
+                // 空闲停绘：有音频能量时立即苏醒；空闲期间不再推送新帧（避免 20Hz 重组/重绘）
+                var maxAmp = 0f
+                for (a in spectrum) if (a > maxAmp) maxAmp = a
+                if (maxAmp > AppViewModel.AUDIO_ACTIVE_THRESHOLD) {
+                    lastAudioAt = android.os.SystemClock.elapsedRealtime()
+                    if (_idle.value) {
+                        _idle.value = false
+                        Log.i(AppViewModel.TAG, "[IDLE] exit reason=audio droppedFrames=${spectrumFramesDropped.get()}")
+                    }
+                }
+                if (_idle.value) {
+                    spectrumFramesDropped.incrementAndGet()
+                    return
+                }
                 _audioSpectrum.value = spectrum
             }
         }, android.media.audiofx.Visualizer.getMaxCaptureRate(), false, true)

@@ -11,10 +11,14 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.runtime.collectAsState
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.lifecycleScope
 import com.iptv.scanner.editor.pro.mpv.MpvController
 import com.iptv.scanner.editor.pro.ui.AppViewModel
+import com.iptv.scanner.editor.pro.ui.ScreenSaverOverlay
 import com.iptv.scanner.editor.pro.ui.MainPlayerScreen
 import com.iptv.scanner.editor.pro.ui.SplashScreen
 import com.iptv.scanner.editor.pro.ui.UiMode
@@ -87,6 +91,9 @@ class MainActivityCompose : ComponentActivity() {
     /** OK 键长按标记：长按显示控制层，跳过短按逻辑（打开统一面板） */
     private var okKeyLongPressed = false
 
+    /** 屏保退出时被吞掉按下的按键码（-1 表示无），用于同时吞掉配对的 ACTION_UP */
+    private var screenSaverKeyCode = -1
+
     /** 触控滑动检测：记录 ACTION_DOWN 坐标，ACTION_UP 时判断是否为滑动 */
     private var touchDownX = 0f
     private var touchDownY = 0f
@@ -148,9 +155,13 @@ class MainActivityCompose : ComponentActivity() {
             val themeMode by viewModel.themeMode.collectAsState()
             IptvTheme(themeMode = themeMode) {
                 val initState by viewModel.initState.collectAsState()
-                when (initState) {
-                    is InitState.Ready -> MainPlayerScreen(viewModel)
-                    else -> SplashScreen(viewModel)
+                Box(modifier = Modifier.fillMaxSize()) {
+                    when (initState) {
+                        is InitState.Ready -> MainPlayerScreen(viewModel)
+                        else -> SplashScreen(viewModel)
+                    }
+                    // 屏保覆盖层：未激活时内部直接 return，不采样、不占帧
+                    ScreenSaverOverlay(viewModel)
                 }
             }
         }
@@ -399,7 +410,33 @@ class MainActivityCompose : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        viewModel.noteAppForeground(true)
+    }
+
+    override fun onPause() {
+        viewModel.noteAppForeground(false)
+        super.onPause()
+    }
+
      override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // 空闲停绘/屏保：任意按键按下即视为用户操作。
+        // 屏保可见时，这一下按键只用于「退出屏保」，并在最前面吞掉：
+        // 不会继续走到面板开关、BACK 逐层关闭、退出确认等分支，因此不存在
+        // 「退出屏保顺带关掉别的层」或「BACK 死循环」；屏保只在无面板时出现，
+        // 逻辑上也没有别的层可关。后续按键恢复正常分发。
+        // 同时吞掉配对的 ACTION_UP，避免出现「有抬起无按下」导致 BACK 在
+        // Activity 兜底路径上被误判为单击。
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            val wasScreenSaver = viewModel.screenSaverVisible.value
+            viewModel.noteUserInput()
+            screenSaverKeyCode = if (wasScreenSaver) event.keyCode else -1
+            if (wasScreenSaver) return true
+        } else if (event.action == KeyEvent.ACTION_UP && event.keyCode == screenSaverKeyCode) {
+            screenSaverKeyCode = -1
+            return true
+        }
         if (isTvMode()) {
             val kc = event.keyCode
             val isOk = kc == KeyEvent.KEYCODE_DPAD_CENTER || kc == KeyEvent.KEYCODE_ENTER
@@ -455,6 +492,17 @@ class MainActivityCompose : ComponentActivity() {
             }
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
+        // 空闲停绘/屏保：触摸（车机/手机）同样视为用户操作。
+        // 屏保可见时吞掉这一下触摸，只用于退出屏保。
+        if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+            val wasScreenSaver = viewModel.screenSaverVisible.value
+            viewModel.noteUserInput()
+            if (wasScreenSaver) return true
+        }
+        return super.onTouchEvent(event)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {

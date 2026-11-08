@@ -39,6 +39,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AspectRatio
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Brightness4
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CropFree
@@ -723,6 +724,8 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
     val liquidGlass by viewModel.liquidGlass.collectAsState()
     val bootStart by viewModel.bootStart.collectAsState()
     val bottomBarStyle by viewModel.bottomBarStyle.collectAsState()
+    val screenSaverEnabled by viewModel.screenSaverEnabled.collectAsState()
+    val screenSaverTimeout by viewModel.screenSaverTimeoutMinutes.collectAsState()
     val isMpv = playerType == PlayerType.MPV
     // 横屏（TV/平板）首页：面板入口走右侧详情路由（master-detail），竖屏走弹窗
     val isLandscape = androidx.compose.ui.platform.LocalConfiguration.current.orientation ==
@@ -731,11 +734,11 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
     // 底栏 TAB 的 UP 落点 + 详情关闭后的焦点回归：设置列表每一行都挂 FocusRequester。
     // - 底栏居中悬浮、正上方是 Mini 播放条，几何 UP 永远只会回到播放条，入口必须显式注册；
     // - BACK 关闭右侧详情后，焦点回到「进入详情前那一行」，而不是永远回第一项。
-    val rowFocuses = remember { List(15) { FocusRequester() } }
-    val rowBrings = remember { List(15) { BringIntoViewRequester() } }
+    val rowFocuses = remember { List(17) { FocusRequester() } }
+    val rowBrings = remember { List(17) { BringIntoViewRequester() } }
     var lastFocusedRow by remember { mutableStateOf(0) }
     val scrollScope = rememberCoroutineScope()
-    // 行序号：0-4 通用，5-11 播放，12-13 频道，14 关于
+    // 行序号：0-4 通用，5-11 播放，12-13 频道，14-15 屏保，16 关于
     // 显式接管上下键：目标行在可视区外时几何焦点搜索命中不了（整列滚动的视口外节点），
     // 只靠 bringIntoView 会「先要焦点再滚动」形成死锁，到了「视图设置」就停住。
     fun moveRowFocus(from: Int, dir: Int) {
@@ -800,7 +803,7 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
     }
 
     androidx.compose.runtime.CompositionLocalProvider(LocalLiquidGlass provides liquidGlass) {
-    // 用整列滚动而不是 LazyColumn：设置行数固定（15 行），一次性组合能保证分组之间
+    // 用整列滚动而不是 LazyColumn：设置行数固定（17 行），一次性组合能保证分组之间
     // 没有「尚未组合的间隙」，遥控器 UP/DOWN 可在整列中连续移动；LazyColumn 跨 item
     // 的焦点搜索在未组合区域会断裂，焦点会从「开机自启」直接逃逸到底栏。
     Column(
@@ -886,9 +889,36 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
             }
         }
 
+        AptvSectionHeader("屏保")
+        AptvGroupCard {
+            AptvSwitchRow(
+                Icons.Default.Bedtime,
+                "屏保",
+                checked = screenSaverEnabled,
+                onCheckedChange = { viewModel.setScreenSaverEnabled(it) },
+                modifier = rowModifier(14)
+            )
+            AptvRow(
+                Icons.Default.Schedule,
+                "屏保等待",
+                value = "$screenSaverTimeout 分钟",
+                disabled = !screenSaverEnabled,
+                modifier = rowModifier(15)
+            ) {
+                val next = when (screenSaverTimeout) {
+                    1 -> 5
+                    5 -> 10
+                    10 -> 30
+                    30 -> 60
+                    else -> 1
+                }
+                viewModel.setScreenSaverTimeoutMinutes(next)
+            }
+        }
+
         AptvSectionHeader(stringResource(R.string.aptv_group_about))
         AptvGroupCard {
-            AptvRow(Icons.Default.Info, stringResource(R.string.settings_about), modifier = rowModifier(14)) {
+            AptvRow(Icons.Default.Info, stringResource(R.string.settings_about), modifier = rowModifier(16)) {
                 splitDetailOrToggle(isLandscape, viewModel.aboutPanelOpen, { AboutPanel(viewModel = viewModel) }) { viewModel.toggleAboutPanel() }
             }
         }

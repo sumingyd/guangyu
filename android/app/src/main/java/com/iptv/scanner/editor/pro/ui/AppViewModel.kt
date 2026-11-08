@@ -1009,6 +1009,138 @@ internal var currentIsLocalFile: Boolean
         _audioSpectrumError.value = msg
     }
 
+    // ---------------- 空闲停绘（C） ----------------
+    // 判定：连续 [IDLE_TIMEOUT_MS] 无用户输入 + 最近 2s 无音频能量 + 无任何面板打开 + 屏保未激活。
+    // 处于空闲时，频谱回调不再向 UI 推送新数据（停止重绘与重组），音频恢复或用户按键时立刻恢复。
+    internal val _idle = MutableStateFlow(false)
+    val idle: StateFlow<Boolean> = _idle.asStateFlow()
+
+    /** 屏保激活标志（D 使用）。屏保需要自己的动画，激活期间不算空闲 */
+    internal val _screenSaverActive = MutableStateFlow(false)
+
+    // ---------------- 屏保（D） ----------------
+    /** 屏保是否正在显示 */
+    internal val _screenSaverVisible = MutableStateFlow(false)
+    val screenSaverVisible: StateFlow<Boolean> = _screenSaverVisible.asStateFlow()
+
+    /** 屏保开关（设置项，持久化到 UserPrefs） */
+    internal val _screenSaverEnabled = MutableStateFlow(userPrefs.isScreenSaverEnabled())
+    val screenSaverEnabled: StateFlow<Boolean> = _screenSaverEnabled.asStateFlow()
+
+    /** 进入屏保前的等待时间（分钟） */
+    internal val _screenSaverTimeoutMinutes = MutableStateFlow(userPrefs.getScreenSaverTimeoutMinutes())
+    val screenSaverTimeoutMinutes: StateFlow<Int> = _screenSaverTimeoutMinutes.asStateFlow()
+
+    /** 应用是否在前台（后台不进入屏保） */
+    @Volatile
+    internal var appForeground: Boolean = true
+
+    fun setScreenSaverEnabled(enabled: Boolean) {
+        _screenSaverEnabled.value = enabled
+        userPrefs.setScreenSaverEnabled(enabled)
+        if (!enabled) dismissScreenSaver("disabled")
+        Log.i(TAG, "[SS] enabled=$enabled")
+    }
+
+    fun setScreenSaverTimeoutMinutes(minutes: Int) {
+        val v = minutes.coerceIn(1, 60)
+        _screenSaverTimeoutMinutes.value = v
+        userPrefs.setScreenSaverTimeoutMinutes(v)
+        Log.i(TAG, "[SS] timeout=${v}min")
+    }
+
+    fun noteAppForeground(foreground: Boolean) {
+        appForeground = foreground
+        if (!foreground) dismissScreenSaver("background")
+    }
+
+    fun dismissScreenSaver(reason: String = "input") {
+        if (!_screenSaverVisible.value) return
+        _screenSaverVisible.value = false
+        _screenSaverActive.value = false
+        lastUserInputAt = android.os.SystemClock.elapsedRealtime()
+        Log.i(TAG, "[SS] dismiss reason=$reason")
+    }
+
+    private fun evaluateScreenSaver() {
+        if (!_screenSaverEnabled.value) return
+        if (!appForeground) return
+        if (_screenSaverVisible.value) return
+        val playing = _playbackState.value.mode.isPlaying && !_player.value.paused.value
+        val timeoutMs = _screenSaverTimeoutMinutes.value * 60_000L
+        val now = android.os.SystemClock.elapsedRealtime()
+        val idleFor = now - lastUserInputAt
+        if (!playing && !anyPanelOpen && idleFor >= timeoutMs) {
+            _screenSaverVisible.value = true
+            _screenSaverActive.value = true
+            Log.i(
+                TAG,
+                "[SS] show idleFor=${idleFor}ms timeout=${_screenSaverTimeoutMinutes.value}min" +
+                    " playing=$playing panelsOpen=${anyPanelOpen}"
+            )
+        }
+    }
+
+    @Volatile
+    internal var lastUserInputAt: Long = android.os.SystemClock.elapsedRealtime()
+
+    @Volatile
+    internal var lastAudioAt: Long = 0L
+
+    /** 观测点：进入空闲次数 / 空闲期间丢弃的频谱帧数 */
+    internal val idleEnterCount = java.util.concurrent.atomic.AtomicInteger()
+    internal val spectrumFramesDropped = java.util.concurrent.atomic.AtomicInteger()
+
+    /** 记录一次用户操作（按键/触摸），立即退出空闲与屏保 */
+    fun noteUserInput() {
+        lastUserInputAt = android.os.SystemClock.elapsedRealtime()
+        if (_screenSaverVisible.value) dismissScreenSaver("user-input")
+        if (_idle.value) {
+            _idle.value = false
+            Log.i(TAG, "[IDLE] exit reason=user-input enterCount=${idleEnterCount.get()} droppedFrames=${spectrumFramesDropped.get()}")
+        }
+    }
+
+    private fun evaluateIdle() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val silentFor = now - lastAudioAt
+        val inputIdleFor = now - lastUserInputAt
+        val panelsOpen = anyPanelOpen
+        val shouldIdle = silentFor > AUDIO_SILENCE_MS &&
+            inputIdleFor >= IDLE_TIMEOUT_MS && !panelsOpen && !_screenSaverActive.value
+        if (shouldIdle && !_idle.value) {
+            _idle.value = true
+            idleEnterCount.incrementAndGet()
+            Log.i(
+                TAG,
+                "[IDLE] enter after ${inputIdleFor}ms no-input / ${silentFor}ms silent" +
+                    " enterCount=${idleEnterCount.get()}"
+            )
+        } else if (!shouldIdle && _idle.value) {
+            _idle.value = false
+            Log.i(
+                TAG,
+                "[IDLE] exit reason=" + when {
+                    _screenSaverActive.value -> "screensaver"
+                    panelsOpen -> "panel-open"
+                    silentFor <= AUDIO_SILENCE_MS -> "audio"
+                    else -> "input"
+                } + " droppedFrames=${spectrumFramesDropped.get()}"
+            )
+        }
+    }
+
+    init {
+        // 每 1s 评估一次空闲状态（廉价定时器，空闲后视觉侧不再产生新帧）
+        viewModelScope.launch {
+            while (true) {
+                delay(1_000L)
+                evaluateIdle()
+                evaluateScreenSaver()
+            }
+        }
+    }
+
     /** 歌词面板 */
     internal val _lyricsOpen = MutableStateFlow(false)
     val lyricsOpen: StateFlow<Boolean> = _lyricsOpen.asStateFlow()
@@ -1752,6 +1884,15 @@ internal var currentIsLocalFile: Boolean
         internal const val GITHUB_LATEST_API = "https://api.github.com/repos/sumingyd/guangyu/releases/latest"
         /** 频谱频段数（可视化面板/信息 Tab 等所有界面共用） */
         internal const val AUDIO_SPECTRUM_BANDS = 64
+
+        /** 空闲停绘：连续无操作多久进入空闲（60s） */
+        internal const val IDLE_TIMEOUT_MS = 60_000L
+
+        /** 最近多久没有音频能量即视为静音（2s） */
+        internal const val AUDIO_SILENCE_MS = 2_000L
+
+        /** 频谱能量阈值：超过即视为有声音（0-1 归一化） */
+        internal const val AUDIO_ACTIVE_THRESHOLD = 0.02f
 
         fun factory(app: Application): ViewModelProvider.AndroidViewModelFactory =
             object : ViewModelProvider.AndroidViewModelFactory(app) {}

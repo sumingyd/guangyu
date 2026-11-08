@@ -211,6 +211,21 @@ class UserPrefs private constructor() {
         prefs.edit().putBoolean(KEY_BOOT_START, enabled).apply()
     }
 
+    fun isScreenSaverEnabled(): Boolean =
+        prefs.getBoolean(KEY_SCREEN_SAVER_ENABLED, DEFAULT_SCREEN_SAVER_ENABLED)
+
+    fun setScreenSaverEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_SCREEN_SAVER_ENABLED, enabled).apply()
+    }
+
+    fun getScreenSaverTimeoutMinutes(): Int =
+        prefs.getInt(KEY_SCREEN_SAVER_TIMEOUT_MIN, DEFAULT_SCREEN_SAVER_TIMEOUT_MIN)
+            .coerceIn(1, 60)
+
+    fun setScreenSaverTimeoutMinutes(minutes: Int) {
+        prefs.edit().putInt(KEY_SCREEN_SAVER_TIMEOUT_MIN, minutes.coerceIn(1, 60)).apply()
+    }
+
     // -----------------------------------------------------------------
     // 分屏模式
     // -----------------------------------------------------------------
@@ -486,6 +501,13 @@ class UserPrefs private constructor() {
 
         private const val KEY_THEME_MODE = "theme_mode"
         private const val DEFAULT_THEME_MODE = "dark"
+
+        // 屏保（默认开启：仅在「无操作 + 无面板 + 未播放」时出现，不会遮挡正在播放的视频；
+        // 长时间停留首页/暂停时可省电并降低 OLED 烧屏风险）
+        private const val KEY_SCREEN_SAVER_ENABLED = "screensaver_enabled"
+        private const val KEY_SCREEN_SAVER_TIMEOUT_MIN = "screensaver_timeout_min"
+        private const val DEFAULT_SCREEN_SAVER_ENABLED = true
+        private const val DEFAULT_SCREEN_SAVER_TIMEOUT_MIN = 5
 
         private const val KEY_RECENT_FILES = "recent_files"
         private const val MAX_RECENT_FILES = 20
