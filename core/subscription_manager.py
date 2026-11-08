@@ -518,7 +518,7 @@ class SubscriptionManager(Singleton):
                     return {}
                 
                 logger.info(f"EPG数据下载成功: 解压后 {len(content)} 字节 (下载 {downloaded_size} 字节)")
-                parsed = self._parse_epg_content(epg_content)
+                parsed = self._parse_epg_content(epg_content, raw_bytes=content)
                 if not parsed:
                     self._last_epg_error = '解析后无节目数据'
                     logger.warning(f"EPG内容解析后为空: {epg_url}")
@@ -562,11 +562,12 @@ class SubscriptionManager(Singleton):
         logger.error(f"EPG数据下载最终失败(共{attempts}次): {last_error}")
         return {}
     
-    def _parse_epg_content(self, content: str) -> dict:
+    def _parse_epg_content(self, content: str, raw_bytes: bytes | None = None) -> dict:
         """解析EPG内容
 
         Args:
-            content: EPG内容字符串
+            content: EPG内容字符串（已按 UTF-8/GBK 解码，JSON 源直接使用）
+            raw_bytes: 原始字节（可选）。XML 源优先用它流式解析，省掉一份大字符串副本
 
         Returns:
             解析后的EPG数据字典
@@ -576,8 +577,265 @@ class SubscriptionManager(Singleton):
             return json.loads(content)
         except json.JSONDecodeError:
             pass
-        
-        return self._parse_xml_epg(content)
+
+        import io
+
+        def _make_stream():
+            if raw_bytes is not None:
+                return io.BytesIO(raw_bytes)
+            return io.StringIO(content)
+
+        try:
+            return self._parse_xml_epg_stream(_make_stream)
+        except Exception as e:
+            if raw_bytes is None:
+                logger.error(f"XML格式EPG解析失败: {e}")
+                return {}
+            # 字节流的 XML 声明编码与实际内容不符时，回退到已解码文本重新解析
+            logger.warning(f"字节流解析EPG失败({e})，改用已解码文本重试")
+            try:
+                return self._parse_xml_epg_stream(lambda: io.StringIO(content))
+            except Exception as e2:
+                logger.error(f"XML格式EPG解析失败: {e2}")
+                return {}
+
+    def _parse_xml_epg(self, content: str) -> dict:
+        """解析XML格式的EPG数据（保留旧入口，内部走流式解析）"""
+        import io
+        try:
+            return self._parse_xml_epg_stream(lambda: io.StringIO(content))
+        except Exception as e:
+            logger.error(f"XML格式EPG解析失败: {e}")
+            return {}
+
+    def _parse_xml_epg_stream(self, make_stream) -> dict:
+        """两遍流式解析 XMLTV，只保留频道表中真实存在的频道节目
+
+        第一遍只收集 <channel>（id -> 显示名），内存与节目数无关；
+        第二遍按目标频道 id 过滤 <programme>，逐个 clear() 释放元素，
+        不构建整棵 XML 树。取不到频道集合或过滤后无节目时回落到保留全部频道。
+        """
+        import gc
+        gc_was_enabled = gc.isenabled()
+        if gc_was_enabled:
+            gc.disable()
+        try:
+            channel_names = self._scan_xmltv_channels(make_stream)
+            total_channels = len(channel_names)
+            target_ids, match_stats = self._resolve_epg_target_ids(channel_names)
+
+            if not target_ids:
+                reason = '频道表为空' if not match_stats.get('table_size') else '频道表未能匹配到任何EPG频道'
+                logger.warning(
+                    f"EPG未做频道过滤：{reason}（EPG频道 {total_channels} 个），本次保留全部频道"
+                )
+                result = self._scan_xmltv_programmes(make_stream, None, channel_names)
+                kept_names = channel_names
+                self._log_epg_match_stats(
+                    match_stats, [], filtered=False, note=f"{reason}，因此未做过滤"
+                )
+            else:
+                result = self._scan_xmltv_programmes(make_stream, target_ids, channel_names)
+                programme_count = sum(len(programmes) for programmes in result.values())
+                if programme_count == 0:
+                    logger.warning(
+                        f"EPG过滤后无节目（频道表命中 {len(target_ids)} 个EPG频道），"
+                        f"回落到保留全部 {total_channels} 个频道"
+                    )
+                    result = self._scan_xmltv_programmes(make_stream, None, channel_names)
+                    kept_names = channel_names
+                    self._log_epg_match_stats(
+                        match_stats, [], filtered=False, note='过滤后无节目，因此未做过滤'
+                    )
+                else:
+                    kept_names = {cid: name for cid, name in channel_names.items() if cid in result}
+                    empty_names = [
+                        name for name, cid in match_stats['matched'] if not result.get(cid)
+                    ]
+                    logger.info(
+                        f"EPG频道过滤: EPG共 {total_channels} 个频道, 频道表命中 {len(target_ids)} 个, "
+                        f"实际保留 {len(result)} 个频道 / {programme_count} 个节目"
+                    )
+                    self._log_epg_match_stats(match_stats, empty_names, filtered=True)
+
+            if kept_names:
+                with self._epg_lock:
+                    self._epg_channel_names.update(kept_names)
+            return result
+        finally:
+            if gc_was_enabled:
+                gc.enable()
+
+    def _log_epg_match_stats(self, match_stats: dict, empty_names, filtered: bool, note: str = ''):
+        """输出一次 EPG 匹配诊断（三种情况分开统计，不逐频道刷屏）
+
+        Args:
+            match_stats: _resolve_epg_target_ids 返回的统计
+            empty_names: 匹配到 EPG id 但该 id 没有任何节目的频道名
+            filtered: 本次是否真的按频道表做了过滤
+            note: 未过滤时的原因说明
+        """
+        table_size = match_stats.get('table_size', 0)
+        matched = match_stats.get('matched', [])
+        unmatched = match_stats.get('unmatched', [])
+        empty_count = len(empty_names)
+
+        summary = (
+            f"EPG匹配: 命中 {len(matched)} / 无匹配 {len(unmatched)} / 空节目 {empty_count}"
+            f"（频道表共 {table_size}）"
+        )
+        summary += "，已按频道表过滤" if filtered else f"，{note or '因此未做过滤'}"
+
+        # 无匹配比例过半通常意味着源本身或匹配规则有问题，提升到 warning
+        high_unmatched = bool(table_size) and len(unmatched) > table_size / 2
+        emit = logger.warning if high_unmatched else logger.info
+        emit(summary)
+        if unmatched:
+            emit(f"无匹配EPG的频道({len(unmatched)}): {self._format_channel_list(unmatched)}")
+        if empty_names:
+            emit(f"空节目EPG的频道({empty_count}): {self._format_channel_list(empty_names)}")
+
+    @staticmethod
+    def _format_channel_list(names, limit: int = 10) -> str:
+        head = '、'.join(names[:limit])
+        if len(names) > limit:
+            return f"{head} ... 等 {len(names)} 个"
+        return head
+
+
+    def _scan_xmltv_channels(self, make_stream) -> dict:
+        """第一遍扫描：只收集 <channel>，返回 id -> 显示名（无显示名的频道不入表）"""
+        import xml.etree.ElementTree as ET
+        names = {}
+        with make_stream() as stream:
+            for _event, elem in ET.iterparse(stream, events=('end',)):
+                if elem.tag == 'channel':
+                    cid = elem.get('id')
+                    if cid and cid not in names:
+                        for display_name in elem.findall('display-name'):
+                            if display_name.text:
+                                names[cid] = display_name.text.strip()
+                                break
+                    elem.clear()
+                elif elem.tag == 'programme':
+                    # 第一遍不关心节目内容，立即释放
+                    elem.clear()
+        return names
+
+    def _scan_xmltv_programmes(self, make_stream, keep_ids, channel_names: dict) -> dict:
+        """第二遍扫描：按 keep_ids 过滤 <programme>（keep_ids 为 None 表示不过滤）"""
+        import xml.etree.ElementTree as ET
+        result = {cid: [] for cid in channel_names if keep_ids is None or cid in keep_ids}
+        with make_stream() as stream:
+            for _event, elem in ET.iterparse(stream, events=('end',)):
+                if elem.tag != 'programme':
+                    if elem.tag == 'channel':
+                        elem.clear()
+                    continue
+
+                try:
+                    channel_id = elem.get('channel')
+                    if not channel_id or (keep_ids is not None and channel_id not in keep_ids):
+                        continue
+                    start = elem.get('start')
+                    if not start:
+                        continue
+
+                    title = None
+                    for title_elem in elem.findall('title'):
+                        if title_elem.text:
+                            title = title_elem.text
+                            break
+                    if not title:
+                        continue
+
+                    desc = None
+                    for desc_elem in elem.findall('desc'):
+                        if desc_elem.text:
+                            desc = desc_elem.text
+                            break
+
+                    try:
+                        start_time = self._parse_xmltv_time(start)
+                    except ValueError:
+                        # 时间非法的节目直接跳过，避免被错误地显示为“正在播”
+                        logger.debug(f"跳过时间非法的EPG节目: {channel_id} {start}")
+                        continue
+
+                    end = elem.get('stop') or elem.get('end')
+                    if end:
+                        try:
+                            end_time = self._parse_xmltv_time(end)
+                        except ValueError:
+                            end_time = start_time + timedelta(minutes=30)
+                    else:
+                        end_time = start_time + timedelta(minutes=30)
+
+                    result.setdefault(channel_id, []).append({
+                        'title': title,
+                        'desc': desc or '',
+                        'start': start_time.isoformat(),
+                        'end': end_time.isoformat()
+                    })
+                finally:
+                    # 无论是否保留都必须释放元素，否则流式解析退化为整树驻留
+                    elem.clear()
+        return result
+
+    def _resolve_epg_target_ids(self, channel_names: dict) -> tuple[set, dict]:
+        """从当前频道表推导要保留的 EPG 频道 id，复用 EpgMatcher 的既有匹配规则
+
+        同时返回诊断统计（命中 / 无匹配），供日志区分“源里没有该频道”与“频道有但没节目”。
+
+        Returns:
+            (target_ids, stats)。target_ids 为空集合表示本次不做过滤（调用方回落为保留全部频道）。
+        """
+        stats = {'table_size': 0, 'matched': [], 'unmatched': []}
+        if not channel_names:
+            return set(), stats
+
+        try:
+            from core.application_state import app_state
+            channels = app_state.channels
+        except Exception as e:
+            logger.warning(f"EPG过滤：读取频道表失败，本次保留全部频道: {e}")
+            return set(), stats
+
+        stats['table_size'] = len(channels) if channels else 0
+        if not channels:
+            logger.info("EPG过滤：频道表为空，本次保留全部频道")
+            return set(), stats
+
+        try:
+            from services.epg_matcher import EpgMatcher
+        except Exception as e:
+            logger.warning(f"EPG过滤：EpgMatcher 不可用，本次保留全部频道: {e}")
+            return set(), stats
+
+        target_ids = set()
+        for channel in channels:
+            if not isinstance(channel, dict):
+                continue
+            display_name = (
+                channel.get('name') or channel.get('tvg_name')
+                or channel.get('tvg_id') or '(未命名频道)'
+            )
+            try:
+                matched = EpgMatcher.match(
+                    channel.get('name', ''),
+                    channel_names,
+                    tvg_id=channel.get('tvg_id') or None,
+                    tvg_name=channel.get('tvg_name') or None,
+                    comma_name=channel.get('comma_name') or None,
+                )
+            except Exception:
+                matched = None
+            if matched:
+                target_ids.add(matched)
+                stats['matched'].append((display_name, matched))
+            else:
+                stats['unmatched'].append(display_name)
+        return target_ids, stats
 
 
     def _parse_xmltv_time(self, time_str):
@@ -603,92 +861,6 @@ class SubscriptionManager(Singleton):
             dt = dt_utc.astimezone().replace(tzinfo=None)
         return dt
 
-    def _parse_xml_epg(self, content: str) -> dict:
-        """解析XML格式的EPG数据
-
-        Args:
-            content: XML格式的EPG内容
-
-        Returns:
-            解析后的EPG数据字典
-        """
-        result = {}
-        parsed_channel_names = {}
-        import gc
-        gc_was_enabled = gc.isenabled()
-        if gc_was_enabled:
-            gc.disable()
-        try:
-            import xml.etree.ElementTree as ET
-            root = ET.fromstring(content)
-            
-            channels = root.findall('.//channel')
-            if channels:
-                for channel in channels:
-                    channel_id = channel.get('id')
-                    channel_name = None
-                    for display_name in channel.findall('display-name'):
-                        if display_name.text:
-                            channel_name = display_name.text
-                            break
-                    if channel_id and channel_name:
-                        result[channel_id] = []
-                        parsed_channel_names[channel_id] = channel_name
-            
-            for programme in root.iter('programme'):
-                channel_id = programme.get('channel')
-                start = programme.get('start')
-                end = programme.get('stop') or programme.get('end')
-                title = None
-                desc = None
-                
-                for title_elem in programme.findall('title'):
-                    if title_elem.text:
-                        title = title_elem.text
-                        break
-                
-                for desc_elem in programme.findall('desc'):
-                    if desc_elem.text:
-                        desc = desc_elem.text
-                        break
-                
-                if channel_id and start and title:
-                    try:
-                        start_time = self._parse_xmltv_time(start)
-                    except ValueError:
-                        # 时间非法的节目直接跳过，避免被错误地显示为“正在播”
-                        logger.debug(f"跳过时间非法的EPG节目: {channel_id} {start}")
-                        continue
-
-                    if end:
-                        try:
-                            end_time = self._parse_xmltv_time(end)
-                        except ValueError:
-                            end_time = start_time + timedelta(minutes=30)
-                    else:
-                        end_time = start_time + timedelta(minutes=30)
-                    
-                    if channel_id not in result:
-                        result[channel_id] = []
-                    
-                    result[channel_id].append({
-                        'title': title,
-                        'desc': desc or '',
-                        'start': start_time.isoformat(),
-                        'end': end_time.isoformat()
-                    })
-            
-            if parsed_channel_names:
-                with self._epg_lock:
-                    self._epg_channel_names.update(parsed_channel_names)
-            return result
-        except Exception as e:
-            logger.error(f"XML格式EPG解析失败: {e}")
-            return {}
-        finally:
-            if gc_was_enabled:
-                gc.enable()
-    
     def get_epg_data_copy(self) -> dict:
         """线程安全地获取EPG数据的浅拷贝"""
         with self._epg_lock:
