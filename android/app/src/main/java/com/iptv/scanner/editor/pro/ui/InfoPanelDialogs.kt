@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.systemBarsPadding
@@ -352,7 +353,7 @@ internal fun ReminderPopup(
                         onClick = onAccept,
                         modifier = Modifier.weight(1f).tvFocusBorder().focusRequester(acceptFocusRequester)
                     ) {
-                        Text("切换频道", color = if (isAptv) Color.White else MaterialTheme.colorScheme.onSecondary)
+                        Text("切换频道")
                     }
                 }
             }
@@ -367,6 +368,11 @@ internal fun ReminderPopup(
 // 图标颜色随深色/浅色主题自适应。
 /**
  * 频道信息详情对话框
+ *
+ * 竖屏：保持窄卡片、单列字段。
+ * 横屏分屏 / TV：Dialog 默认宽度只有手机尺寸，加上一列十几行字段，在 2000px 宽的
+ * 分屏右半屏里又窄又长、两侧大片留白，就是用户说的「竖屏的感觉」。这里改成
+ * usePlatformDefaultWidth=false + 居中宽卡片，字段按上下两半左右分列。
  */
 @Composable
 internal fun ChannelInfoDialog(viewModel: AppViewModel) {
@@ -376,114 +382,252 @@ internal fun ChannelInfoDialog(viewModel: AppViewModel) {
     val videoHeight by mpv.videoHeight.collectAsState()
     val currentProgram = viewModel.getCurrentProgram()
     val oc = rememberPlayerOverlayColors()
-    val isAptv = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
-    val accentColor = if (isAptv) AptvAccent else oc.accent
+    val config = LocalConfiguration.current
+    val isAptv = config.orientation == Configuration.ORIENTATION_PORTRAIT
+    val wide = !isAptv && config.screenWidthDp >= 600
+    val accentColor = tvPalette.accentText
+
+    // 字段清单：URL 太长，单独整行；其余短字段宽屏时按上下两半左右分列
+    val fields = buildList {
+        currentChannel?.let { ch ->
+            add("频道名" to ch.name)
+            if (ch.group.isNotEmpty()) add("分类" to ch.group)
+            if (ch.tvgId.isNotEmpty()) add("TVG-ID" to ch.tvgId)
+            if (ch.tvgName.isNotEmpty()) add("TVG-Name" to ch.tvgName)
+            if (ch.tvgChno.isNotEmpty()) add("频道号" to ch.tvgChno)
+            if (ch.resolution.isNotEmpty()) add("分辨率" to ch.resolution)
+            if (videoWidth > 0 && videoHeight > 0) add("视频尺寸" to "${videoWidth}x${videoHeight}")
+            if (ch.catchup.isNotEmpty() && ch.catchup != "none" && ch.catchupDays.isNotEmpty()) {
+                add("回看天数" to ch.catchupDays)
+            }
+            if (ch.source.isNotEmpty()) add("来源" to ch.source)
+            // 状态字段仅在有实际状态时显示（去掉“待检测”）
+            if (ch.status.isNotEmpty() && ch.status != "待检测") add("状态" to ch.status)
+        }
+    }
+    val urlValue = currentChannel?.url.orEmpty()
+    val catchupUrlValue = currentChannel?.let { ch ->
+        if (ch.catchup.isNotEmpty() && ch.catchup != "none") {
+            if (ch.catchupSource.isNotEmpty()) ch.catchupSource else ch.catchup
+        } else ""
+    }.orEmpty()
 
     // 玻璃化弹窗（与退出确认弹窗同模式）：独立 window 走静态玻璃，
     // 非玻璃态由 fallbackColor 提供圆角实底，不叠加 background 防黑直角
     val glass = LocalLiquidGlass.current &&
         com.iptv.scanner.editor.pro.ui.theme.isLiquidBlurSupported() &&
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-    Dialog(onDismissRequest = { viewModel.toggleChannelInfo() }) {
-        com.iptv.scanner.editor.pro.ui.theme.LiquidGlassSurface(
-            enabled = glass,
-            cornerRadius = 20.dp,
-            staticGlass = true,
-            fallbackColor = MaterialTheme.colorScheme.surface,
-            modifier = Modifier.fillMaxWidth()
+    // TV/横屏遥控器：弹窗是独立 window，不主动抢焦点时方向键常留在下层界面上
+    val closeFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(wide) {
+        // 同 PanelScaffold：遥控器确认键的 KeyUp 若在弹窗出现后立刻落到关闭按钮，
+        // 会「打开即关闭」，因此延后到按键序列结束再抢焦点
+        if (wide) {
+            delay(220)
+            runCatching { closeFocusRequester.requestFocus() }
+        }
+    }
+
+    // 卡片是玻璃/主题色底，不是播放器暗色蒙层，统一用主题色文字保证对比度
+    val labelWidth = if (wide) 82.dp else 60.dp
+
+    val fieldsContent: @Composable () -> Unit = {
+        if (wide) {
+            val half = (fields.size + 1) / 2
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(24.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    fields.take(half).forEach { (label, value) ->
+                        InfoRow(label, value, oc, true, labelWidth)
+                    }
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    fields.drop(half).forEach { (label, value) ->
+                        InfoRow(label, value, oc, true, labelWidth)
+                    }
+                }
+            }
+            if (urlValue.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                InfoRow("URL", urlValue, oc, true, labelWidth, maxLines = 6)
+            }
+            if (catchupUrlValue.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                InfoRow("回看URL", catchupUrlValue, oc, true, labelWidth, maxLines = 6)
+            }
+        } else {
+            fields.forEach { (label, value) -> InfoRow(label, value, oc, true) }
+            if (urlValue.isNotEmpty()) InfoRow("URL", urlValue, oc, true)
+            if (catchupUrlValue.isNotEmpty()) InfoRow("回看URL", catchupUrlValue, oc, true)
+        }
+        // 当前节目
+        if (currentProgram != null && currentProgram.title.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "当前节目",
+                color = accentColor,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = currentProgram.title,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(top = 2.dp)
+            )
+        }
+    }
+
+    val header: @Composable () -> Unit = {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (currentChannel != null && currentChannel!!.logo.isNotEmpty()) {
+                AsyncImage(
+                    model = currentChannel!!.logo,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(4.dp)),
+                    contentScale = ContentScale.Fit
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+            Text(
+                text = currentChannel?.name ?: "频道信息",
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+    }
+
+    val closeRow: @Composable () -> Unit = {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
         ) {
+            Button(
+                onClick = { viewModel.toggleChannelInfo() },
+                modifier = Modifier
+                    .tvFocusBorder()
+                    .then(if (wide) Modifier.focusRequester(closeFocusRequester) else Modifier)
+            ) {
+                Text("关闭")
+            }
+        }
+    }
+
+    val body: @Composable () -> Unit = {
+        if (wide) {
+            // 关闭按钮固定在卡片底部，不跟着字段一起滚走
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = (config.screenHeightDp * 0.80f).dp)
+                    .padding(24.dp)
+                    .focusGroup()
+            ) {
+                header()
+                Spacer(modifier = Modifier.height(12.dp))
+                Column(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    if (currentChannel == null) {
+                        Text(
+                            text = "未选择频道",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 14.sp
+                        )
+                    } else {
+                        fieldsContent()
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                closeRow()
+            }
+        } else {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(20.dp)
                     .verticalScroll(rememberScrollState())
+                    .focusGroup()
             ) {
-                // 标题行：台标 + 频道名
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (currentChannel != null && currentChannel!!.logo.isNotEmpty()) {
-                        AsyncImage(
-                            model = currentChannel!!.logo,
-                            contentDescription = null,
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clip(RoundedCornerShape(4.dp)),
-                            contentScale = ContentScale.Fit
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                    }
-                    Text(
-                        text = currentChannel?.name ?: "频道信息",
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
+                header()
                 Spacer(modifier = Modifier.height(12.dp))
-
-                currentChannel?.let { ch ->
-                    InfoRow("频道名", ch.name, oc, isAptv)
-                    if (ch.group.isNotEmpty()) InfoRow("分类", ch.group, oc, isAptv)
-                    if (ch.tvgId.isNotEmpty()) InfoRow("TVG-ID", ch.tvgId, oc, isAptv)
-                    if (ch.tvgName.isNotEmpty()) InfoRow("TVG-Name", ch.tvgName, oc, isAptv)
-                    if (ch.tvgChno.isNotEmpty()) InfoRow("频道号", ch.tvgChno, oc, isAptv)
-                    if (ch.resolution.isNotEmpty()) InfoRow("分辨率", ch.resolution, oc, isAptv)
-                    if (videoWidth > 0 && videoHeight > 0) {
-                        InfoRow("视频尺寸", "${videoWidth}x${videoHeight}", oc, isAptv)
-                    }
-                    if (ch.catchup.isNotEmpty() && ch.catchup != "none") {
-                        if (ch.catchupDays.isNotEmpty()) InfoRow("回看天数", ch.catchupDays, oc, isAptv)
-                    }
-                    if (ch.source.isNotEmpty()) InfoRow("来源", ch.source, oc, isAptv)
-                    // 状态字段仅在有实际状态时显示（去掉“待检测”）
-                    if (ch.status.isNotEmpty() && ch.status != "待检测") InfoRow("状态", ch.status, oc, isAptv)
-                    InfoRow("URL", ch.url, oc, isAptv)
-                    // 回看 URL
-                    if (ch.catchup.isNotEmpty() && ch.catchup != "none") {
-                        val catchupUrl = if (ch.catchupSource.isNotEmpty()) ch.catchupSource else ch.catchup
-                        InfoRow("回看URL", catchupUrl, oc, isAptv)
-                    }
-                    // 当前节目
-                    if (currentProgram != null && currentProgram.title.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "当前节目",
-                            color = accentColor,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Text(
-                            text = currentProgram.title,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            fontSize = 13.sp,
-                            modifier = Modifier.padding(top = 2.dp)
-                        )
-                    }
-                } ?: run {
+                if (currentChannel == null) {
                     Text(
                         text = "未选择频道",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 14.sp
                     )
+                } else {
+                    fieldsContent()
                 }
-
                 Spacer(modifier = Modifier.height(16.dp))
-                // 关闭按钮（右对齐）
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
+                closeRow()
+            }
+        }
+    }
+
+    if (wide) {
+        Dialog(
+            onDismissRequest = { viewModel.toggleChannelInfo() },
+            properties = DialogProperties(
+                usePlatformDefaultWidth = false,
+                dismissOnBackPress = true,
+                dismissOnClickOutside = false
+            )
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Color.Black.copy(
+                            alpha = if (com.iptv.scanner.editor.pro.ui.theme.isDarkTheme()) 0.62f else 0.42f
+                        )
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                com.iptv.scanner.editor.pro.ui.theme.LiquidGlassSurface(
+                    enabled = glass,
+                    cornerRadius = 20.dp,
+                    staticGlass = true,
+                    fallbackColor = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier
+                        .widthIn(max = 760.dp)
+                        .fillMaxWidth()
                 ) {
-                    Button(
-                        onClick = { viewModel.toggleChannelInfo() }
-                    ) {
-                        Text("关闭", color = Color.White)
-                    }
+                    body()
                 }
+            }
+        }
+    } else {
+        Dialog(onDismissRequest = { viewModel.toggleChannelInfo() }) {
+            com.iptv.scanner.editor.pro.ui.theme.LiquidGlassSurface(
+                enabled = glass,
+                cornerRadius = 20.dp,
+                staticGlass = true,
+                fallbackColor = MaterialTheme.colorScheme.surface,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                body()
             }
         }
     }
 }
 @Composable
-internal fun InfoRow(label: String, value: String, oc: PlayerOverlayColors, isAptv: Boolean = false) {
+internal fun InfoRow(
+    label: String,
+    value: String,
+    oc: PlayerOverlayColors,
+    isAptv: Boolean = false,
+    labelWidth: androidx.compose.ui.unit.Dp = 60.dp,
+    maxLines: Int = 5
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -494,14 +638,14 @@ internal fun InfoRow(label: String, value: String, oc: PlayerOverlayColors, isAp
             text = "$label:",
             color = if (isAptv) MaterialTheme.colorScheme.onSurfaceVariant else oc.textSecondary,
             fontSize = 12.sp,
-            modifier = Modifier.width(60.dp)
+            modifier = Modifier.width(labelWidth)
         )
         Text(
             text = value,
             color = if (isAptv) MaterialTheme.colorScheme.onSurface else oc.textPrimary,
             fontSize = 12.sp,
             modifier = Modifier.weight(1f),
-            maxLines = 5,
+            maxLines = maxLines,
             overflow = TextOverflow.Ellipsis
         )
     }
@@ -535,9 +679,16 @@ internal fun PortraitMediaInfoBar(viewModel: AppViewModel) {
         if (fileLoaded && (videoWidth > 0 || videoHeight > 0)) player.getMediaInfo() else emptyMap()
     }
 
-    // 停止状态（未加载文件）不显示媒体信息栏
+    // 停止状态（未加载文件）不显示媒体信息内容，但保留与信息条一致的高度占位：
+    // 换台时 fileLoaded 会短暂为 false，若在此塌成 0dp，下方控制条/Tab/列表会整体
+    // 上移再回落，产生可见抖动。
     if (!fileLoaded) {
-        Box(modifier = Modifier.fillMaxWidth().height(0.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 2.dp)
+                .height(28.dp)
+        )
         return
     }
 
@@ -603,11 +754,13 @@ internal fun PortraitMediaInfoBar(viewModel: AppViewModel) {
                 }
             }
         } else {
-            // 文件已加载但视频尺寸未知（纯音频流），显示播放器类型
+            // 文件已加载但视频尺寸未知（纯音频流 / 换台瞬间 videoWidth 还没回来），
+            // 显示播放器类型。高度必须和有徽章时一致（28dp），否则换台这一瞬会矮 6dp，
+            // 下方控制条与面板整体上移再回落，就是竖屏切台那一下抖动。
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(22.dp)
+                    .height(28.dp)
                     .padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -627,14 +780,15 @@ private fun MediaBadge(
     isAccent: Boolean = true,
     isHighlight: Boolean = false
 ) {
-    // 统一颜色：所有 badge 用 AptvAccent，除 HDR/HLG 高亮外
-    val fg = if (isHighlight) tvPalette.warning
-             else AptvAccent
-    // 徽章：轻玻璃小卡（半透明白底+白描边），文字色保留原语义
+    // 统一颜色：所有 badge 用「强调色当文字」token（浅色 #A81C34 / 深色 #FF8A9B），
+    // HDR/HLG 高亮用 warningText；直接用 #E8455F 在浅玻璃上只有 2.8~3.5:1
+    val fg = if (isHighlight) tvPalette.warningText
+             else tvPalette.accentText
+    // 徽章：轻玻璃小卡（随主题的浅描边底 + 语义色文字）
     Surface(
-        color = Color.White.copy(alpha = 0.10f),
+        color = tvPalette.borderSubtle,
         shape = RoundedCornerShape(4.dp),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.22f))
+        border = BorderStroke(1.dp, fg.copy(alpha = 0.28f))
     ) {
         Text(
             text = label.uppercase(),
@@ -673,20 +827,36 @@ fun PortraitPanelDialog(
     // TV/横屏弹窗统一覆盖：暗玻璃（彩条视频背景上白霜太透）+ 主色橙红（AptvAccent），
     // 内部 Switch/按钮/FilterChip/输入框焦点色自动跟随，不再出现 Material 默认蓝
     val accentScheme = MaterialTheme.colorScheme.copy(
-        primary = AptvAccent,
-        secondary = AptvAccent,
-        secondaryContainer = AptvAccent,
-        onSecondaryContainer = Color.White
+        // 文字类用途（TextButton/Switch 标签）用 accentText；
+        // 选中承白字的容器（FilterChip）用 accentFill，白字 5.6:1
+        primary = tvPalette.accentText,
+        secondary = tvPalette.accentText,
+        secondaryContainer = tvPalette.accentFill,
+        onSecondaryContainer = tvPalette.accentOn
     )
     val accentedContent: @Composable () -> Unit = {
         MaterialTheme(colorScheme = accentScheme) { scaledContent() }
     }
+    // 弹层遮罩：必须有 scrim 才能把底层频道列表/徽章压下去。
+    // 浅色主题底层更亮，0.42 足够分离；深色主题需要 0.62 才压得住白字。
+    val scrimAlpha = if (com.iptv.scanner.editor.pro.ui.theme.isDarkTheme()) 0.62f else 0.42f
     if (isTv) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.5f))
+        // TV 端此前是「同窗口覆盖层」：遥控器确认键打开面板时，同一按键序列的 KeyUp
+        // 仍落回底栏按钮，一次按键被算成两次 → 面板打开即关闭；改成独立 Dialog 窗口，
+        // 与横屏分支一致后按键与焦点都留在新窗口内。
+        Dialog(
+            onDismissRequest = onDismiss,
+            properties = DialogProperties(
+                usePlatformDefaultWidth = false,
+                dismissOnBackPress = true,
+                dismissOnClickOutside = false
+            )
         ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = scrimAlpha))
+            ) {
             Box(
                 modifier = Modifier
                     .align(Alignment.Center)
@@ -707,6 +877,7 @@ fun PortraitPanelDialog(
                 }
             }
         }
+        }
     } else if (isLandscape) {
         Dialog(
             onDismissRequest = onDismiss,
@@ -716,22 +887,34 @@ fun PortraitPanelDialog(
                 dismissOnClickOutside = false
             )
         ) {
+            // 横屏弹窗原来只有居中的 75%×82% 玻璃卡片，Dialog 窗口其余区域完全透明，
+            // 底层频道列表与徽章会直接透上来。这里补一层全屏 scrim + 居中容器。
             Box(
                 modifier = Modifier
-                    .fillMaxWidth(0.75f)
-                    .fillMaxHeight(0.82f)
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = scrimAlpha)),
+                contentAlignment = Alignment.Center
             ) {
-                // Dialog 为独立窗口，无法采样主窗口背景 —— 静态光泽玻璃降级
-                com.iptv.scanner.editor.pro.ui.theme.LiquidGlassSurface(
-                    enabled = LocalLiquidGlass.current && isAndroid12Plus,
-                    cornerRadius = 20.dp,
-                    staticGlass = true,
-                    overlayDark = true,
-                    fallbackColor = oc.topBarBg.copy(alpha = 0.80f),
-                    modifier = Modifier.matchParentSize()
+                Box(
+                    modifier = Modifier
+                        // 横屏分屏原先 75%×82% 的卡片在 2000px 宽屏上仍然偏窄偏长的「竖屏感」，
+                        // 这里放宽到 86%×88%，并给上限避免 TV 大屏无限拉伸
+                        .fillMaxWidth(0.86f)
+                        .widthIn(max = 1200.dp)
+                        .fillMaxHeight(0.88f)
                 ) {
-                    // 暗玻璃弹窗：文字强制白系（浅色主题下 onSurface 会变黑字不可读）
-                    com.iptv.scanner.editor.pro.ui.theme.DarkOverlayTheme { accentedContent() }
+                    // Dialog 为独立窗口，无法采样主窗口背景 —— 静态光泽玻璃降级
+                    com.iptv.scanner.editor.pro.ui.theme.LiquidGlassSurface(
+                        enabled = LocalLiquidGlass.current && isAndroid12Plus,
+                        cornerRadius = 20.dp,
+                        staticGlass = true,
+                        overlayDark = true,
+                        fallbackColor = oc.topBarBg.copy(alpha = 0.80f),
+                        modifier = Modifier.matchParentSize()
+                    ) {
+                        // 暗玻璃弹窗：文字强制白系（浅色主题下 onSurface 会变黑字不可读）
+                        com.iptv.scanner.editor.pro.ui.theme.DarkOverlayTheme { accentedContent() }
+                    }
                 }
             }
         }
@@ -797,10 +980,12 @@ fun PortraitPanelDialog(
                         // 同时覆盖 MaterialTheme primary 色为 AptvAccent，让 Switch/RadioButton/FilterChip 等自动适配
                         androidx.compose.runtime.CompositionLocalProvider(LocalAptvStyle provides true) {
                             val aptvScheme = MaterialTheme.colorScheme.copy(
-                                primary = AptvAccent,
-                                onPrimary = Color.White,
-                                primaryContainer = AptvAccent.copy(alpha = 0.15f),
-                                onPrimaryContainer = AptvAccent,
+                                // 开关轨道/单选点属于图形用途（≥3.0），用 accentGraphic；
+                                // 容器内文字用 accentText（≥4.5），避免 #E8455F 在浅底只有 2.8~3.5:1
+                                primary = tvPalette.accentGraphic,
+                                onPrimary = tvPalette.accentOn,
+                                primaryContainer = tvPalette.accentFill.copy(alpha = 0.15f),
+                                onPrimaryContainer = tvPalette.accentText,
                                 // 玻璃页面上次要文字提亮，保证磨砂底上的可读性
                                 onSurfaceVariant = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.78f),
                             )
@@ -816,7 +1001,7 @@ fun PortraitPanelDialog(
                             .padding(top = 6.dp)
                             .size(width = 36.dp, height = 4.dp)
                             .background(
-                                Color.White.copy(alpha = 0.35f),
+                                MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
                                 RoundedCornerShape(2.dp)
                             )
                     )

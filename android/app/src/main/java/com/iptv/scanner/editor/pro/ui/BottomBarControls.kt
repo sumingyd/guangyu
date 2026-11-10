@@ -219,7 +219,9 @@ internal fun PortraitBottomTabBar(
     val liquidGlass by viewModel.liquidGlass.collectAsState()
     val bgColor = MaterialTheme.colorScheme.surface
     // APTV 风格竖屏强调色（红粉），不影响横屏/TV 主题
-    val accentColor = AptvAccent
+    // 选中 Tab 的文字与图标共用：用 accentText（浅色 #A81C34 / 深色 #FF8A9B），
+    // 直接拿 #E8455F 在深色选中胶囊 #404040 上只有 2.69:1
+    val accentColor = tvPalette.accentText
     val tabShape = RoundedCornerShape(20.dp)
     val isAndroid12Plus = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S
 
@@ -252,11 +254,15 @@ internal fun PortraitBottomTabBar(
                     .clip(RoundedCornerShape(10.dp))
                     .then(
                         if (isSelected) Modifier
-                            .background(Color.White.copy(alpha = 0.20f), RoundedCornerShape(10.dp))
-                            .border(1.dp, Color.White.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(10.dp))
+                            .border(
+                                1.dp,
+                                MaterialTheme.colorScheme.outline.copy(alpha = 0.65f),
+                                RoundedCornerShape(10.dp)
+                            )
                             .background(
                                 androidx.compose.ui.graphics.Brush.verticalGradient(
-                                    0f to Color.White.copy(alpha = 0.22f),
+                                    0f to tvPalette.glassGloss,
                                     1f to Color.Transparent
                                 ),
                                 RoundedCornerShape(10.dp)
@@ -389,7 +395,7 @@ internal fun PortraitInfoBarV2(viewModel: AppViewModel) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "返回首页",
-                    tint = AptvAccent,
+                    tint = tvPalette.accentGraphic,
                     modifier = Modifier.size(24.dp)
                 )
             }
@@ -429,7 +435,7 @@ internal fun PortraitInfoBarV2(viewModel: AppViewModel) {
                     ) {
                         Text(
                             text = currentChannel!!.group,
-                            color = AptvAccent,
+                            color = tvPalette.accentText,
                             fontSize = 11.sp,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                             maxLines = 1
@@ -441,7 +447,7 @@ internal fun PortraitInfoBarV2(viewModel: AppViewModel) {
             val toastCtx = androidx.compose.ui.platform.LocalContext.current
             IconButton(
                 onClick = { viewModel.toggleFavorite() },
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier.size(36.dp).tvFocusBorder()
             ) {
                 Icon(
                     imageVector = if (favorites.contains(currentIdx)) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
@@ -452,18 +458,18 @@ internal fun PortraitInfoBarV2(viewModel: AppViewModel) {
             }
             IconButton(
                 onClick = { viewModel.toggleDlnaPanel() },
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier.size(36.dp).tvFocusBorder()
             ) {
                 Icon(
                     Icons.Default.Cast,
                     contentDescription = "投屏",
-                    tint = if (dlnaConnected != null) AptvAccent else oc.iconTint,
+                    tint = if (dlnaConnected != null) tvPalette.accentGraphic else oc.iconTint,
                     modifier = Modifier.size(22.dp)
                 )
             }
             IconButton(
                 onClick = { viewModel.toggleChannelInfo() },
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier.size(36.dp).tvFocusBorder()
             ) {
                 Icon(
                     Icons.Default.Info,
@@ -517,7 +523,7 @@ internal fun PortraitControlsV2(viewModel: AppViewModel) {
             // 停止按钮（不需要暂停按钮）
             IconButton(
                 onClick = { viewModel.stopPlay() },
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier.size(36.dp).tvFocusBorder()
             ) {
                 Icon(
                     Icons.Default.Stop,
@@ -529,7 +535,7 @@ internal fun PortraitControlsV2(viewModel: AppViewModel) {
             // 播放工具按钮：截图/切片/EPG时间轴/搜索/提醒/续播/书签等
             IconButton(
                 onClick = { viewModel.togglePlayerToolsPanel() },
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier.size(36.dp).tvFocusBorder()
             ) {
                 Icon(
                     Icons.Default.MoreVert,
@@ -541,7 +547,7 @@ internal fun PortraitControlsV2(viewModel: AppViewModel) {
             // 播放器设置按钮：打开完整设置面板（含内核选择/VO/HWDEC/HDR 等）
             IconButton(
                 onClick = { viewModel.togglePlayerSettings() },
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier.size(36.dp).tvFocusBorder()
             ) {
                 Icon(
                     Icons.Default.Settings,
@@ -568,7 +574,7 @@ internal fun PortraitControlsV2(viewModel: AppViewModel) {
                     viewModel.seekProgress(dragPercent * 100f)
                     dragging = false
                 },
-                accentColor = AptvAccent,
+                accentColor = tvPalette.accentGraphic,
                 trackColor = oc.trackInactive,
                 modifier = Modifier
                     .weight(1f)

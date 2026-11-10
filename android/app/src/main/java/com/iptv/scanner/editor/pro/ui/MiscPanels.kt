@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -42,7 +43,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.verticalScroll
+import kotlin.math.sqrt
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.CalendarMonth
@@ -179,7 +182,7 @@ fun OpenUrlDialog(viewModel: AppViewModel) {
                             text = "播放",
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Medium,
-                            color = AptvAccent,
+                            color = tvPalette.accentText,
                             modifier = Modifier
                                 .tvFocusBorder(cornerRadius = 10)
                                 .clickable {
@@ -237,7 +240,7 @@ fun OpenUrlDialog(viewModel: AppViewModel) {
                                 url = ""
                             },
                             modifier = Modifier.tvFocusBorder()
-                        ) { Text("播放", color = AptvAccent) }
+                        ) { Text("播放", color = tvPalette.accentText) }
                     }
                 }
             }
@@ -367,7 +370,7 @@ fun ExitConfirmDialog(viewModel: AppViewModel) {
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
                     // 立即退出（红色强调）
-                    ExitOptionRow("立即退出", tint = if (isAptv) AptvAccent else tvPalette.danger) {
+                    ExitOptionRow("立即退出", tint = if (isAptv) AptvAccentText else tvPalette.danger) {
                         viewModel.dismissExitConfirm()
                         // 先停止播放，避免 Activity finish 后 mpv 在后台继续播放
                         viewModel.stopPlay()
@@ -440,13 +443,34 @@ fun DlnaCastPanel(viewModel: AppViewModel) {
     val glass = LocalLiquidGlass.current &&
         com.iptv.scanner.editor.pro.ui.theme.isLiquidBlurSupported() &&
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-    Dialog(onDismissRequest = { viewModel.dismissDlnaPanel() }) {
+    Dialog(
+        onDismissRequest = { viewModel.dismissDlnaPanel() },
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        // 与其它面板一致的遮罩：此前投屏面板没有 scrim，底层视频/页面不压暗
+        val scrim = if (com.iptv.scanner.editor.pro.ui.theme.isDarkTheme())
+            Color.Black.copy(alpha = 0.62f) else Color.Black.copy(alpha = 0.42f)
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(scrim)
+                .clickable { viewModel.dismissDlnaPanel() },
+            contentAlignment = Alignment.Center
+        ) {
         com.iptv.scanner.editor.pro.ui.theme.LiquidGlassSurface(
             enabled = glass,
             cornerRadius = 22.dp,
             staticGlass = true,
             fallbackColor = MaterialTheme.colorScheme.surface,
-            modifier = Modifier.fillMaxWidth()
+            // 顺序要点：
+            // 1) padding 放在最外层 —— 写在 widthIn 之后会把玻璃面本身缩掉 48dp
+            //    （实测可见面板只有 512dp），只能用作屏边留白；
+            // 2) widthIn 必须在 fillMaxWidth 之前 —— 顺序反过来时 fillMaxWidth
+            //    已把 min/max 都钉成父宽度，widthIn 的 max 会被约束夹回父宽度而不生效
+            modifier = Modifier
+                .padding(horizontal = 24.dp)
+                .widthIn(max = 560.dp)
+                .fillMaxWidth()
         ) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -510,7 +534,7 @@ fun DlnaCastPanel(viewModel: AppViewModel) {
                             ) {
                                 Text(
                                     if (isConnected) "${device.name}（投播中，点击断开）" else device.name,
-                                    color = if (isConnected) AptvAccent else MaterialTheme.colorScheme.onSurface,
+                                    color = if (isConnected) tvPalette.accentText else MaterialTheme.colorScheme.onSurface,
                                     fontSize = 15.sp,
                                     fontWeight = if (isConnected) FontWeight.SemiBold else FontWeight.Normal
                                 )
@@ -557,6 +581,7 @@ fun DlnaCastPanel(viewModel: AppViewModel) {
                     viewModel.dismissDlnaPanel()
                 }
             }
+        }
         }
     }
 }
@@ -654,14 +679,15 @@ private data class ToolEntry(
 )
 
 @Composable
-private fun ToolEntryRow(tool: ToolEntry) {
+private fun ToolEntryRow(tool: ToolEntry, compact: Boolean = false) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             // tvFocusBorder 在 clickable 之前（外层）才能收到焦点事件
             .tvFocusBorder()
             .clickable { tool.onClick() }
-            .padding(vertical = 12.dp, horizontal = 4.dp),
+            // 横屏两列时行距收一点，9 个工具刚好一屏放下、不会卡半行
+            .padding(vertical = if (compact) 8.dp else 12.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
@@ -727,10 +753,39 @@ fun PlayerToolsPanel(viewModel: AppViewModel) {
             }
         )
         SettingsGroup("工具列表") {
+            // 横屏分屏 / TV：单列 9 行在宽卡片里两侧全是空白，看起来仍是竖屏排版，
+            // 这里按两列铺开；竖屏保持单列。
+            val config = LocalConfiguration.current
+            val wide = config.orientation == Configuration.ORIENTATION_LANDSCAPE &&
+                config.screenWidthDp >= 600
             LazyColumn(modifier = Modifier.fillMaxWidth()) {
-                items(tools) { tool ->
-                    ToolEntryRow(tool)
-                    HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                if (wide) {
+                    items(tools.chunked(2)) { pair ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            pair.forEachIndexed { index, tool ->
+                                if (index > 0) {
+                                    Box(
+                                        modifier = Modifier
+                                            .width(1.dp)
+                                            .height(40.dp)
+                                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    )
+                                }
+                                Box(modifier = Modifier.weight(1f)) { ToolEntryRow(tool, compact = true) }
+                            }
+                            // 奇数个时右侧补等宽空位，保证两列对齐
+                            if (pair.size == 1) Spacer(modifier = Modifier.weight(1f))
+                        }
+                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                    }
+                } else {
+                    items(tools) { tool ->
+                        ToolEntryRow(tool)
+                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                    }
                 }
             }
         }
@@ -1296,7 +1351,6 @@ internal fun SpectrumCanvas(spectrum: FloatArray, modifier: Modifier = Modifier)
     // 峰值缓存：经典频谱仪的缓降峰值标记（60fps 下每帧回落 0.009）
     // 尺寸跟随频谱频段数（64），避免频段数变化后越界/不匹配
     val peaks = remember(spectrum.size) { FloatArray(spectrum.size) { 0f } }
-    val primaryColor = MaterialTheme.colorScheme.primary
     val outlineColor = MaterialTheme.colorScheme.outlineVariant
     Canvas(modifier) {
         val barCount = spectrum.size
@@ -1307,12 +1361,13 @@ internal fun SpectrumCanvas(spectrum: FloatArray, modifier: Modifier = Modifier)
         val actualBarWidth = barWidth - gap
         val bottomY = size.height * 0.92f
         val maxBarHeight = size.height * 0.82f
-        // 垂直渐变：底部橙红主色 → 顶部亮橙
+        // 垂直渐变：底部强调色 → 顶部亮强调色（原来顶部用 warning #FF9800，
+        // 在浅色底上只有 1.71:1，视觉上像一排虚线）
         val barBrush = androidx.compose.ui.graphics.Brush.verticalGradient(
             colors = listOf(
-                primaryColor,
-                tvPalette.warning,
-                tvPalette.warning
+                tvPalette.accentText,
+                tvPalette.accentGraphic,
+                tvPalette.accentGraphic
             ),
             startY = bottomY - maxBarHeight,
             endY = bottomY
@@ -1327,7 +1382,10 @@ internal fun SpectrumCanvas(spectrum: FloatArray, modifier: Modifier = Modifier)
 
         spectrum.forEachIndexed { i, amplitude ->
             val x = i * barWidth + gap / 2
-            val barHeight = (amplitude * maxBarHeight).coerceAtLeast(3f)
+            // 感知压缩：原始振幅普遍只有 0.05~0.2，线性映射后只有十几像素，
+            // 看起来像一排虚线；sqrt 让弱信号也能占住可用高度
+            val shaped = sqrt(amplitude.coerceIn(0f, 1f))
+            val barHeight = (shaped * maxBarHeight).coerceAtLeast(maxBarHeight * 0.05f)
             // 柱子从底部长出
             drawRoundRect(
                 brush = barBrush,
@@ -1336,10 +1394,10 @@ internal fun SpectrumCanvas(spectrum: FloatArray, modifier: Modifier = Modifier)
                 cornerRadius = androidx.compose.ui.geometry.CornerRadius(actualBarWidth * 0.35f, actualBarWidth * 0.35f)
             )
             // 顶部缓降峰值点：升起即时跟随，回落缓慢（约 1.8 秒落底）
-            peaks[i] = maxOf(peaks[i] - 0.009f, amplitude)
+            peaks[i] = maxOf(peaks[i] - 0.009f, shaped)
             val peakY = bottomY - (peaks[i] * maxBarHeight).coerceAtLeast(3f) - actualBarWidth * 0.9f
             drawRoundRect(
-                color = tvPalette.warning.copy(alpha = 0.9f),
+                color = tvPalette.accentText.copy(alpha = 0.9f),
                 topLeft = androidx.compose.ui.geometry.Offset(x, peakY),
                 size = androidx.compose.ui.geometry.Size(actualBarWidth, actualBarWidth * 0.28f),
                 cornerRadius = androidx.compose.ui.geometry.CornerRadius(actualBarWidth * 0.14f, actualBarWidth * 0.14f)

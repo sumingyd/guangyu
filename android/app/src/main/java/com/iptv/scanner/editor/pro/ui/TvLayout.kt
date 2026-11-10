@@ -33,8 +33,11 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -111,15 +114,14 @@ private fun computeViewportIndex(
     }
 }
 
-// 侧边栏风格配色（主色统一为竖屏 APTV 橙红 AptvAccent）
-private val SIDEBAR_GRADIENT_START = Color(0xFF036D80)
-private val SIDEBAR_GRADIENT_END = Color(0xFF052D49)
-private val ICON_BG = Color(0x32FFFFFF)
-private val TIME_BG = Color(0x26000000)
+// 覆盖层控件底色/分隔：随主题（深色白 10%，浅色黑 8%），
+// 不能再写死白色半透明——浅色主题下白底白字会不可见
+private val ICON_BG: Color @Composable get() = tvPalette.borderSubtle
+private val TIME_BG: Color @Composable get() = tvPalette.borderSubtle
 /** 底栏可读性底色：玻璃霜层上垫深色底 */
 // 底栏不再叠加实底 scrim：深色可读性由玻璃材质 overlayDark 暗玻璃霜层提供
 /** 行间分隔条颜色 */
-private val TV_ROW_DIVIDER = Color(0x1FFFFFFF)
+private val TV_ROW_DIVIDER: Color @Composable get() = tvPalette.borderSubtle
 
 @Composable
 fun TvPlayerLayout(
@@ -336,6 +338,17 @@ fun TvPlayerLayout(
                     modifier = Modifier
                 )
             }
+        } else if (!zeroChannels && allChannels.isNotEmpty() && displayInfo.idx < 0 && !anyPanelOpen) {
+            // 有频道但未选台（例如停止播放后回到播放页）：否则只剩黑底与时钟，
+            // 用户会误以为应用卡死；给出手动入口说明，OK/左键可直接呼出频道列表
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                OsdView(
+                    title = "未选择频道",
+                    subtitle = "按 OK 打开频道列表",
+                    extra = "",
+                    modifier = Modifier
+                )
+            }
         }
         } // CompositionLocalProvider
     }
@@ -365,7 +378,7 @@ private fun TvTimeGroup(modifier: Modifier = Modifier, channelNumberInput: Strin
             ) {
                 Text(
                     text = channelNumberInput,
-                    color = AptvAccent,
+                    color = tvPalette.accentText,
                     fontSize = 72.sp,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
@@ -380,7 +393,7 @@ private fun TvTimeGroup(modifier: Modifier = Modifier, channelNumberInput: Strin
             ) {
                 Text(
                     text = channelNumDisplay,
-                    color = AptvAccent,
+                    color = tvPalette.accentText,
                     fontSize = 48.sp,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
@@ -396,8 +409,8 @@ private fun TvTimeGroup(modifier: Modifier = Modifier, channelNumberInput: Strin
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(text = dateText, color = Color.White, fontSize = 11.sp)
-                Text(text = timeText, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Text(text = dateText, color = MaterialTheme.colorScheme.onSurface, fontSize = 11.sp)
+                Text(text = timeText, color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             }
         }
     }
@@ -426,7 +439,7 @@ private fun TvNetSpeed(modifier: Modifier = Modifier, mpv: com.iptv.scanner.edit
         ) {
             Text(
                 text = speedText,
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 11.sp,
                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
             )
@@ -539,8 +552,8 @@ private fun TvBottomBarStyleA(
     val statusTag = when {
         !fileLoaded -> null
         playbackMode == PlayMode.TIMESHIFT -> "时移" to tvPalette.info
-        showExitCatchup -> "回看" to tvPalette.warning
-        else -> "直播" to AptvAccent
+        showExitCatchup -> "回看" to tvPalette.warningText
+        else -> "直播" to tvPalette.accentText
     }
 
     // 下一节目
@@ -583,7 +596,7 @@ private fun TvBottomBarStyleA(
                     } else {
                         Text(
                             text = displayInfo.name.take(2).ifEmpty { "·" },
-                            color = Color.White,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -600,12 +613,12 @@ private fun TvBottomBarStyleA(
                     if (displayInfo.idx >= 0) {
                         Text(
                             text = String.format("%03d", displayInfo.idx + 1),
-                            color = AptvAccent,
+                            color = tvPalette.accentText,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Medium
                         )
                         Spacer(modifier = Modifier.width(5.dp))
-                        Box(modifier = Modifier.width(1.dp).height(13.dp).background(Color(0x60FFFFFF)))
+                        Box(modifier = Modifier.width(1.dp).height(13.dp).background(MaterialTheme.colorScheme.onSurfaceVariant))
                         Spacer(modifier = Modifier.width(5.dp))
                     }
                     Text(
@@ -622,14 +635,14 @@ private fun TvBottomBarStyleA(
                         Spacer(modifier = Modifier.width(5.dp))
                     }
                     if (paused && fileLoaded) {
-                        Surface(color = Color(0x30FFFFFF), shape = RoundedCornerShape(4.dp)) {
-                            Text("暂停", color = Color.White, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
+                        Surface(color = tvPalette.borderSubtle, shape = RoundedCornerShape(4.dp)) {
+                            Text("暂停", color = MaterialTheme.colorScheme.onSurface, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
                         }
                         Spacer(modifier = Modifier.width(5.dp))
                     }
                     mediaInfoBadges.forEach { info: String ->
-                        Surface(color = Color(0x30FFFFFF), shape = RoundedCornerShape(4.dp)) {
-                            Text(text = info, color = Color(0xCCFFFFFF), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
+                        Surface(color = tvPalette.borderSubtle, shape = RoundedCornerShape(4.dp)) {
+                            Text(text = info, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
                         }
                         Spacer(modifier = Modifier.width(4.dp))
                     }
@@ -689,14 +702,14 @@ private fun TvBottomBarStyleA(
                                     .width(180.dp)
                                     .height(3.dp)
                                     .clip(RoundedCornerShape(1.5.dp))
-                                    .background(Color(0x30FFFFFF))
+                                    .background(tvPalette.borderSubtle)
                             ) {
                                 Box(
                                     modifier = Modifier
                                         .fillMaxHeight()
                                         .width(with(androidx.compose.ui.platform.LocalDensity.current) { (180.dp * (progress.percent / 100f)).toPx().toDp() })
                                         .clip(RoundedCornerShape(1.5.dp))
-                                        .background(AptvAccent)
+                                        .background(tvPalette.accentGraphic)
                                 )
                             }
                             Spacer(modifier = Modifier.width(8.dp))
@@ -713,7 +726,7 @@ private fun TvBottomBarStyleA(
                         }
                         if (remainText != null) {
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text(text = remainText, color = AptvAccent, fontSize = 11.sp)
+                            Text(text = remainText, color = tvPalette.accentText, fontSize = 11.sp)
                         }
                         if (showExitCatchup) {
                             Spacer(modifier = Modifier.width(4.dp))
@@ -747,6 +760,16 @@ private fun TvBottomBarStyleA(
                         IconButton(onClick = { viewModel.setLandscapeSplitMode(true) }, modifier = Modifier.size(30.dp).tvFocusBorder()) {
                             Icon(Icons.Default.FullscreenExit, "返回分屏", tint = oc.iconTint, modifier = Modifier.size(16.dp))
                         }
+                        Spacer(modifier = Modifier.width(2.dp))
+                        // 频道信息：TV 全屏底栏此前没有入口，遥控器无法打开该弹窗
+                        IconButton(onClick = { viewModel.toggleChannelInfo() }, modifier = Modifier.size(30.dp).tvFocusBorder()) {
+                            Icon(Icons.Default.Info, "频道信息", tint = oc.iconTint, modifier = Modifier.size(16.dp))
+                        }
+                        Spacer(modifier = Modifier.width(2.dp))
+                        // 播放工具：同上，补齐遥控器入口（截图/切片/EPG/书签等）
+                        IconButton(onClick = { viewModel.togglePlayerToolsPanel() }, modifier = Modifier.size(30.dp).tvFocusBorder()) {
+                            Icon(Icons.Default.MoreVert, "播放工具", tint = oc.iconTint, modifier = Modifier.size(16.dp))
+                        }
                     }
 
                 // 第3行：下一节目时间范围 + 下一节目名
@@ -767,7 +790,7 @@ private fun TvBottomBarStyleA(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = nextProgram!!.title,
-                                    color = Color(0xB3FFFFFF),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontSize = 14.sp,
                                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f)
@@ -818,8 +841,8 @@ private fun TvBottomBarStyleB(
     val statusTag = when {
         !fileLoaded -> null
         playbackMode == PlayMode.TIMESHIFT -> "时移" to tvPalette.info
-        showExitCatchup -> "回看" to tvPalette.warning
-        else -> "直播" to AptvAccent
+        showExitCatchup -> "回看" to tvPalette.warningText
+        else -> "直播" to tvPalette.accentText
     }
 
     GlassPanel(liquidGlass = liquidGlass, cornerRadius = 8.dp, overlayDark = true) {
@@ -842,13 +865,13 @@ private fun TvBottomBarStyleB(
                 if (displayInfo.logo.isNotEmpty()) {
                     AsyncImage(model = displayInfo.logo, contentDescription = displayInfo.name, modifier = Modifier.fillMaxSize().padding(2.dp), contentScale = ContentScale.Fit)
                 } else {
-                    Text(text = displayInfo.name.take(2).ifEmpty { "·" }, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(text = displayInfo.name.take(2).ifEmpty { "·" }, color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             }
             Spacer(modifier = Modifier.width(10.dp))
             // 频道号 + 名
             if (displayInfo.idx >= 0) {
-                Text(text = String.format("%03d", displayInfo.idx + 1), color = AptvAccent, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Text(text = String.format("%03d", displayInfo.idx + 1), color = tvPalette.accentText, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                 Spacer(modifier = Modifier.width(5.dp))
             }
             Text(
@@ -880,14 +903,14 @@ private fun TvBottomBarStyleB(
                             .fillMaxWidth()
                             .height(2.dp)
                             .clip(RoundedCornerShape(1.dp))
-                            .background(Color(0x30FFFFFF))
+                            .background(tvPalette.borderSubtle)
                     ) {
                         Box(
                             modifier = Modifier
                                 .fillMaxHeight()
                                 .fillMaxWidth(progress)
                                 .clip(RoundedCornerShape(1.dp))
-                                .background(AptvAccent)
+                                .background(tvPalette.accentGraphic)
                         )
                     }
                 }
@@ -941,8 +964,8 @@ private fun TvBottomBarStyleC(
     val statusTag = when {
         !fileLoaded -> null
         playbackMode == PlayMode.TIMESHIFT -> "时移" to tvPalette.info
-        showExitCatchup -> "回看" to tvPalette.warning
-        else -> "直播" to AptvAccent
+        showExitCatchup -> "回看" to tvPalette.warningText
+        else -> "直播" to tvPalette.accentText
     }
 
     GlassPanel(liquidGlass = liquidGlass, cornerRadius = 12.dp, overlayDark = true) {
@@ -960,7 +983,7 @@ private fun TvBottomBarStyleC(
             // 行1：频道号 + 名 + 状态 + 徽章 + 节目时间范围
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (displayInfo.idx >= 0) {
-                    Text(text = String.format("%03d", displayInfo.idx + 1), color = AptvAccent, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text(text = String.format("%03d", displayInfo.idx + 1), color = tvPalette.accentText, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                     Spacer(modifier = Modifier.width(6.dp))
                 }
                 Text(
@@ -1013,14 +1036,14 @@ private fun TvBottomBarStyleC(
                         .fillMaxWidth(0.72f)
                         .height(3.dp)
                         .clip(RoundedCornerShape(1.5.dp))
-                        .background(Color(0x30FFFFFF))
+                        .background(tvPalette.borderSubtle)
                 ) {
                     Box(
                         modifier = Modifier
                             .fillMaxHeight()
                             .fillMaxWidth(progress)
                             .clip(RoundedCornerShape(1.5.dp))
-                            .background(AptvAccent)
+                            .background(tvPalette.accentGraphic)
                     )
                 }
             }
@@ -1056,8 +1079,8 @@ private fun TvBottomBarStyleD(
     val statusTag = when {
         !fileLoaded -> null
         playbackMode == PlayMode.TIMESHIFT -> "时移" to tvPalette.info
-        showExitCatchup -> "回看" to tvPalette.warning
-        else -> "直播" to AptvAccent
+        showExitCatchup -> "回看" to tvPalette.warningText
+        else -> "直播" to tvPalette.accentText
     }
 
     GlassPanel(liquidGlass = liquidGlass, cornerRadius = 8.dp, overlayDark = true) {
@@ -1076,7 +1099,7 @@ private fun TvBottomBarStyleD(
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (displayInfo.idx >= 0) {
-                        Text(text = String.format("%03d", displayInfo.idx + 1), color = AptvAccent, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text(text = String.format("%03d", displayInfo.idx + 1), color = tvPalette.accentText, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                         Spacer(modifier = Modifier.width(5.dp))
                     }
                     Text(
@@ -1108,14 +1131,14 @@ private fun TvBottomBarStyleD(
                                 .width(110.dp)
                                 .height(3.dp)
                                 .clip(RoundedCornerShape(1.5.dp))
-                                .background(Color(0x30FFFFFF))
+                                .background(tvPalette.borderSubtle)
                         ) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxHeight()
                                     .fillMaxWidth(progress)
                                     .clip(RoundedCornerShape(1.5.dp))
-                                    .background(AptvAccent)
+                                    .background(tvPalette.accentGraphic)
                             )
                         }
                     }
@@ -1177,8 +1200,8 @@ internal val TV_BOTTOM_BAR_STYLES: List<Pair<Int, String>> = listOf(
 private fun tvBarStatusTag(fileLoaded: Boolean, playbackMode: PlayMode, showExitCatchup: Boolean): Pair<String, Color>? = when {
     !fileLoaded -> null
     playbackMode == PlayMode.TIMESHIFT -> "时移" to tvPalette.info
-    showExitCatchup -> "回看" to tvPalette.warning
-    else -> "直播" to AptvAccent
+    showExitCatchup -> "回看" to tvPalette.warningText
+    else -> "直播" to tvPalette.accentText
 }
 
 /** 共享：距当前节目结束的剩余时间文案 */
@@ -1218,7 +1241,7 @@ private fun TvBarLogo(displayInfo: ChannelDisplayInfo, width: Dp, height: Dp, te
         } else {
             Text(
                 text = displayInfo.name.take(2).ifEmpty { "·" },
-                color = Color.White, fontSize = textSp, fontWeight = FontWeight.Bold, maxLines = 1
+                color = MaterialTheme.colorScheme.onSurface, fontSize = textSp, fontWeight = FontWeight.Bold, maxLines = 1
             )
         }
     }
@@ -1237,8 +1260,8 @@ private fun TvBarTags(statusTag: Pair<String, Color>?, paused: Boolean, fileLoad
     }
     if (paused && fileLoaded) {
         if (statusTag != null) Spacer(modifier = Modifier.width(4.dp))
-        Surface(color = Color(0x30FFFFFF), shape = RoundedCornerShape(4.dp)) {
-            Text("暂停", color = Color.White, fontSize = sp, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
+        Surface(color = tvPalette.borderSubtle, shape = RoundedCornerShape(4.dp)) {
+            Text("暂停", color = MaterialTheme.colorScheme.onSurface, fontSize = sp, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
         }
     }
 }
@@ -1250,14 +1273,14 @@ private fun TvBarThinProgress(progress: Float, modifier: Modifier = Modifier, he
         modifier = modifier
             .height(height)
             .clip(RoundedCornerShape(height / 2))
-            .background(Color(0x30FFFFFF))
+            .background(tvPalette.borderSubtle)
     ) {
         Box(
             modifier = Modifier
                 .fillMaxHeight()
                 .fillMaxWidth(progress)
                 .clip(RoundedCornerShape(height / 2))
-                .background(AptvAccent)
+                .background(tvPalette.accentGraphic)
         )
     }
 }
@@ -1352,8 +1375,8 @@ private fun TvBarMediaBadges(
 @Composable
 private fun TvBarBadgeTexts(badges: List<String>, sp: TextUnit = 11.sp) {
     badges.forEach { info: String ->
-        Surface(color = Color(0x30FFFFFF), shape = RoundedCornerShape(4.dp)) {
-            Text(text = info, color = Color(0xCCFFFFFF), fontSize = sp, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
+        Surface(color = tvPalette.borderSubtle, shape = RoundedCornerShape(4.dp)) {
+            Text(text = info, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = sp, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
         }
         Spacer(modifier = Modifier.width(4.dp))
     }
@@ -1390,7 +1413,7 @@ private fun TvBottomBarStyleE(
                 if (displayInfo.idx >= 0) {
                     Text(
                         text = String.format("%03d", displayInfo.idx + 1),
-                        color = AptvAccent, fontSize = 13.sp, fontWeight = FontWeight.Medium
+                        color = tvPalette.accentText, fontSize = 13.sp, fontWeight = FontWeight.Medium
                     )
                 }
                 Text(
@@ -1468,7 +1491,7 @@ private fun TvBarEpgLine(
 
 /** 共享：节目简介多行文本（desc 为空时跳过） */
 @Composable
-private fun TvBarDescText(program: IptvEpgProgram?, maxLines: Int = 2, color: Color = Color(0x99FFFFFF)) {
+private fun TvBarDescText(program: IptvEpgProgram?, maxLines: Int = 2, color: Color = MaterialTheme.colorScheme.onSurfaceVariant) {
     val desc = program?.desc?.trim().orEmpty()
     if (desc.isEmpty()) return
     Text(
@@ -1528,7 +1551,7 @@ private fun TvBottomBarStyleF(
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (displayInfo.idx >= 0) {
-                            Text(text = String.format("%03d", displayInfo.idx + 1), color = AptvAccent, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                            Text(text = String.format("%03d", displayInfo.idx + 1), color = tvPalette.accentText, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                             Spacer(modifier = Modifier.width(5.dp))
                         }
                         Text(
@@ -1562,7 +1585,7 @@ private fun TvBottomBarStyleF(
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(text = posText, color = tvPalette.textTertiary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                     }
-                    if (netSpeed != null) Text(text = "↓ $netSpeed", color = Color(0x99FFFFFF), fontSize = 10.sp)
+                    if (netSpeed != null) Text(text = "↓ $netSpeed", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
                 }
             }
             Spacer(modifier = Modifier.height(6.dp))
@@ -1576,7 +1599,7 @@ private fun TvBottomBarStyleF(
                     Spacer(modifier = Modifier.weight(1f))
                 }
                 if (remainText != null) {
-                    Text(text = remainText, color = AptvAccent, fontSize = 11.sp)
+                    Text(text = remainText, color = tvPalette.accentText, fontSize = 11.sp)
                     Spacer(modifier = Modifier.width(8.dp))
                 }
                 TvBarControls(viewModel, paused, barFocus, oc, buttonSize = 30.dp, playSize = 34.dp, iconSize = 16.dp)
@@ -1591,7 +1614,7 @@ private fun TvBottomBarStyleF(
                     Spacer(modifier = Modifier.width(5.dp))
                     Text(
                         text = "${timeFmt.format(java.util.Date(nextProgram.startTs * 1000L))} ${nextProgram.title}",
-                        color = Color(0xB3FFFFFF), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -1638,7 +1661,7 @@ private fun TvBottomBarStyleG(
                 TvBarLogo(displayInfo, 64.dp, 32.dp, 13.sp)
                 Spacer(modifier = Modifier.width(10.dp))
                 if (displayInfo.idx >= 0) {
-                    Text(text = String.format("%03d", displayInfo.idx + 1), color = AptvAccent, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text(text = String.format("%03d", displayInfo.idx + 1), color = tvPalette.accentText, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                     Spacer(modifier = Modifier.width(6.dp))
                 }
                 Text(
@@ -1666,7 +1689,7 @@ private fun TvBottomBarStyleG(
                     Spacer(modifier = Modifier.weight(1f))
                 }
                 val remainText = tvBarRemainText(tick, currentProgram)
-                if (remainText != null) Text(text = remainText, color = AptvAccent, fontSize = 11.sp)
+                if (remainText != null) Text(text = remainText, color = tvPalette.accentText, fontSize = 11.sp)
             }
             Spacer(modifier = Modifier.height(6.dp))
             // 行3：当前节目 | 下一节目（左） + 居中按钮组（右）
@@ -1687,7 +1710,7 @@ private fun TvBottomBarStyleG(
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = "下一档 ${timeFmt.format(java.util.Date(nextProgram.startTs * 1000L))} ${nextProgram.title}",
-                            color = Color(0x80FFFFFF), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -1745,7 +1768,7 @@ private fun TvBottomBarStyleH(
                     TvBarLogo(displayInfo, 44.dp, 24.dp, 10.sp)
                     Spacer(modifier = Modifier.width(7.dp))
                     if (displayInfo.idx >= 0) {
-                        Text(text = String.format("%03d", displayInfo.idx + 1), color = AptvAccent, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text(text = String.format("%03d", displayInfo.idx + 1), color = tvPalette.accentText, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                         Spacer(modifier = Modifier.width(5.dp))
                     }
                     Text(
@@ -1783,7 +1806,7 @@ private fun TvBottomBarStyleH(
                     val remainText = tvBarRemainText(tick, currentProgram)
                     if (remainText != null) {
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(text = remainText, color = AptvAccent, fontSize = 10.sp)
+                        Text(text = remainText, color = tvPalette.accentText, fontSize = 10.sp)
                     }
                 }
                 // 行3：下一节目
@@ -1791,7 +1814,7 @@ private fun TvBottomBarStyleH(
                     Spacer(modifier = Modifier.height(3.dp))
                     Text(
                         text = "下一档 ${timeFmt.format(java.util.Date(nextProgram.startTs * 1000L))} ${nextProgram.title}",
-                        color = Color(0x80FFFFFF), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -1870,14 +1893,14 @@ private fun TvBottomBarStyleI(
                     val remainText = tvBarRemainText(tick, currentProgram)
                     if (remainText != null) {
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text(text = remainText, color = AptvAccent, fontSize = 10.sp)
+                        Text(text = remainText, color = tvPalette.accentText, fontSize = 10.sp)
                     }
                 }
                 if (nextProgram != null) {
                     Spacer(modifier = Modifier.height(3.dp))
                     Text(
                         text = "下一档 ${timeFmt.format(java.util.Date(nextProgram.startTs * 1000L))} ${nextProgram.title}",
-                        color = Color(0x80FFFFFF), fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
                 }
                 Spacer(modifier = Modifier.height(3.dp))
@@ -1936,7 +1959,7 @@ private fun TvBottomBarStyleJ(
                 // 行1：频道号（大）+ 频道名（大）+ 状态 + 徽章
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (displayInfo.idx >= 0) {
-                        Text(text = String.format("%03d", displayInfo.idx + 1), color = AptvAccent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                        Text(text = String.format("%03d", displayInfo.idx + 1), color = tvPalette.accentText, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                         Spacer(modifier = Modifier.width(8.dp))
                     }
                     Text(
@@ -1958,13 +1981,13 @@ private fun TvBottomBarStyleJ(
                         text = currentProgram?.title?.ifEmpty { null } ?: "精彩节目",
                         color = oc.textSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
-                    Text(text = "·", color = Color(0x60FFFFFF), fontSize = 11.sp)
+                    Text(text = "·", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
                     Text(
                         text = tvBarPosText(tick, timePos, playbackMode, showExitCatchup, fullTimeFmt),
                         color = tvPalette.textSecondary, fontSize = 11.sp
                     )
                     val remainText = tvBarRemainText(tick, currentProgram)
-                    if (remainText != null) Text(text = remainText, color = AptvAccent, fontSize = 10.sp)
+                    if (remainText != null) Text(text = remainText, color = tvPalette.accentText, fontSize = 10.sp)
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 // 行3：居中细进度条
@@ -2043,7 +2066,7 @@ private fun TvBottomBarStyleK(
                 TvBarLogo(displayInfo, 40.dp, 22.dp, 9.sp)
                 Spacer(modifier = Modifier.width(7.dp))
                 if (displayInfo.idx >= 0) {
-                    Text(text = String.format("%03d", displayInfo.idx + 1), color = AptvAccent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    Text(text = String.format("%03d", displayInfo.idx + 1), color = tvPalette.accentText, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                     Spacer(modifier = Modifier.width(5.dp))
                 }
                 Text(
@@ -2077,7 +2100,7 @@ private fun TvBottomBarStyleK(
                 val remainText = tvBarRemainText(tick, currentProgram)
                 if (remainText != null) {
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text(text = remainText, color = AptvAccent, fontSize = 10.sp)
+                    Text(text = remainText, color = tvPalette.accentText, fontSize = 10.sp)
                 }
             }
         }
@@ -2126,7 +2149,7 @@ private fun TvBottomBarStyleL(
                     TvBarLogo(displayInfo, 44.dp, 24.dp, 10.sp)
                     Spacer(modifier = Modifier.width(7.dp))
                     if (displayInfo.idx >= 0) {
-                        Text(text = String.format("%03d", displayInfo.idx + 1), color = AptvAccent, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text(text = String.format("%03d", displayInfo.idx + 1), color = tvPalette.accentText, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                         Spacer(modifier = Modifier.width(5.dp))
                     }
                     Text(
@@ -2158,14 +2181,14 @@ private fun TvBottomBarStyleL(
                     val remainText = tvBarRemainText(tick, currentProgram)
                     if (remainText != null) {
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text(text = remainText, color = AptvAccent, fontSize = 10.sp)
+                        Text(text = remainText, color = tvPalette.accentText, fontSize = 10.sp)
                     }
                 }
                 if (nextProgram != null) {
                     Spacer(modifier = Modifier.height(3.dp))
                     Text(
                         text = "下一档 ${timeFmt.format(java.util.Date(nextProgram.startTs * 1000L))} ${nextProgram.title}",
-                        color = Color(0x80FFFFFF), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -2180,7 +2203,7 @@ private fun TvBottomBarStyleL(
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(text = remember(tick) { dateFmt.format(java.util.Date(tick)) }, color = tvPalette.textSecondary, fontSize = 9.sp)
-                    if (netSpeed != null) Text(text = "↓$netSpeed", color = Color(0x99FFFFFF), fontSize = 9.sp)
+                    if (netSpeed != null) Text(text = "↓$netSpeed", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp)
                 }
             }
             Spacer(modifier = Modifier.width(10.dp))
@@ -2255,7 +2278,7 @@ private fun TvBottomBarStyleM(
             // 中：节目信息列
             Column(modifier = Modifier.weight(1.4f)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (remainText != null) Text(text = "剩余播放 $remainText", color = AptvAccent, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                    if (remainText != null) Text(text = "剩余播放 $remainText", color = tvPalette.accentText, fontSize = 11.sp, fontWeight = FontWeight.Medium)
                     if (paused) TvBarTags(null, true, fileLoaded, sp = 10.sp)
                 }
                 Spacer(modifier = Modifier.height(3.dp))
@@ -2328,7 +2351,7 @@ private fun TvBottomBarStyleN(
                         TvBarTags(statusTag, paused, fileLoaded, sp = 9.sp)
                         if (netSpeed != null) Text(text = "↓ $netSpeed", color = tvPalette.success, fontSize = 10.sp)
                         val remainText = tvBarRemainText(tick, currentProgram)
-                        if (remainText != null) Text(text = remainText, color = AptvAccent, fontSize = 10.sp)
+                        if (remainText != null) Text(text = remainText, color = tvPalette.accentText, fontSize = 10.sp)
                     }
                 }
                 Spacer(modifier = Modifier.width(10.dp))
@@ -2406,7 +2429,7 @@ private fun TvBottomBarStyleO(
                         Spacer(modifier = Modifier.width(6.dp))
                         TvBarBadgeTexts(mediaBadges.take(3), sp = 9.sp)
                         Spacer(modifier = Modifier.weight(1f))
-                        if (remainText != null) Text(text = "距结束: $remainText", color = AptvAccent, fontSize = 11.sp)
+                        if (remainText != null) Text(text = "距结束: $remainText", color = tvPalette.accentText, fontSize = 11.sp)
                     }
                     Spacer(modifier = Modifier.height(3.dp))
                     TvBarEpgLine("正在播放", currentProgram, timeFmt, oc.textPrimary, titleSp = 12.sp)
@@ -2419,7 +2442,7 @@ private fun TvBottomBarStyleO(
                             TvBarEpgLine("下一节目", nextProgram, timeFmt, oc.textSecondary, titleSp = 11.sp)
                             if (netSpeed != null) {
                                 Spacer(modifier = Modifier.height(1.dp))
-                                Text(text = "↓ $netSpeed", color = Color(0x80FFFFFF), fontSize = 9.sp)
+                                Text(text = "↓ $netSpeed", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp)
                             }
                         }
                         Spacer(modifier = Modifier.width(8.dp))
@@ -2515,7 +2538,7 @@ private fun TvBottomBarStyleP(
                             .fillMaxWidth()
                             .height(5.dp)
                             .clip(RoundedCornerShape(2.5.dp))
-                            .background(Color(0x33FFFFFF))
+                            .background(tvPalette.borderSubtle)
                     ) {
                         Box(
                             modifier = Modifier
@@ -2524,7 +2547,7 @@ private fun TvBottomBarStyleP(
                                 .clip(RoundedCornerShape(2.5.dp))
                                 .background(
                                     Brush.horizontalGradient(
-                                        listOf(AptvAccent, tvPalette.info, tvPalette.success)
+                                        listOf(tvPalette.accentGraphic, tvPalette.info, tvPalette.success)
                                     )
                                 )
                         )
@@ -2535,7 +2558,7 @@ private fun TvBottomBarStyleP(
                             .fillMaxWidth()
                             .height(5.dp)
                             .clip(RoundedCornerShape(2.5.dp))
-                            .background(Color(0x22FFFFFF))
+                            .background(tvPalette.borderSubtle)
                     )
                 }
                 Spacer(modifier = Modifier.height(4.dp))
@@ -2543,13 +2566,13 @@ private fun TvBottomBarStyleP(
                     if (nextProgram != null) {
                         Text(
                             text = "下一档 ${timeFmt.format(java.util.Date(nextProgram.startTs * 1000L))} ${nextProgram.title}",
-                            color = Color(0x80FFFFFF), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
                         )
                     } else {
                         Spacer(modifier = Modifier.weight(1f))
                     }
-                    if (remainText != null) Text(text = "+$remainText", color = AptvAccent, fontSize = 10.sp)
+                    if (remainText != null) Text(text = "+$remainText", color = tvPalette.accentText, fontSize = 10.sp)
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -2599,13 +2622,13 @@ private fun TvBottomBarStyleQ(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(2.dp)
-                            .background(Color(0x22FFFFFF))
+                            .background(tvPalette.borderSubtle)
                     ) {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth(progress)
                                 .fillMaxHeight()
-                                .background(AptvAccent)
+                                .background(tvPalette.accentGraphic)
                         )
                     }
                 }
@@ -2713,11 +2736,11 @@ private fun TvBottomBarStyleR(
                 // 当前节目（高亮）
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
-                        modifier = Modifier.size(5.dp).clip(androidx.compose.foundation.shape.CircleShape).background(AptvAccent)
+                        modifier = Modifier.size(5.dp).clip(androidx.compose.foundation.shape.CircleShape).background(tvPalette.accentGraphic)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     val range = tvBarProgramRange(currentProgram, timeFmt)
-                    Text(text = range ?: "正在播放", color = AptvAccent, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+                    Text(text = range ?: "正在播放", color = tvPalette.accentText, fontSize = 10.sp, fontWeight = FontWeight.Medium)
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = currentProgram?.title?.ifEmpty { null } ?: "精彩节目",
@@ -2725,12 +2748,12 @@ private fun TvBottomBarStyleR(
                         maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
                     )
                     val remainText = tvBarRemainText(tick, currentProgram)
-                    if (remainText != null) Text(text = remainText, color = AptvAccent, fontSize = 9.sp)
+                    if (remainText != null) Text(text = remainText, color = tvPalette.accentText, fontSize = 9.sp)
                 }
                 // 下一档
                 TvBarTimelineSlot(nextProgram, timeFmt, oc.textSecondary)
                 // 再下一档
-                TvBarTimelineSlot(thirdProgram, timeFmt, Color(0x66FFFFFF))
+                TvBarTimelineSlot(thirdProgram, timeFmt, MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Spacer(modifier = Modifier.width(10.dp))
             Box(modifier = Modifier.width(1.dp).height(56.dp).background(TV_ROW_DIVIDER))
@@ -2742,7 +2765,7 @@ private fun TvBottomBarStyleR(
                     color = tvPalette.textTertiary, fontSize = 16.sp, fontWeight = FontWeight.Bold
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { TvBarBadgeTexts(mediaBadges.take(2), sp = 9.sp) }
-                if (netSpeed != null) Text(text = "↓ $netSpeed", color = Color(0x99FFFFFF), fontSize = 9.sp)
+                if (netSpeed != null) Text(text = "↓ $netSpeed", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp)
                 TvBarControls(viewModel, paused, barFocus, oc, buttonSize = 26.dp, playSize = 30.dp, iconSize = 14.dp, playIconSize = 16.dp, spacing = 2.dp)
             }
         }
@@ -2753,7 +2776,7 @@ private fun TvBottomBarStyleR(
 @Composable
 private fun TvBarTimelineSlot(program: IptvEpgProgram?, timeFmt: java.text.SimpleDateFormat, titleColor: Color) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(modifier = Modifier.size(5.dp).clip(androidx.compose.foundation.shape.CircleShape).background(Color(0x33FFFFFF)))
+        Box(modifier = Modifier.size(5.dp).clip(androidx.compose.foundation.shape.CircleShape).background(tvPalette.borderSubtle))
         Spacer(modifier = Modifier.width(6.dp))
         Text(
             text = program?.let { if (it.stopTs > 0) "${timeFmt.format(java.util.Date(it.startTs * 1000L))} - ${timeFmt.format(java.util.Date(it.stopTs * 1000L))}" else "" } ?: "--:-- - --:--",

@@ -156,6 +156,9 @@ val aptvStyle = LocalAptvStyle.current
     // focusGroup() 让 DPAD 导航限制在面板内部，不外溢到下层。
     val closeFocusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) {
+        // 遥控器确认键刚按下就打开面板时，同一按键序列的 KeyUp 会落到新窗口的
+        // 关闭按钮上，面板会「打开即关闭」；等按键序列结束后再抢焦点
+        kotlinx.coroutines.delay(220)
         runCatching { closeFocusRequester.requestFocus() }
     }
     // 面板关闭后焦点会随面板节点一起从焦点树移除，遥控器焦点框直接消失。
