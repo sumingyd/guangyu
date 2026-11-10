@@ -6,7 +6,7 @@ import time
 import os
 
 
-import numpy as np
+from utils.numpy_compat import np, NUMPY_AVAILABLE
 from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import QTimer, Qt, QRectF, QPointF
 from PySide6.QtGui import (
@@ -82,13 +82,24 @@ SAMPLE_RATE = 44100
 AUDIO_CHANNELS = 2
 NUM_BARS = 64
 
+# numpy 不可用时可视化整体禁用，这里只保留类型占位，数组永远不会被消费
+_F32 = np.float32 if NUMPY_AVAILABLE else None
+_I32 = np.int32 if NUMPY_AVAILABLE else None
+
+
+def _zeros(count, dtype=None):
+    """numpy 缺失时返回空元组：调用方在此之前已跳过可视化链路。"""
+    if np is None:
+        return ()
+    return np.zeros(count) if dtype is None else np.zeros(count, dtype=dtype)
+
 
 class AudioPCMProvider:
     def __init__(self):
         self._lock = threading.Lock()
-        self._pcm_mono = np.zeros(0, dtype=np.float32)
-        self._pcm_left = np.zeros(0, dtype=np.float32)
-        self._pcm_right = np.zeros(0, dtype=np.float32)
+        self._pcm_mono = _zeros(0, _F32)
+        self._pcm_left = _zeros(0, _F32)
+        self._pcm_right = _zeros(0, _F32)
         self._sample_rate = SAMPLE_RATE
         self._duration = 0.0
         self._time_pos = 0.0
@@ -99,9 +110,9 @@ class AudioPCMProvider:
         with self._lock:
             self._decode_generation += 1
             my_gen = self._decode_generation
-            self._pcm_mono = np.zeros(0, dtype=np.float32)
-            self._pcm_left = np.zeros(0, dtype=np.float32)
-            self._pcm_right = np.zeros(0, dtype=np.float32)
+            self._pcm_mono = _zeros(0, _F32)
+            self._pcm_left = _zeros(0, _F32)
+            self._pcm_right = _zeros(0, _F32)
             self._duration = 0.0
             self._time_pos = 0.0
             self._loading = True
@@ -109,18 +120,20 @@ class AudioPCMProvider:
 
     def stop(self):
         with self._lock:
-            self._pcm_mono = np.zeros(0, dtype=np.float32)
-            self._pcm_left = np.zeros(0, dtype=np.float32)
-            self._pcm_right = np.zeros(0, dtype=np.float32)
+            self._pcm_mono = _zeros(0, _F32)
+            self._pcm_left = _zeros(0, _F32)
+            self._pcm_right = _zeros(0, _F32)
             self._duration = 0.0
 
     def update_time_pos(self, time_pos):
         self._time_pos = max(0.0, time_pos)
 
     def get_samples(self, count=FFT_SIZE):
+        if np is None:
+            return _zeros(count, _F32)
         with self._lock:
             if len(self._pcm_mono) == 0:
-                return np.zeros(count, dtype=np.float32)
+                return _zeros(count, _F32)
             idx = int(self._time_pos * self._sample_rate)
             start = max(0, idx - count)
             end = start + count
@@ -129,23 +142,25 @@ class AudioPCMProvider:
                 start = max(0, end - count)
             chunk = self._pcm_mono[start:end].copy()
         if len(chunk) < count:
-            padded = np.zeros(count, dtype=np.float32)
+            padded = _zeros(count, _F32)
             padded[:len(chunk)] = chunk
             return padded
         return chunk
 
     def get_stereo_samples(self, count=256):
+        if np is None:
+            return _zeros(count, _F32), _zeros(count, _F32)
         with self._lock:
             if len(self._pcm_left) == 0:
-                return np.zeros(count, dtype=np.float32), np.zeros(count, dtype=np.float32)
+                return _zeros(count, _F32), _zeros(count, _F32)
             idx = int(self._time_pos * self._sample_rate)
             start = max(0, idx - count)
             end = start + count
             left = self._pcm_left[start:end].copy()
             right = self._pcm_right[start:end].copy()
         if len(left) < count:
-            padded_l = np.zeros(count, dtype=np.float32)
-            padded_r = np.zeros(count, dtype=np.float32)
+            padded_l = _zeros(count, _F32)
+            padded_r = _zeros(count, _F32)
             padded_l[:len(left)] = left
             padded_r[:len(right)] = right
             return padded_l, padded_r
@@ -153,6 +168,9 @@ class AudioPCMProvider:
 
     def _decode_file(self, file_path, my_gen):
         from core.log_manager import global_logger as _log
+        if np is None:
+            _log.warning('音频可视化预解码跳过：numpy 不可用')
+            return
         proc = None
         try:
             native_path = os.path.normpath(file_path)
@@ -209,6 +227,9 @@ class AudioPCMProvider:
 
 
 def compute_spectrum(samples, fft_size=FFT_SIZE, num_bars=NUM_BARS):
+    if np is None:
+        # numpy 不可用：调用方（_tick/paintEvent）已跳过绘制，这里只做安全兜底
+        return [0.0] * num_bars
     if len(samples) < fft_size:
         padded = np.zeros(fft_size, dtype=np.float32)
         padded[:len(samples)] = samples
@@ -276,12 +297,12 @@ class AudioVisualWidget(QWidget):
         self._active = False
         self._pc = player_controller
         self._pcm = AudioPCMProvider()
-        self._bars = np.zeros(NUM_BARS)
-        self._smooth_bars = np.zeros(NUM_BARS)
-        self._peak_bars = np.zeros(NUM_BARS)
-        self._peak_decay = np.zeros(NUM_BARS, dtype=np.int32)
-        self._wave_left = np.zeros(512)
-        self._wave_right = np.zeros(512)
+        self._bars = _zeros(NUM_BARS)
+        self._smooth_bars = _zeros(NUM_BARS)
+        self._peak_bars = _zeros(NUM_BARS)
+        self._peak_decay = _zeros(NUM_BARS, _I32)
+        self._wave_left = _zeros(512)
+        self._wave_right = _zeros(512)
         self._cover_pixmap = None
         self._cover_blurred_pixmap = None  # 预计算的模糊封面（用于光晕渲染，缓存避免每帧重算）
         self._frame_count = 0
@@ -391,9 +412,9 @@ class AudioVisualWidget(QWidget):
             self._galaxy_hue = 200.0
             self._galaxy_time = 0.0
             self._galaxy_pulse = 0.0
-        self._peak_bars = np.zeros(NUM_BARS)
-        self._peak_decay = np.zeros(NUM_BARS, dtype=np.int32)
-        self._smooth_bars = np.zeros(NUM_BARS)
+        self._peak_bars = _zeros(NUM_BARS)
+        self._peak_decay = _zeros(NUM_BARS, _I32)
+        self._smooth_bars = _zeros(NUM_BARS)
 
     def _on_random_tick(self):
         if not self._random_mode or not self._active:
@@ -434,6 +455,10 @@ class AudioVisualWidget(QWidget):
         return f
 
     def start(self, file_path=None):
+        if np is None:
+            # numpy 缺失时可视化整体禁用，不能拉起预解码线程
+            logger.warning('音频可视化不可用：numpy 导入失败，详见 crash.log')
+            return
         self._active = True
         if file_path and os.path.exists(file_path):
             self._pcm.start(file_path)
@@ -530,7 +555,7 @@ class AudioVisualWidget(QWidget):
         return self._cover_shape
 
     def _tick(self):
-        if not self._active:
+        if not self._active or np is None:
             return
         self._sync_parent_size()
         self._update_fade()
@@ -906,7 +931,7 @@ class AudioVisualWidget(QWidget):
             self._galaxy_particles = self._galaxy_particles[:target + 80]
 
     def paintEvent(self, event):
-        if not self._active:
+        if not self._active or np is None:
             return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -2010,6 +2035,8 @@ class AudioVisualService:
 
     def auto_enable_if_audio(self):
         from core.log_manager import global_logger as _log
+        if np is None:
+            return False
         if self.detect_audio_only():
             if self._current_style == 'none':
                 saved = self._load_saved_style()
@@ -2055,7 +2082,7 @@ class AudioVisualService:
             return False
 
     def apply_visual_style(self, style_key):
-        if style_key not in AUDIO_VISUAL_STYLES:
+        if np is None or style_key not in AUDIO_VISUAL_STYLES:
             return False
         self._current_style = style_key
         if style_key == 'none':

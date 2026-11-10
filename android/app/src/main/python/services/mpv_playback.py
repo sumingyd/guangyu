@@ -330,6 +330,14 @@ class MpvPlayback:
             if is_windows():
                 # 用户显式选择优先，只有 auto 才走平台默认(d3d11)
                 effective_api = 'd3d11' if gpu_api == 'auto' else gpu_api
+                if effective_api == 'd3d11' and gpu_api == 'auto':
+                    # 老显卡（如 Radeon HD 4300/4500 仅 D3D10.1）建不出 D3D11 设备，
+                    # 直接按 auto 用 d3d11 会黑屏，这里探测后先用 OpenGL
+                    from utils.gpu_caps import d3d11_available
+                    if not d3d11_available():
+                        effective_api = 'opengl'
+                        self._facade.logger.warning(
+                            '显卡不支持 D3D11（Feature Level < 11_0），自动改用 OpenGL 渲染')
                 if effective_api == 'vulkan':
                     # 实测(mpv 0.41)：Vulkan 必须配 gpu-context=winvk；配 win(WGL) 会
                     # 报 "Failed initializing any suitable GPU context!" 直接无画面
@@ -339,7 +347,8 @@ class MpvPlayback:
                 elif effective_api == 'opengl':
                     _mpv_set_option_string(self._facade.mpv_handle, 'gpu-api', 'opengl')
                     _mpv_set_option_string(self._facade.mpv_handle, 'gpu-context', 'win')
-                    self._facade.logger.info("使用 OpenGL GPU API（用户配置）")
+                    self._facade.logger.info(
+                        "使用 OpenGL GPU API" if gpu_api == 'opengl' else "使用 OpenGL GPU API（自动降级）")
                 else:
                     _mpv_set_option_string(self._facade.mpv_handle, 'gpu-api', 'd3d11')
                     _mpv_set_option_string(self._facade.mpv_handle, 'd3d11-sync-interval', '1')
@@ -470,11 +479,13 @@ class MpvPlayback:
             if os.environ.get('MPV_DEBUG_LOG', '0') == '1':
                 _mpv_set_property_string(
                     self._facade.mpv_handle, 'msg-level',
-                    'all=fatal,demuxer=debug,vd=debug,ad=debug,hwdec=debug'
+                    'all=fatal,demuxer=debug,vd=debug,ad=debug,hwdec=debug,vo=error,gpu=error'
                 )
                 _log_request_level = b'debug'
             else:
-                _mpv_set_property_string(self._facade.mpv_handle, 'msg-level', 'all=fatal')
+                # 保留 vo/gpu 的 error 日志：用于识别 D3D11 上下文初始化失败并自动降级
+                _mpv_set_property_string(
+                    self._facade.mpv_handle, 'msg-level', 'all=fatal,vo=error,gpu=error')
                 _log_request_level = b'warn'
             try:
                 # 必须通过 _mpv_mod.libmpv 访问，不能用模块级导入的 libmpv
@@ -923,11 +934,50 @@ class MpvPlayback:
                                 logger.warning(f"[mpv:{prefix}] {text}")
                             else:
                                 logger.debug(f"[mpv:{prefix}] {text}")
+                            self._maybe_trigger_gpu_fallback(text)
                         except Exception as _e:
                             logger.debug(f"处理 mpv 日志消息失败: {_e}")
 
         except Exception as e:
             self._facade.logger.error(f"处理 mpv 事件失败：{str(e)}")
+
+    # GPU 上下文/ D3D11 设备初始化失败的 mpv 日志特征（小写匹配）
+    _GPU_INIT_FAILURE_MARKERS = (
+        'failed initializing any suitable gpu context',
+        'could not create d3d11 device',
+        'failed to create d3d11 device',
+        'error creating d3d11 device',
+        'failed to initialize d3d11',
+    )
+
+    def _maybe_trigger_gpu_fallback(self, text):
+        """首次硬渲染失败时降级为 OpenGL 并重建一次渲染（仅 Windows + auto）。"""
+        if not is_windows() or getattr(self._facade, '_gpu_fallback_done', False):
+            return
+        if str(self._facade._playback_settings.get('gpu_api', 'auto') or 'auto').lower() != 'auto':
+            return
+        low = text.lower()
+        if not any(marker in low for marker in self._GPU_INIT_FAILURE_MARKERS):
+            return
+        self._facade._gpu_fallback_done = True
+        self._facade.logger.warning(
+            '检测到 GPU 渲染上下文初始化失败，自动降级为 OpenGL 并重建播放')
+        self._facade._playback_settings['gpu_api'] = 'opengl'
+        try:
+            from core.config_manager import ConfigManager
+            ConfigManager().save_video_eq({'gpu_api': 'opengl'})
+        except Exception as e:
+            self._facade.logger.debug(f"持久化 GPU 降级配置失败: {e}")
+        from PySide6.QtCore import QTimer
+        # 事件处理期间持有 _lock，延迟到本轮事件处理结束后再重建，避免重入
+        QTimer.singleShot(0, self._apply_gpu_fallback)
+
+    def _apply_gpu_fallback(self):
+        try:
+            hdr_mode = self._facade._playback_settings.get('hdr_output_mode', 'disable')
+            self.reinit_for_hdr_change(hdr_mode)
+        except Exception as e:
+            self._facade.logger.error(f"GPU 降级重建播放失败: {e}")
 
     def _reset_demuxer_options(self):
         try:

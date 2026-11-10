@@ -30,7 +30,7 @@ import threading
 import time
 from functools import lru_cache
 
-import numpy as np
+from utils.numpy_compat import np, NUMPY_AVAILABLE
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from core.log_manager import global_logger as logger
@@ -127,7 +127,7 @@ def compute_spectrum_levels(pcm_bytes, channels, rate, bar_count=BAR_COUNT,
     零柱，不用底噪抬柱）。长度不足一个 FFT 窗时左补零，超过时取最后一段。
     """
     zeros = [0.0] * bar_count
-    if not pcm_bytes or channels <= 0 or rate <= 0:
+    if np is None or not pcm_bytes or channels <= 0 or rate <= 0:
         return zeros
     try:
         data = np.frombuffer(pcm_bytes, dtype=np.int16)
@@ -317,6 +317,10 @@ class LoopbackSpectrumCollector(QObject):
             return
         if not platform_supported():
             self._fail(REASON_UNSUPPORTED, '非 Windows 平台')
+            return
+        if np is None:
+            # numpy 缺失时 FFT 无法进行，按既有失败矩阵降级为静态柱
+            self._fail(REASON_MISSING_DEPENDENCY, 'numpy 不可用')
             return
         self._stop_event.clear()
         self._init_timer.start(self._init_timeout_ms)

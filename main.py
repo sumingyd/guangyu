@@ -11,6 +11,9 @@ from utils.app_paths import migrate_legacy_data
 _crash_log_path = install_crash_handler()
 migrate_legacy_data()
 
+# 尽早尝试导入 numpy：失败时只记录诊断，不影响后续启动（频谱/音频可视化降级）
+from utils.numpy_compat import should_show_hint, unavailable_message  # noqa: E402
+
 
 def _log_locations(crash_log_path: str) -> None:
     """把日志目录与各日志文件的绝对路径写进日志开头，便于用户对照排查。"""
@@ -180,6 +183,12 @@ def main():
 
     if splash:
         splash.finish(player)
+
+    # numpy 不可用（常见于缺少 SSE4.x 的老 CPU）：明确告知降级范围，程序继续可用
+    if should_show_hint():
+        QTimer.singleShot(
+            300,
+            lambda: QMessageBox.warning(player, 'GuangYu', unavailable_message()))
 
     if len(sys.argv) > 1:
         _open_path_from_os(player, sys.argv[1])

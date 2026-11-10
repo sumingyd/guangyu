@@ -113,7 +113,10 @@ class AutoCropService:
                 self._finish(done_callback, False, None, '图像太小')
                 return
             # 3. 计算黑边边界
-            import numpy as np
+            from utils.numpy_compat import np
+            if np is None:
+                self._finish(done_callback, False, None, 'numpy 不可用，自动裁边已禁用')
+                return
             try:
                 arr = np.asarray(img)
             except Exception as e:
