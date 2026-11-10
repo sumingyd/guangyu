@@ -130,7 +130,13 @@ internal fun AppViewModel.toggleShuffleMode(): Boolean {
 
 internal fun AppViewModel.prevChannel() {
     val cur = _currentIdx.value
-    if (cur < 0) return
+    val all = _channels.value
+    // 停止播放后 _currentIdx=-1：此时播放页只剩黑底，方向键不能变成“无响应”，
+    // 直接起播最后一个频道（有频道时），让用户能靠遥控器回到播放状态
+    if (cur < 0) {
+        if (all.isNotEmpty()) playChannelDebounced(all.lastIndex)
+        return
+    }
     if (_shuffleMode.value && shuffleBackStack.isNotEmpty()) {
         cur.let { shuffleHistory.add(it) }
         val prev = shuffleBackStack.removeAt(shuffleBackStack.lastIndex)
@@ -146,7 +152,12 @@ internal fun AppViewModel.prevChannel() {
 
 internal fun AppViewModel.nextChannel() {
     val cur = _currentIdx.value
-    if (cur < 0) return
+    val all = _channels.value
+    // 同上：未选台（停止后 idx=-1）时按“下一个”起播第一个频道，避免黑屏下按键看似失效
+    if (cur < 0) {
+        if (all.isNotEmpty()) playChannelDebounced(0)
+        return
+    }
     if (_shuffleMode.value) {
         val next = pickRandomChannelIdx(cur)
         if (next >= 0 && next != cur) {
@@ -998,6 +1009,9 @@ internal fun AppViewModel.resetAllPanelStates() {
         _clipExportPanelOpen.value = false
         _audioVisualizerOpen.value = false
         _lyricsOpen.value = false
+        // anyPanelOpen 含 channelInfo，若遗漏这里会永久卡住 anyPanelOpen=true，
+        // 表现为 BACK 每按一次都被“关闭面板”吞掉、方向键/OK 全部无响应
+        _channelInfoOpen.value = false
     }
     if (wasPlayerSettingsOpen) {
         Log.w(AppViewModel.TAG, "resetAllPanelStates: closed playerSettings panel!")

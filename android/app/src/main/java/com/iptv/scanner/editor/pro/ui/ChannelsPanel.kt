@@ -305,6 +305,11 @@ private fun ChannelListContent(
 
         // 列表 key：以频道 URL 作为稳定身份，分页追加/过滤切换时不会错位
         val channelItemKeys = remember(displayedChannels) { buildChannelItemKeys(displayedChannels) }
+        // 同名多路流（同一频道的高清/标清等不同码流）在名称后追加分辨率后缀，
+        // 否则两条同名频道看起来完全一样，像少了一条
+        val duplicateNames = remember(filteredChannels) {
+            filteredChannels.groupingBy { it.first.name }.eachCount().filterValues { it > 1 }.keys
+        }
 
         LazyColumn(
             state = if (usePagination) listState else rememberLazyListState(),
@@ -317,6 +322,7 @@ private fun ChannelListContent(
             ) { _, (channel, idx) ->
                 ChannelListItem(
                     channel = channel,
+                    displayName = channelDisplayName(channel, duplicateNames),
                     isPlaying = idx == currentIdx,
                     isFavorite = favorites.contains(idx),
                     showGroupMeta = tab == ChannelTab.SUB || tab == ChannelTab.LOCAL,
@@ -502,6 +508,7 @@ fun ChannelTabsRow(
 @Composable
 private fun ChannelListItem(
     channel: IptvChannel,
+    displayName: String,
     isPlaying: Boolean,
     isFavorite: Boolean,
     showGroupMeta: Boolean,
@@ -528,7 +535,7 @@ private fun ChannelListItem(
         // 频道名 + 分组 meta
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = channel.name,
+                text = displayName,
                 color = if (isPlaying) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface,
                 fontSize = 14.sp,
                 fontWeight = if (isPlaying) FontWeight.Medium else FontWeight.Normal,

@@ -307,7 +307,7 @@ internal fun PortraitListScreen(
             AptvGlassChip(cornerRadius = 14.dp) {
                 Text(
                     text = if (selectedGroup.isEmpty()) "全部分组" else selectedGroup,
-                    color = AptvAccent,
+                    color = tvPalette.accentText,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
@@ -805,6 +805,11 @@ private fun ChannelListPanel(
     latencyMap: Map<String, Int> = emptyMap(),
     mediaInfoMap: Map<String, String> = emptyMap()
 ) {
+    // 同名多路流（同一频道的高清/标清等不同码流）在名称后追加分辨率后缀，
+    // 否则两条同名频道在列表里完全一样，看起来像少了一条
+    val duplicateNames = remember(displayChannels) {
+        displayChannels.groupingBy { it.name }.eachCount().filterValues { it > 1 }.keys
+    }
     val listState = rememberLazyListState()
     LaunchedEffect(displayChannels, currentIdx) {
         if (currentIdx >= 0) {
@@ -866,7 +871,9 @@ private fun ChannelListPanel(
                         modifier = Modifier
                             .size(72.dp, 40.dp)
                             .clip(RoundedCornerShape(4.dp))
-                            .background(Color.Black),
+                            // 用 playerPlaceholder token：浅色下曾是纯黑底板，卡片与分栏间隙相邻时
+                            // 会形成一条像「露底」的黑缝
+                            .background(tvPalette.playerPlaceholder),
                         contentAlignment = Alignment.Center
                     ) {
                         if (hasThumb) {
@@ -908,8 +915,8 @@ private fun ChannelListPanel(
                         // 第1行：频道名称 + 延迟
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = channel.name,
-                                color = if (isCurrent) AptvAccent else MaterialTheme.colorScheme.onSurface,
+                                text = channelDisplayName(channel, duplicateNames),
+                                color = if (isCurrent) tvPalette.accentText else MaterialTheme.colorScheme.onSurface,
                                 fontSize = 14.sp,
                                 fontWeight = if (isCurrent) FontWeight.Medium else FontWeight.Normal,
                                 maxLines = 1,
@@ -936,7 +943,7 @@ private fun ChannelListPanel(
                             mediaInfoMap[channel.url]?.split(" ")?.forEach { badge ->
                                 if (badge.isNotEmpty() && badge !in badgeDisplayBlocklist) {
                                     Surface(color = AptvAccent.copy(alpha = 0.15f), shape = RoundedCornerShape(4.dp)) {
-                                        Text(badge, color = AptvAccent, fontSize = 9.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp))
+                                        Text(badge, color = tvPalette.accentText, fontSize = 9.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp))
                                     }
                                 }
                             }
@@ -946,7 +953,7 @@ private fun ChannelListPanel(
                                     if (days > 0) "回看${days}天" else "回看"
                                 } ?: "回看"
                                 Surface(color = AptvAccent.copy(alpha = 0.15f), shape = RoundedCornerShape(4.dp)) {
-                                    Text(catchupText, color = AptvAccent, fontSize = 9.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp))
+                                    Text(catchupText, color = tvPalette.accentText, fontSize = 9.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp))
                                 }
                             }
                             if (isFav) {
@@ -1000,6 +1007,10 @@ internal fun ChannelThumbnailPanel(
     firstCardFocusRequester: FocusRequester? = null
 ) {
     val epgCacheVersion by viewModel.epgCacheVersion.collectAsState()
+    // 同名多路流（同一频道的不同分辨率/码流）在名称后追加分辨率后缀，便于区分
+    val duplicateNames = remember(displayChannels) {
+        displayChannels.groupingBy { it.name }.eachCount().filterValues { it > 1 }.keys
+    }
 
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
@@ -1058,7 +1069,8 @@ internal fun ChannelThumbnailPanel(
                             .fillMaxWidth()
                             .aspectRatio(16f / 9f)
                             .clip(RoundedCornerShape(9.dp))
-                            .background(Color.Black)
+                            // 纯黑底板在浅色主题下会在分栏边界形成硬黑条（会被误认为露底）
+                            .background(tvPalette.playerPlaceholder)
                     ) {
                         if (hasThumb) {
                             AsyncImage(
@@ -1113,11 +1125,11 @@ internal fun ChannelThumbnailPanel(
                         // 右上角：播放中
                         if (isCurrent) {
                             Surface(
-                                color = AptvAccent,
+                                color = tvPalette.accentFill,
                                 shape = RoundedCornerShape(4.dp),
                                 modifier = Modifier.align(Alignment.TopEnd).padding(3.dp)
                             ) {
-                                Text("播放中", color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+                                Text("播放中", color = tvPalette.accentOn, fontSize = 8.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
                             }
                         }
                         // 删除按钮
@@ -1137,8 +1149,8 @@ internal fun ChannelThumbnailPanel(
                         Column(modifier = Modifier.weight(1f)) {
                             // 第1行：频道名称
                             Text(
-                                text = channel.name,
-                                color = if (isCurrent) AptvAccent else MaterialTheme.colorScheme.onSurface,
+                                text = channelDisplayName(channel, duplicateNames),
+                                color = if (isCurrent) tvPalette.accentText else MaterialTheme.colorScheme.onSurface,
                                 fontSize = 12.sp,
                                 fontWeight = if (isCurrent) FontWeight.Medium else FontWeight.Normal,
                                 maxLines = 1,
@@ -1159,7 +1171,7 @@ internal fun ChannelThumbnailPanel(
                                 mediaInfoMap[channel.url]?.split(" ")?.forEach { badge ->
                                     if (badge.isNotEmpty() && badge !in badgeDisplayBlocklist) {
                                         Surface(color = AptvAccent.copy(alpha = 0.15f), shape = RoundedCornerShape(3.dp)) {
-                                            Text(badge, color = AptvAccent, fontSize = 8.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+                                            Text(badge, color = tvPalette.accentText, fontSize = 8.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
                                         }
                                     }
                                 }
@@ -1169,7 +1181,7 @@ internal fun ChannelThumbnailPanel(
                                         if (days > 0) "回看${days}天" else "回看"
                                     } ?: "回看"
                                     Surface(color = AptvAccent.copy(alpha = 0.15f), shape = RoundedCornerShape(3.dp)) {
-                                        Text(catchupText, color = AptvAccent, fontSize = 8.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+                                        Text(catchupText, color = tvPalette.accentText, fontSize = 8.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
                                     }
                                 }
                                 if (isFav) {
@@ -1276,7 +1288,7 @@ internal fun PortraitChannelListItem(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = channel.name,
-                    color = if (isPlaying) AptvAccent else MaterialTheme.colorScheme.onSurface,
+                    color = if (isPlaying) tvPalette.accentText else MaterialTheme.colorScheme.onSurface,
                     fontSize = 15.sp,
                     fontWeight = if (isPlaying) FontWeight.Medium else FontWeight.Normal,
                     maxLines = 1,
@@ -1312,7 +1324,7 @@ internal fun PortraitChannelListItem(
             ) {
                 Text(
                     text = "回看",
-                    color = AptvAccent,
+                    color = tvPalette.accentText,
                     fontSize = 9.sp,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                 )
@@ -1488,4 +1500,35 @@ internal fun buildChannelItemKeys(items: List<Pair<IptvChannel, Int>>): List<Str
         seen[base] = hits
         if (hits == 1) base else "$base#$hits"
     }
+}
+
+/** 分辨率标签：1920x1080 → 1080P，3840x2160 → 4K，720x576 → 576P */
+internal fun channelResolutionLabel(resolution: String): String {
+    val r = resolution.trim().lowercase()
+    if (r.isEmpty()) return ""
+    val height = r.substringAfterLast('x', "").filter { it.isDigit() }.toIntOrNull()
+        ?: return r.uppercase()
+    return when {
+        height >= 2160 -> "4K"
+        height >= 1080 -> "1080P"
+        height >= 720 -> "720P"
+        height >= 576 -> "576P"
+        height >= 480 -> "480P"
+        else -> "${height}P"
+    }
+}
+
+/**
+ * 列表显示名：同名多路流（同一频道的不同分辨率/码流）在名称后追加分辨率后缀，
+ * 没有分辨率信息时退回频道号，避免两条同名频道在列表里完全不可区分。
+ *
+ * 只影响显示文本，不改动频道数据（名称/URL/收藏索引保持原样）。
+ */
+internal fun channelDisplayName(channel: IptvChannel, duplicateNames: Set<String>): String {
+    if (channel.name !in duplicateNames) return channel.name
+    val suffix = channelResolutionLabel(channel.resolution).ifEmpty {
+        val chno = channel.tvgChno.trim()
+        if (chno.isEmpty()) "" else "CH$chno"
+    }
+    return if (suffix.isEmpty()) channel.name else "${channel.name} · $suffix"
 }

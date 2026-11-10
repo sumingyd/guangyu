@@ -57,6 +57,44 @@ class ChannelController:
         language_manager = getattr(self.window, 'language_manager', None)
         return get_display_channel_name(channel, language_manager)
 
+    @staticmethod
+    def _resolution_label(resolution: str) -> str:
+        """分辨率标签：1920x1080 → 1080P，3840x2160 → 4K，720x576 → 576P"""
+        r = (resolution or '').strip().lower()
+        if not r:
+            return ''
+        height = 0
+        if 'x' in r:
+            digits = ''.join(c for c in r.rsplit('x', 1)[-1] if c.isdigit())
+            if digits:
+                height = int(digits)
+        if height >= 2160:
+            return '4K'
+        if height >= 1080:
+            return '1080P'
+        if height >= 720:
+            return '720P'
+        if height >= 576:
+            return '576P'
+        if height >= 480:
+            return '480P'
+        return f'{height}P' if height else r.upper()
+
+    @classmethod
+    def _channel_list_display_name(cls, channel: Dict[str, Any], name: str,
+                                   name_counts: Dict[str, int]) -> str:
+        """列表显示名：同名多路流（同一频道的不同码流）追加分辨率后缀以区分。
+
+        只影响列表显示文本，不修改频道数据本身（名称/频道号/URL 保持原样）。
+        """
+        if name_counts.get((name or '').strip(), 0) <= 1:
+            return name
+        suffix = cls._resolution_label(channel.get('resolution', ''))
+        if not suffix:
+            chno = str(channel.get('tvg_chno', '') or '').strip()
+            suffix = f'CH{chno}' if chno else ''
+        return f'{name} · {suffix}' if suffix else name
+
     def _update_channel_info(self, channel: Dict[str, Any]):
         """更新频道信息显示区域"""
         if not self.window.channel_name:
@@ -116,6 +154,13 @@ class ChannelController:
         name_style = AppStyles.player_channel_list_name_style()
         ui_scale = get_ui_scale()
 
+        # 同名多路流（同一频道的不同分辨率/码流）在列表名称后追加分辨率后缀，
+        # 让用户能区分两条同名频道；不影响频道数据本身
+        name_counts = {}
+        for ch in channels:
+            key = (ch.get('name') or '').strip()
+            name_counts[key] = name_counts.get(key, 0) + 1
+
         for idx, channel in enumerate(channels):
             try:
                 if not is_all_channels:
@@ -125,6 +170,7 @@ class ChannelController:
                         continue
 
                 channel_name = channel.get("name", tr("unnamed", "Unnamed"))
+                display_name = self._channel_list_display_name(channel, channel_name, name_counts)
                 logo_url = channel.get('logo', '')
 
                 try:
@@ -132,8 +178,8 @@ class ChannelController:
 
                     if is_grid:
                         item = QListWidgetItem()
-                        item.setText(channel_name)
-                        item.setToolTip(channel_name)
+                        item.setText(display_name)
+                        item.setToolTip(display_name)
                         item.setData(Qt.ItemDataRole.UserRole, idx)
                         item.setSizeHint(QSize(int(round(220 * ui_scale)), int(round(150 * ui_scale))))
                         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -157,7 +203,7 @@ class ChannelController:
                         logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                         logo_label.setObjectName("channel_logo_label")
 
-                        name_label = ElidedLabel(channel_name)
+                        name_label = ElidedLabel(display_name)
                         name_label.setStyleSheet(name_style)
                         name_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
 
@@ -195,7 +241,7 @@ class ChannelController:
                     added_count += 1
 
                 except Exception as widget_ex:
-                    simple_item = QListWidgetItem(channel_name)
+                    simple_item = QListWidgetItem(display_name)
                     simple_item.setData(Qt.ItemDataRole.UserRole, idx)
                     list_widget.addItem(simple_item)
                     added_count += 1
