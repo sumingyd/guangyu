@@ -29,7 +29,13 @@ class PlaylistPanelMixin:
         epg_container = QWidget()
         epg_container.setObjectName("panelContainer")
         epg_container.setStyleSheet("background-color: transparent; border: none;")
-        epg_container.setMinimumWidth(200)
+        # 与频道面板一致：字号/缩放变大时同步放宽 EPG 面板，给时间列和状态徽标留空间
+        from utils.platform_utils import get_effective_ui_scale
+        from ui.typography import text_factor
+        epg_scale = get_effective_ui_scale() * max(1.0, text_factor())
+        epg_min_w = max(200, int(round(200 * epg_scale)))
+        epg_icon_px = max(16, int(round(16 * get_effective_ui_scale())))
+        epg_container.setMinimumWidth(epg_min_w)
         self.epg_layout = QVBoxLayout(epg_container)
         self.epg_layout.setContentsMargins(0, 0, 0, 0)
         self.epg_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -39,9 +45,9 @@ class PlaylistPanelMixin:
         epg_title_row.setContentsMargins(8, 4, 8, 0)
         epg_icon_color = AppStyles.get_color('player_panel_text')
         self.epg_title_icon = QLabel()
-        self.epg_title_icon.setFixedSize(16, 16)
+        self.epg_title_icon.setFixedSize(epg_icon_px, epg_icon_px)
         self.epg_title_icon.setStyleSheet("background: transparent; border: none;")
-        epg_icon_path = AppStyles.get_icon('calendar', epg_icon_color)
+        epg_icon_path = AppStyles.get_icon('calendar', epg_icon_color, epg_icon_px)
         if epg_icon_path:
             self.epg_title_icon.setPixmap(QPixmap(epg_icon_path))
         epg_title_row.addWidget(self.epg_title_icon)
@@ -56,10 +62,12 @@ class PlaylistPanelMixin:
         date_layout.setSpacing(8)
 
         date_icon_color = AppStyles.get_color('player_panel_text')
+        day_btn_px = max(24, int(round(24 * get_effective_ui_scale())))
+        day_icon_px = max(12, int(round(12 * get_effective_ui_scale())))
         self.epg_prev_day = QPushButton()
-        self.epg_prev_day.setIcon(QIcon(AppStyles.get_icon('chevron_left', date_icon_color, 12)))  # type: ignore[arg-type]
-        self.epg_prev_day.setIconSize(QSize(12, 12))
-        self.epg_prev_day.setFixedSize(24, 24)
+        self.epg_prev_day.setIcon(QIcon(AppStyles.get_icon('chevron_left', date_icon_color, day_icon_px)))  # type: ignore[arg-type]
+        self.epg_prev_day.setIconSize(QSize(day_icon_px, day_icon_px))
+        self.epg_prev_day.setFixedSize(day_btn_px, day_btn_px)
         self.epg_prev_day.setCursor(Qt.CursorShape.PointingHandCursor)
         self.epg_prev_day.setStyleSheet(AppStyles.player_date_button_style())
         self.epg_prev_day.clicked.connect(self.epg_ctrl.on_prev_day)
@@ -72,9 +80,9 @@ class PlaylistPanelMixin:
         date_layout.addWidget(self.epg_date_label, 1)
 
         self.epg_next_day = QPushButton()
-        self.epg_next_day.setIcon(QIcon(AppStyles.get_icon('chevron_right', date_icon_color, 12)))  # type: ignore[arg-type]
-        self.epg_next_day.setIconSize(QSize(12, 12))
-        self.epg_next_day.setFixedSize(24, 24)
+        self.epg_next_day.setIcon(QIcon(AppStyles.get_icon('chevron_right', date_icon_color, day_icon_px)))  # type: ignore[arg-type]
+        self.epg_next_day.setIconSize(QSize(day_icon_px, day_icon_px))
+        self.epg_next_day.setFixedSize(day_btn_px, day_btn_px)
         self.epg_next_day.setCursor(Qt.CursorShape.PointingHandCursor)
         self.epg_next_day.setStyleSheet(AppStyles.player_date_button_style())
         self.epg_next_day.clicked.connect(self.epg_ctrl.on_next_day)
@@ -125,6 +133,7 @@ class PlaylistPanelMixin:
         self.epg_dock.setWidget(epg_container)
         self.epg_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable | QDockWidget.DockWidgetFeature.DockWidgetFloatable)
         self.epg_dock.setObjectName("epg_dock")
+        self.epg_dock.setMinimumWidth(epg_min_w)
         if hasattr(self, 'epg_panel'):
             self.epg_panel = None
         self.epg_panel = self.epg_dock
@@ -153,6 +162,10 @@ class PlaylistPanelMixin:
         self.playlist_layout.addWidget(self.playlist_title)
 
         self._create_playlist_tab_buttons(tr)
+        playlist_container.setMinimumWidth(max(
+            playlist_container.minimumWidth(),
+            getattr(self, '_playlist_tab_row_min', 0) + 16,
+        ))
         self.playlist_tab = QTabWidget()
         self.playlist_tab.setStyleSheet(AppStyles.player_tab_style())
         self.playlist_tab.tabBar().hide()
@@ -191,6 +204,7 @@ class PlaylistPanelMixin:
         from ui.floating_dialog import FloatingDockWidget
         self.playlist_dock = FloatingDockWidget(tr("channel_list", "Channel List"), self)
         self.playlist_dock.setWidget(playlist_container)
+        self.playlist_dock.setMinimumWidth(playlist_container.minimumWidth())
         self.playlist_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable | QDockWidget.DockWidgetFeature.DockWidgetFloatable)
         self.playlist_dock.setObjectName("playlist_dock")
         if hasattr(self, 'playlist_panel'):
@@ -210,7 +224,17 @@ class PlaylistPanelMixin:
         tab_switch_row.setContentsMargins(0, 0, 0, 0)
         tab_switch_row.setSpacing(2)
         tab_icon_color = AppStyles.get_color('player_panel_text')
-        btn_icon_size = QSize(14, 14)
+        from utils.platform_utils import get_effective_ui_scale
+        from ui.typography import text_factor
+        tab_scale = get_effective_ui_scale()
+        tab_icon_px = max(14, int(round(14 * tab_scale)))
+        btn_icon_size = QSize(tab_icon_px, tab_icon_px)
+        try:
+            text_h = self.fontMetrics().height()
+        except Exception:
+            text_h = 18
+        min_text_h = (text_h + 12) if text_factor() > 1.0 else 0
+        tab_btn_height = max(20, int(round(20 * tab_scale)), min_text_h)
 
         self._playlist_tab_btns = []
         tab_configs = [
@@ -222,13 +246,14 @@ class PlaylistPanelMixin:
         for icon_name, tooltip, tab_idx in tab_configs:
             btn = QToolButton()
             btn.style_type = 'tab_switch'
-            icon_path = AppStyles.get_icon(icon_name, tab_icon_color, 14)
+            btn._gy_icon_name = icon_name
+            icon_path = AppStyles.get_icon(icon_name, tab_icon_color, tab_icon_px)
             if icon_path:
                 btn.setIcon(QIcon(icon_path))
             btn.setIconSize(btn_icon_size)
             btn.setText(tooltip)
             btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-            btn.setFixedHeight(20)
+            btn.setFixedHeight(tab_btn_height)
             btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
             btn.setStyleSheet(AppStyles.tab_button_style(tab_icon_color, AppStyles.get_color('accent')))
             btn.setToolTip(tooltip)
@@ -238,6 +263,80 @@ class PlaylistPanelMixin:
             tab_switch_row.addWidget(btn)
             self._playlist_tab_btns.append(btn)
         self.playlist_layout.addLayout(tab_switch_row)
+        # 页签按钮是自定义 ToolButton（文本+图标），字号放大后必须同步加宽
+        # 面板最小宽度，否则「订阅/本地/收藏/历史」会被裁掉。
+        self._playlist_tab_row_min = sum(
+            btn.sizeHint().width() for btn in self._playlist_tab_btns
+        ) + 3 * tab_switch_row.spacing()
+
+    def refresh_playlist_tab_metrics(self):
+        """字号/缩放变更后重算频道面板页签按钮与最小宽度。"""
+        from utils.platform_utils import get_effective_ui_scale
+        from ui.typography import text_factor
+        scale = get_effective_ui_scale()
+        icon_px = max(14, int(round(14 * scale)))
+        color = AppStyles.get_color('player_panel_text')
+        buttons = getattr(self, '_playlist_tab_btns', [])
+        for btn in buttons:
+            name = getattr(btn, '_gy_icon_name', '')
+            path = AppStyles.get_icon(name, color, icon_px) if name else ''
+            if path:
+                btn.setIcon(QIcon(path))
+            btn.setIconSize(QSize(icon_px, icon_px))
+            try:
+                btn_text_h = btn.fontMetrics().height()
+            except Exception:
+                btn_text_h = 18
+            min_text_h = (btn_text_h + 12) if text_factor() > 1.0 else 0
+            btn.setFixedHeight(max(20, int(round(20 * scale)), min_text_h))
+            btn.setStyleSheet(AppStyles.tab_button_style(color, AppStyles.get_color('accent')))
+        dock = getattr(self, 'playlist_dock', None)
+        container = dock.widget() if dock is not None else None
+        if buttons and container is not None:
+            row_min = sum(btn.sizeHint().width() for btn in buttons) + 3 * 2
+            min_w = max(int(round(200 * scale)), row_min + 16)
+            container.setMinimumWidth(min_w)
+            dock.setMinimumWidth(min_w)
+            if dock.width() < min_w:
+                dock.resize(min_w, dock.height())
+
+        self._refresh_epg_panel_metrics(scale)
+
+    def _refresh_epg_panel_metrics(self, scale):
+        """同步 EPG 侧栏的宽度、标题图标与翻日按钮尺寸。"""
+        epg_dock = getattr(self, 'epg_dock', None)
+        if epg_dock is None:
+            return
+        from ui.typography import text_factor
+        # 面板宽度跟随「界面缩放 × 字号档位」，否则最大档下时间列会被徽标挤到省略
+        epg_min_w = max(200, int(round(200 * scale * max(1.0, text_factor()))))
+        epg_container = epg_dock.widget()
+        if epg_container is not None:
+            epg_container.setMinimumWidth(epg_min_w)
+        epg_dock.setMinimumWidth(epg_min_w)
+        if epg_dock.width() < epg_min_w:
+            # 窗口整体布局会把浮停宽度固定住，变宽时需要一起抬高上限
+            epg_dock.setFixedWidth(epg_min_w)
+
+        icon_px = max(16, int(round(16 * scale)))
+        icon = getattr(self, 'epg_title_icon', None)
+        if icon is not None:
+            icon.setFixedSize(icon_px, icon_px)
+            path = AppStyles.get_icon('calendar', AppStyles.get_color('player_panel_text'), icon_px)
+            if path:
+                icon.setPixmap(QPixmap(path))
+        day_px = max(24, int(round(24 * scale)))
+        day_icon_px = max(12, int(round(12 * scale)))
+        color = AppStyles.get_color('player_panel_text')
+        for name, icon_name in (('epg_prev_day', 'chevron_left'), ('epg_next_day', 'chevron_right')):
+            btn = getattr(self, name, None)
+            if btn is None:
+                continue
+            btn.setFixedSize(day_px, day_px)
+            btn.setIconSize(QSize(day_icon_px, day_icon_px))
+            path = AppStyles.get_icon(icon_name, color, day_icon_px)
+            if path:
+                btn.setIcon(QIcon(path))
 
     def _create_channel_list_widget(self, style_type='player', on_click=None, on_double_click=None, on_context_menu=None):
         from ui.multi_screen_widget import DraggableChannelListWidget

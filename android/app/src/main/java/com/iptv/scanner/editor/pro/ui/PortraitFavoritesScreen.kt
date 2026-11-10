@@ -76,7 +76,7 @@ internal fun PortraitFavoritesScreen(
         ) {
             Text(
                 text = "我的收藏",
-                color = AptvAccent,
+                color = AptvAccentText,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium
             )
@@ -229,12 +229,12 @@ internal fun PortraitAptvChannelCard(
             )
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            // 预览图/台标区域（16:9，纯黑底对齐 APTV）
+            // 预览图/台标区域（16:9）：底板取主题占位色，与频道卡缩略图一致
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(16f / 9f)
-                    .background(Color.Black)
+                    .background(tvPalette.playerPlaceholder)
             ) {
                 when {
                     hasThumb -> coil.compose.AsyncImage(
@@ -256,7 +256,7 @@ internal fun PortraitAptvChannelCard(
                         Icon(
                             Icons.Default.PlayArrow,
                             contentDescription = null,
-                            tint = Color.White.copy(alpha = 0.25f),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
                             modifier = Modifier.size(30.dp)
                         )
                     }
@@ -285,13 +285,13 @@ internal fun PortraitAptvChannelCard(
                 // 播放中标记
                 if (isCurrent) {
                     androidx.compose.material3.Surface(
-                        color = AptvAccent,
+                        color = AptvAccentFill,
                         shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
                         modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp)
                     ) {
                         Text(
                             "播放中",
-                            color = Color.White,
+                            color = tvPalette.accentOn,
                             fontSize = 8.sp,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)

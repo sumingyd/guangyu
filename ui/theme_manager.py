@@ -12,6 +12,8 @@ class ThemeManager(Singleton, QtCore.QObject):
     theme_changed = QtCore.Signal(str)
     color_mode_changed = QtCore.Signal(str)
     visual_style_changed = QtCore.Signal(str)
+    # 字号档位 / 界面缩放变更：(tier, percent)
+    display_changed = QtCore.Signal(str, int)
 
     def __init__(self):
         if self._initialized:
@@ -26,6 +28,11 @@ class ThemeManager(Singleton, QtCore.QObject):
         self._current_theme = f"{self._color_mode}+{self._visual_style}"
         AppStyles.set_color_mode(self._color_mode)
         AppStyles.set_visual_style(self._visual_style)
+        # 字号/缩放单一真源：启动时先装载配置并应用应用级字体，
+        # 这样 QSS 拦截器与未显式设 font-size 的控件都从同一档位出发。
+        from ui import typography
+        typography.load_from_config(self.config)
+        typography.apply_application_font()
         self._system_theme_timer = None
         self._system_theme_style_hints = None
         if self._color_mode == 'auto':
@@ -98,6 +105,10 @@ class ThemeManager(Singleton, QtCore.QObject):
                 if hasattr(window, 'reapply_styles'):
                     window.reapply_styles()
             window.setUpdatesEnabled(True)
+            # 兜底：样式写好后再放宽「写死高度/宽度但装不下当前字号」的文本控件，
+            # 覆盖各对话框里 setFixedHeight/setFixedWidth 的输入框与按钮。
+            from ui import typography as _typography
+            _typography.relax_fixed_metrics(window)
             window.update()
             # 不再调用 QApplication.processEvents()：主题应用期间强制派发事件
             # 会重入正在进行的布局/绘制，导致主题切换闪烁甚至递归。
@@ -520,6 +531,41 @@ class ThemeManager(Singleton, QtCore.QObject):
         self._update_all_windows()
         self.visual_style_changed.emit(style)
         self.theme_changed.emit(self._current_theme)
+
+    def set_display_settings(self, font_tier=None, ui_scale_percent=None):
+        """切换字号档位 / 界面缩放并立即生效。
+
+        顺序很重要：先更新单一真源，再重刷 QSS（拦截器按新档位换算），
+        然后重放已记录的原始 QSS（覆盖自管样式的对话框/菜单），最后让窗口
+        刷新非 QSS 的固定尺寸（控制栏、频道列表、EPG 行高）。
+        """
+        from ui import typography
+        changed = typography.set_display(font_tier, ui_scale_percent)
+        tier, percent = typography.current_display()
+        try:
+            self.config.save_display_settings(tier, percent)
+        except Exception as e:
+            logger.error(f"保存字号/缩放设置失败: {e}")
+        if not changed:
+            return False
+
+        typography.apply_application_font()
+        self._update_all_windows()
+        typography.rescale_all_widgets()
+        for window in list(self._windows):
+            refresh = getattr(window, 'refresh_typography', None)
+            if callable(refresh):
+                try:
+                    refresh()
+                except Exception as e:
+                    logger.debug(f"刷新窗口字号尺寸失败: {e}")
+            # refresh 里会重新 setFixedSize，需再放宽一次，避免覆盖兜底结果
+            try:
+                typography.relax_fixed_metrics(window)
+            except Exception:
+                pass
+        self.display_changed.emit(tier, percent)
+        return True
 
     def set_theme(self, theme_name: str):
         if theme_name in AppStyles._OLD_THEME_MAPPING:

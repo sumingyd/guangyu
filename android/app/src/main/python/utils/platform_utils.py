@@ -440,3 +440,18 @@ def get_ui_scale() -> float:
     if w <= 2560:
         return 1.15
     return 1.3
+
+
+def get_effective_ui_scale() -> float:
+    """逻辑屏宽因子 × 用户界面缩放档位。
+
+    用于 setFixedSize / 行高 / 图标等「非 QSS」尺寸：这些尺寸没有样式表可以
+    统一换算，只能在这里合并用户档位。QSS 的换算由 ui/typography.py 的
+    拦截器负责，因此不要两处重复相乘。
+    """
+    scale = get_ui_scale()
+    try:
+        from ui.typography import layout_factor
+        return scale * layout_factor()
+    except Exception:
+        return scale

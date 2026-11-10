@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.dp
 import com.iptv.scanner.editor.pro.ui.AptvAccent
+import com.iptv.scanner.editor.pro.ui.AptvAccentText
 import com.iptv.scanner.editor.pro.ui.LocalAptvStyle
 
 /**
@@ -95,9 +96,15 @@ fun IptvTheme(
     androidx.compose.runtime.remember(context) {
         PaletteLoader.ensureLoaded(context.applicationContext)
     }
-    TvColors.dark = PaletteLoader.dark()
-    TvColors.light = PaletteLoader.light()
-    TvColors.isDark = useDark
+    // 全局 TvColors 只能由「唯一的那一层 IptvTheme」写入：任何嵌套的 IptvTheme
+    // 都会用自己那份 useDark 覆盖全局值，而嵌套层退出组合时没人复位，
+    // 于是 get 到的是最后一层的值（曾导致浅色模式下画布仍按深色取值）。
+    // 放在 SideEffect 里写入，避免在组合期写快照状态造成的顺序不确定。
+    androidx.compose.runtime.SideEffect {
+        TvColors.dark = PaletteLoader.dark()
+        TvColors.light = PaletteLoader.light()
+        TvColors.isDark = useDark
+    }
     MaterialTheme(
         colorScheme = if (useDark) darkScheme(TvColors.dark) else lightScheme(TvColors.light),
         content = content
@@ -128,6 +135,12 @@ val LocalDarkOverlay = androidx.compose.runtime.staticCompositionLocalOf { false
 
 @Composable
 fun DarkOverlayTheme(content: @Composable () -> Unit) {
+    // 浅色主题下玻璃覆盖层已经是亮玻璃，若继续强制白字会白底白字。
+    // 因此 DarkOverlayTheme 只在深色主题生效，浅色主题直接沿用当前主题文字色。
+    if (!isDarkTheme()) {
+        content()
+        return
+    }
     val scheme = MaterialTheme.colorScheme.copy(
         onSurface = Color(0xFFE9EDF4),
         onSurfaceVariant = Color(0xFF9AA4B2)
@@ -169,9 +182,10 @@ fun rememberPlayerOverlayColors(): PlayerOverlayColors {
     val p = if (isDarkTheme()) TvColors.dark else TvColors.light
     val aptv = LocalAptvStyle.current
     val accent = if (aptv) AptvAccent else p.accentBase
-    // 暗玻璃覆盖层（底栏/侧栏/信息弹窗）：永远白字白图标。
-    // 浅色主题的 panel.text_primary 是深色，落在暗玻璃上不可读，故强制用暗色模式的文字色。
-    if (LocalDarkOverlay.current) {
+    // 暗玻璃覆盖层（底栏/侧栏/信息弹窗）：深色主题下永远白字白图标。
+    // 浅色主题下覆盖层已改成亮玻璃，必须回归亮色 token（深色文字），
+    // 否则白字落在亮玻璃上不可读。
+    if (LocalDarkOverlay.current && isDarkTheme()) {
         val dp = TvColors.dark
         return PlayerOverlayColors(
             scrim = dp.overlay,
@@ -200,7 +214,7 @@ fun rememberPlayerOverlayColors(): PlayerOverlayColors {
             accent = AptvAccent,
             trackInactive = MaterialTheme.colorScheme.surfaceVariant,
             badgeBg = AptvAccent.copy(alpha = 0.12f),
-            badgeText = AptvAccent,
+            badgeText = AptvAccentText,
             divider = MaterialTheme.colorScheme.outline,
         )
     }
@@ -260,16 +274,19 @@ fun GlassPanel(
     overlayDark: Boolean = false,
     content: @Composable () -> Unit
 ) {
+    // 暗玻璃覆盖层只在深色主题成立：浅色主题下继续用暗玻璃会让「全屏/分屏」页
+    // 永远看起来是深色（用户切浅色后误以为没生效）。浅色主题改用亮玻璃 + 主题文字色。
+    val useDarkOverlay = overlayDark && isDarkTheme()
     LiquidGlassSurface(
         enabled = liquidGlass && isLiquidBlurSupported(),
         cornerRadius = cornerRadius,
         staticGlass = true,
-        overlayDark = overlayDark,
+        overlayDark = useDarkOverlay,
         fallbackColor = TvColors.p.panelBackground.copy(alpha = 0.96f),
         modifier = modifier
     ) {
-        if (overlayDark) {
-            // 暗玻璃面板文字强制白系：面板悬浮在视频上永远呈暗底，
+        if (useDarkOverlay) {
+            // 暗玻璃面板文字强制白系：面板悬浮在视频上呈暗底，
             // 内部若用主题 onSurface 会在浅色主题下变黑字导致不可读
             DarkOverlayTheme { content() }
         } else {

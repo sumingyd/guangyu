@@ -103,7 +103,8 @@ import com.iptv.scanner.editor.pro.ui.theme.tvFocusBorder
 import com.iptv.scanner.editor.pro.ui.theme.tvGlassSelected
 import com.iptv.scanner.editor.pro.ui.theme.GlassPanel
 
-private val ACCENT_CYAN = tvPalette.info
+// 强调色一律在用到处直接读 tvPalette（getter 每次求值），
+// 不能在顶层 val 里缓存：缓存值在类加载时定型，运行时切主题不会刷新。
 
 /**
  * 主菜单面板：与 PC 端主菜单（panelMenu）对齐。
@@ -136,6 +137,9 @@ fun MainMenuPanel(viewModel: AppViewModel) {
     val sources by viewModel.sources.collectAsState()
     val selectedSource by viewModel.selectedSource.collectAsState()
     val multiViewState by viewModel.multiViewState.collectAsState()
+    // 主题模式只有一路状态：菜单里的高亮必须读同一个 ViewModel 值，
+    // 不能写死高亮「深色模式」（会让人误以为切浅色没生效）
+    val themeMode by viewModel.themeMode.collectAsState()
 
     val isFavorite = currentIdx >= 0 && favorites.contains(currentIdx)
 
@@ -161,8 +165,9 @@ fun MainMenuPanel(viewModel: AppViewModel) {
         if (uri != null) viewModel.playLocalVideo(uri.toString())
     }
 
-    val sections = remember(currentIdx, isFavorite, osdShowTime, osdShowNetSpeed, osdHideChannelNum, osdDisableEpg, osdDisableFavorite, osdShowListIcon, osdShowBottomIcon, liquidGlass, sources, selectedSource, multiViewState) {
+    val sections = remember(currentIdx, isFavorite, osdShowTime, osdShowNetSpeed, osdHideChannelNum, osdDisableEpg, osdDisableFavorite, osdShowListIcon, osdShowBottomIcon, liquidGlass, sources, selectedSource, multiViewState, themeMode) {
         buildMenuSections(
+            themeMode = themeMode,
             onOpenPlaylist = {
                 if (!viewModel.isSafAvailable()) {
                     viewModel.toggleMenuPanel()
@@ -487,7 +492,7 @@ fun MainMenuPanel(viewModel: AppViewModel) {
                                 ) {
                                     Text(
                                         text = entry.title,
-                                        color = if (isRightSelected || entry.highlight) Color.White else Color(0xE6FFFFFF),
+                                        color = if (isRightSelected || entry.highlight) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                                         fontSize = 15.sp,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
@@ -499,7 +504,7 @@ fun MainMenuPanel(viewModel: AppViewModel) {
                                             modifier = Modifier
                                                 .size(8.dp)
                                                 .clip(CircleShape)
-                                                .background(if (entry.toggleValue) AptvAccent else Color(0x60FFFFFF))
+                                                .background(if (entry.toggleValue) AptvAccent else tvPalette.borderSubtle)
                                         )
                                     }
                                 }
@@ -507,7 +512,7 @@ fun MainMenuPanel(viewModel: AppViewModel) {
                         }
                     }
                     // 列间分隔线
-                    Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(Color(0x40FFFFFF)))
+                    Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(tvPalette.borderSubtle))
 
                     // 右列（最右=一级）：主菜单分组
                     LazyColumn(
@@ -535,7 +540,7 @@ fun MainMenuPanel(viewModel: AppViewModel) {
                             ) {
                                 Text(
                                     text = section.title,
-                                    color = if (isSelected) Color.White else Color(0xE6FFFFFF),
+                                    color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontSize = 16.sp,
                                     fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
                                     maxLines = 1,
@@ -774,6 +779,7 @@ private data class MenuSection(
 )
 
 private fun buildMenuSections(
+    themeMode: String = "dark",
     onOpenPlaylist: () -> Unit,
     onOpenUrl: () -> Unit,
     onOpenLocalVideo: () -> Unit,
@@ -902,9 +908,9 @@ private fun buildMenuSections(
         title = "显示设置",
         entries = listOf(
             MenuEntry(Icons.Default.ViewInAr, "视图", "视频比例 / OSD", onView),
-            MenuEntry(Icons.Default.DarkMode, "深色模式", "沉浸式播放体验", onThemeDark, highlight = true),
-            MenuEntry(Icons.Default.LightMode, "浅色模式", "明亮界面", onThemeLight),
-            MenuEntry(Icons.Default.BrightnessAuto, "跟随系统", "随系统暗色/亮色切换", onThemeSystem),
+            MenuEntry(Icons.Default.DarkMode, "深色模式", "沉浸式播放体验", onThemeDark, highlight = themeMode == "dark"),
+            MenuEntry(Icons.Default.LightMode, "浅色模式", "明亮界面", onThemeLight, highlight = themeMode == "light"),
+            MenuEntry(Icons.Default.BrightnessAuto, "跟随系统", "随系统暗色/亮色切换", onThemeSystem, highlight = themeMode == "system"),
             MenuEntry(Icons.Default.Info, "显示时间", "右上角时间组", onToggleShowTime, isToggle = true, toggleValue = showTime),
             MenuEntry(Icons.Default.Info, "显示网速", "右下角网速", onToggleShowNetSpeed, isToggle = true, toggleValue = showNetSpeed),
             MenuEntry(Icons.Default.Info, "隐藏序号", "频道列表不显示序号", onToggleHideChannelNum, isToggle = true, toggleValue = hideChannelNum),
@@ -1107,14 +1113,14 @@ private fun BottomBarStylePickerOverlay(
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
                 Text(
                     text = "全屏底栏样式",
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = "选择后立即生效，弹窗保持打开可连续对比切换",
-                    color = Color(0x99FFFFFF),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 11.sp
                 )
                 Spacer(modifier = Modifier.height(10.dp))
@@ -1152,25 +1158,25 @@ private fun BottomBarStylePickerOverlay(
                                     .size(16.dp)
                                     .clip(CircleShape)
                                     .then(
-                                        if (isSel) Modifier.background(AptvAccent)
-                                        else Modifier.border(1.5.dp, Color(0x80FFFFFF), CircleShape)
+                                        if (isSel) Modifier.background(tvPalette.accentGraphic)
+                                        else Modifier.border(1.5.dp, MaterialTheme.colorScheme.onSurfaceVariant, CircleShape)
                                     ),
                                 contentAlignment = Alignment.Center
                             ) {
                                 if (isSel) {
-                                    Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(Color.White))
+                                    Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(MaterialTheme.colorScheme.onSurface))
                                 }
                             }
                             Spacer(modifier = Modifier.width(10.dp))
                             Text(
                                 text = name,
-                                color = if (isSel) Color.White else Color(0xE6FFFFFF),
+                                color = if (isSel) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 15.sp,
                                 fontWeight = if (isSel) FontWeight.Medium else FontWeight.Normal,
                                 modifier = Modifier.weight(1f)
                             )
                             if (isCurrent) {
-                                Text(text = "当前", color = AptvAccent, fontSize = 11.sp)
+                                Text(text = "当前", color = tvPalette.accentText, fontSize = 11.sp)
                                 Spacer(modifier = Modifier.width(8.dp))
                             }
                             BottomBarStyleMiniPreview(style, modifier = Modifier.width(110.dp))
@@ -1182,7 +1188,7 @@ private fun BottomBarStylePickerOverlay(
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = "OK 应用 · 返回键关闭",
-                    color = Color(0x80FFFFFF),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 11.sp,
                     modifier = Modifier.align(Alignment.End)
                 )

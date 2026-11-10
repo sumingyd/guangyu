@@ -20,6 +20,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
+import com.iptv.scanner.editor.pro.ui.tvPalette
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -101,8 +102,10 @@ fun LiquidGlassSurface(
     // 主题自适应：深色模式玻璃为灰白磨砂（iOS 控制中心深色壁纸下的观感）；
     // 浅色模式白上白不可辨 —— 提高玻璃不透明度 + 投影浮起 + 深色描边
     val darkTheme = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    // 浅色主题下覆盖层也必须用亮玻璃：否则「全屏/分屏」的侧栏、底栏、信息面板
+    // 永远呈深色，用户切了浅色也看不到变化。暗玻璃只在深色主题生效。
     val glassBase = when {
-        overlayDark -> OverlayGlass
+        overlayDark && darkTheme -> OverlayGlass
         darkTheme -> DarkGlass
         else -> LightGlass
     }
@@ -181,7 +184,7 @@ fun LiquidGlassSurface(
             Box(
                 modifier = Modifier
                     .matchParentSize()
-                    .drawBehind { drawLensingBorder(size, radiusPx, glassBase) }
+                    .drawBehind { drawLensingBorder(size, radiusPx, glassBase, glassBase.borderTint ?: tvPalette.glassBorder) }
             )
         } else {
             Box(modifier = Modifier.matchParentSize().background(fallbackColor, shape))
@@ -201,16 +204,24 @@ private class GlassBase(
     val borderMid: Float,
     val borderBottom: Float,
     val innerHighlight: Float,
-    // 描边基色：深色主题白描边（暗底上白线可辨），浅色主题深描边（白底上白线不可见）
-    val borderTint: Color = Color.White
+    // 描边基色：null 表示按主题取 palette 的 effect.glass_border
+    // （深色白描边、浅色深灰蓝描边），避免在这里写死 #525B6B
+    val borderTint: Color? = null
 )
 
-/** 深色主题：iOS 控制中心式灰白磨砂玻璃，彩色光斑透出感强 */
+/**
+ * 深色主题：iOS 控制中心式灰白磨砂玻璃，彩色光斑透出感强。
+ *
+ * 白色叠加强度曾用 0x66/0x4D/0x40（白 40%/30%/25%），叠在深色页底上把行底抬到
+ * #7D8086 —— 上面 13~15sp 的白字只有 3.8~4.0:1。设置页分组卡片（AptvGroupCard）
+ * 走的就是这条路径，属于可读性硬伤。这里降到 0x33/0x26/0x1F（白 20%/15%/12%），
+ * 行底压到 #3E4A4E 量级，白字回到 6:1 以上，同时保留「比页底更亮」的玻璃层次。
+ */
 private val DarkGlass = GlassBase(
-    blurTint = Color(0x52FFFFFF),          // 白 32%
+    blurTint = Color(0x33FFFFFF),          // 白 20%
     fallbackSolid = Color(0xFF3A3E46),
     frostBrush = Brush.verticalGradient(
-        listOf(Color(0x66FFFFFF), Color(0x4DFFFFFF), Color(0x40FFFFFF))
+        listOf(Color(0x33FFFFFF), Color(0x26FFFFFF), Color(0x1FFFFFFF))
     ),
     glossBrush = Brush.verticalGradient(
         0f to Color.White.copy(alpha = 0.14f),
@@ -260,8 +271,7 @@ private val LightGlass = GlassBase(
     glowAlpha = 0.85f,
     // 深色描边：白底上白描边不可见，改用深灰蓝提供轮廓（顶部仍保留弱高光感）
     borderTop = 0.30f, borderMid = 0.12f, borderBottom = 0.18f,
-    innerHighlight = 0.10f,
-    borderTint = Color(0xFF525B6B)
+    innerHighlight = 0.10f
 )
 
 /** 环境彩色光斑基色 */
@@ -299,13 +309,13 @@ private fun DrawScope.drawAmbientGlow(size: Size, base: GlassBase, glowScale: Fl
 }
 
 /** lensing 双描边：外圈顶部亮线+底部反光线；内圈细高光 */
-private fun DrawScope.drawLensingBorder(size: Size, radiusPx: Float, base: GlassBase) {
+private fun DrawScope.drawLensingBorder(size: Size, radiusPx: Float, base: GlassBase, borderTint: Color) {
     val w = 1.2.dp.toPx()
     drawRoundRect(
         brush = Brush.verticalGradient(
-            0f to base.borderTint.copy(alpha = base.borderTop),
-            0.5f to base.borderTint.copy(alpha = base.borderMid),
-            1f to base.borderTint.copy(alpha = base.borderBottom)
+            0f to borderTint.copy(alpha = base.borderTop),
+            0.5f to borderTint.copy(alpha = base.borderMid),
+            1f to borderTint.copy(alpha = base.borderBottom)
         ),
         cornerRadius = CornerRadius(radiusPx, radiusPx),
         style = Stroke(width = w)

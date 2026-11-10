@@ -140,6 +140,18 @@ def main():
     app = QApplication(sys.argv)
     _warn_if_native_wayland(app)
 
+    # PC 端字号/界面缩放：先装 QSS 拦截器，保证之后所有 setStyleSheet 都经过
+    # 单一真源（ui/typography.py）的换算；再读取档位并应用应用级字体。
+    # 只作用于逻辑像素，不读写 QT_SCALE_FACTOR / HighDpiScaling，避免双重放大。
+    try:
+        from ui.typography import install_qss_scaler, load_from_config, apply_application_font
+        install_qss_scaler()
+        from core.config_manager import ConfigManager
+        load_from_config(ConfigManager())
+        apply_application_font(app)
+    except Exception:
+        pass
+
     splash = None
     try:
         from utils.general_utils import get_icon_path

@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -52,7 +53,9 @@ import androidx.compose.ui.unit.sp
 /**
  * APTV 风格竖屏强调色（红粉），仅用于竖屏页面对齐 APTV 视觉，不影响横屏/TV 主题。
  */
-internal val AptvAccent = Color(0xFFE8455F)
+internal val AptvAccent: Color get() = tvPalette.accentGraphic
+internal val AptvAccentText: Color get() = tvPalette.accentText
+internal val AptvAccentFill: Color get() = tvPalette.accentFill
 
 /**
  * APTV 风格开关：竖屏 APTV 页面（PortraitPanelDialog push 页等）内提供 true，
@@ -93,18 +96,17 @@ internal fun AptvGlassChip(
     if (liquidGlass && com.iptv.scanner.editor.pro.ui.theme.isLiquidBlurSupported()) {
         // 轻量单层玻璃（与玻璃按钮同风格）：小部件上叠加厚霜/双描边会出现「两层玻璃」观感
         // 浅色主题：白底上白描边不可见，描边改用深灰蓝低透明度提供轮廓（与 LightGlass 一致）
-        val darkTheme = com.iptv.scanner.editor.pro.ui.theme.isDarkTheme()
-        val borderTint = if (darkTheme) Color.White else Color(0xFF525B6B)
-        val borderAlpha = if (darkTheme) 0.28f else 0.16f
+        // 亮玻璃 / 暗玻璃两套材质全部取自 palette token（effect.glass_*），
+        // 由 palette.json 的深/浅两套值决定，不在代码里写死白/黑 alpha。
         val shape = androidx.compose.foundation.shape.RoundedCornerShape(cornerRadius)
         androidx.compose.foundation.layout.Box(
             modifier = modifier
                 .clip(shape)
-                .background(Color.White.copy(alpha = 0.10f), shape)
-                .border(1.dp, borderTint.copy(alpha = borderAlpha), shape)
+                .background(tvPalette.glassFill, shape)
+                .border(1.dp, tvPalette.glassBorder, shape)
                 .background(
                     androidx.compose.ui.graphics.Brush.verticalGradient(
-                        0f to Color.White.copy(alpha = 0.12f),
+                        0f to tvPalette.glassGloss,
                         1f to Color.Transparent
                     ),
                     shape
@@ -130,17 +132,22 @@ internal fun OutlinedButton(
 ) {
     val liquidGlass = LocalLiquidGlass.current
     if (liquidGlass && com.iptv.scanner.editor.pro.ui.theme.isLiquidBlurSupported()) {
+        val contentColor = tvPalette.textPrimary
         val shape = RoundedCornerShape(50)
         Box(
             modifier = modifier
                 .clip(shape)
-                .background(Color.White.copy(alpha = 0.14f), shape)
-                .border(1.dp, Color.White.copy(alpha = 0.38f), shape)
+                .background(tvPalette.glassFillSoft, shape)
+                .border(
+                    1.dp,
+                    tvPalette.glassBorder,
+                    shape
+                )
                 .background(
                     androidx.compose.ui.graphics.Brush.verticalGradient(
-                        0f to Color.White.copy(alpha = 0.16f),
+                        0f to tvPalette.glassGloss,
                         0.5f to Color.Transparent,
-                        1f to Color.Black.copy(alpha = 0.10f)
+                        1f to tvPalette.glassShadow
                     ),
                     shape
                 )
@@ -150,7 +157,7 @@ internal fun OutlinedButton(
         ) {
             androidx.compose.runtime.CompositionLocalProvider(
                 androidx.compose.material3.LocalContentColor provides
-                    if (enabled) Color.White else Color.White.copy(alpha = 0.38f)
+                    if (enabled) contentColor else contentColor.copy(alpha = 0.38f)
             ) {
                 Row(
                     verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
@@ -185,13 +192,13 @@ internal fun Button(
         Box(
             modifier = modifier
                 .clip(shape)
-                .background(AptvAccent.copy(alpha = if (enabled) 0.65f else 0.30f), shape)
-                .border(1.dp, Color.White.copy(alpha = 0.42f), shape)
+                .background(tvPalette.accentFill.copy(alpha = if (enabled) 1f else 0.35f), shape)
+                .border(1.dp, tvPalette.accentOn.copy(alpha = 0.42f), shape)
                 .background(
                     androidx.compose.ui.graphics.Brush.verticalGradient(
-                        0f to Color.White.copy(alpha = 0.22f),
+                        0f to tvPalette.accentOn.copy(alpha = 0.22f),
                         0.5f to Color.Transparent,
-                        1f to Color.Black.copy(alpha = 0.12f)
+                        1f to tvPalette.glassShadow
                     ),
                     shape
                 )
@@ -201,7 +208,7 @@ internal fun Button(
         ) {
             androidx.compose.runtime.CompositionLocalProvider(
                 androidx.compose.material3.LocalContentColor provides
-                    if (enabled) Color.White else Color.White.copy(alpha = 0.50f)
+                    if (enabled) tvPalette.accentOn else tvPalette.accentOn.copy(alpha = 0.50f)
             ) {
                 Row(
                     verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
@@ -236,11 +243,18 @@ internal fun IconButton(
             modifier = modifier
                 .size(34.dp)
                 .clip(androidx.compose.foundation.shape.CircleShape)
-                .background(Color.White.copy(alpha = 0.12f), androidx.compose.foundation.shape.CircleShape)
-                .border(1.dp, Color.White.copy(alpha = 0.30f), androidx.compose.foundation.shape.CircleShape)
+                .background(
+                    tvPalette.glassFillSoft,
+                    androidx.compose.foundation.shape.CircleShape
+                )
+                .border(
+                    1.dp,
+                    tvPalette.glassBorder,
+                    androidx.compose.foundation.shape.CircleShape
+                )
                 .background(
                     androidx.compose.ui.graphics.Brush.verticalGradient(
-                        0f to Color.White.copy(alpha = 0.14f),
+                        0f to tvPalette.glassGloss,
                         1f to Color.Transparent
                     ),
                     androidx.compose.foundation.shape.CircleShape
@@ -298,10 +312,16 @@ internal fun AptvRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
+            // 行高固定为 48dp（= 28dp 图标 + 2×10dp 内边距），保证命中区与视觉行高一致，
+            // 不随内容/换行浮动；clickable 挂在这一整行上（不是文字节点）
+            .heightIn(min = 48.dp)
             // tvFocusBorder 必须在 clickable 之前（外层）：onFocusChanged 只能观察到
             // 链中内层方向的 focus target，放在 clickable 之后收不到焦点事件（无高亮/放大）
             .then(if (disabled) Modifier else Modifier.tvFocusBorder())
-            .then(if (disabled) Modifier else Modifier.clickable(onClick = onClick))
+            .then(
+                if (disabled) Modifier
+                else Modifier.clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
+            )
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -309,10 +329,12 @@ internal fun AptvRow(
             modifier = Modifier
                 .size(28.dp)
                 .clip(RoundedCornerShape(7.dp))
-                .background(AptvAccent.copy(alpha = if (disabled) 0.30f else 0.90f)),
+                .background(
+                    tvPalette.accentFill.copy(alpha = if (disabled) 0.30f else 1f)
+                ),
             contentAlignment = Alignment.Center
         ) {
-            Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+            Icon(icon, contentDescription = null, tint = tvPalette.accentOn, modifier = Modifier.size(16.dp))
         }
         Spacer(modifier = Modifier.width(12.dp))
         Text(
@@ -324,8 +346,11 @@ internal fun AptvRow(
         if (value.isNotEmpty()) {
             Text(
                 text = value,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 14.sp
+                // 深色主题的行底曾被玻璃高光抬到中灰（#7E8087），用 onSurfaceVariant(#AAA)
+                // 只有 3.1:1；行值属于正文，改用 onSurface（深色=白，浅色=#333）
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
             )
             Spacer(modifier = Modifier.width(6.dp))
         }
@@ -369,10 +394,10 @@ internal fun AptvSwitchRow(
             modifier = Modifier
                 .size(28.dp)
                 .clip(RoundedCornerShape(7.dp))
-                .background(AptvAccent.copy(alpha = 0.90f)),
+                .background(if (checked) tvPalette.accentFill else tvPalette.accentFill.copy(alpha = 0.45f)),
             contentAlignment = Alignment.Center
         ) {
-            Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+            Icon(icon, contentDescription = null, tint = tvPalette.accentOn, modifier = Modifier.size(16.dp))
         }
         Spacer(modifier = Modifier.width(12.dp))
         Text(
@@ -452,7 +477,7 @@ internal fun SelectionGroup(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.45f))
+                        .background(tvPalette.overlay)
                         .clickable { showSheet = false }
                 ) {
                     Surface(
@@ -492,7 +517,7 @@ internal fun SelectionGroup(
                                         Icon(
                                             Icons.Default.Check,
                                             contentDescription = null,
-                                            tint = AptvAccent,
+                                            tint = tvPalette.accentGraphic,
                                             modifier = Modifier.size(20.dp)
                                         )
                                     }
@@ -546,8 +571,8 @@ internal fun SwitchRow(
                 onCheckedChange = onCheckedChange,
                 enabled = !disabled,
                 colors = androidx.compose.material3.SwitchDefaults.colors(
-                    checkedThumbColor = Color.White,
-                    checkedTrackColor = AptvAccent,
+                    checkedThumbColor = tvPalette.accentOn,
+                    checkedTrackColor = tvPalette.accentFill,
                     uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
                 )
@@ -595,7 +620,7 @@ internal fun AptvPanelHeader(
             if (subtitle.isNotEmpty()) {
                 Text(
                     text = subtitle,
-                    color = AptvAccent,
+                    color = tvPalette.accentText,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium
                 )
@@ -675,7 +700,7 @@ internal fun AptvAlertDialog(
                         text = confirmText,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Medium,
-                        color = if (destructive) MaterialTheme.colorScheme.error else AptvAccent,
+                        color = if (destructive) MaterialTheme.colorScheme.error else tvPalette.accentText,
                         modifier = Modifier
                             .clickable(onClick = onConfirm)
                             .padding(horizontal = 12.dp, vertical = 8.dp)
@@ -692,15 +717,17 @@ internal fun AptvAlertDialog(
  */
 @Composable
 internal fun BottomBarStyleMiniPreview(style: Int, modifier: Modifier = Modifier) {
-    val barBg = Color(0xE6141820)      // 近似暗玻璃底
-    val line = Color(0xCCFFFFFF)       // 信息示意线
-    val lineDim = Color(0x59FFFFFF)    // 次级示意线
+    // 底座与示意线全部取 token：深色主题为深灰玻璃 + 白线，浅色主题为浅灰底 + 深灰线，
+    // 不再固定暗底 + 白色半透明（浅色下白线会消失在浅底里）
+    val barBg = tvPalette.panelControlBackground
+    val line = tvPalette.textPrimary.copy(alpha = 0.80f)
+    val lineDim = tvPalette.textPrimary.copy(alpha = 0.35f)
     Box(
         modifier = modifier
             .height(26.dp)
             .clip(RoundedCornerShape(5.dp))
             .background(barBg)
-            .border(0.5.dp, Color(0x33FFFFFF), RoundedCornerShape(5.dp))
+            .border(0.5.dp, tvPalette.glassBorder, RoundedCornerShape(5.dp))
             .padding(horizontal = 5.dp, vertical = 4.dp)
     ) {
         when (style) {
@@ -760,7 +787,7 @@ internal fun BottomBarStyleMiniPreview(style: Int, modifier: Modifier = Modifier
                 Row(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0x26FFFFFF))
+                        .background(tvPalette.glassFillSoft)
                         .padding(horizontal = 6.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -1025,7 +1052,7 @@ internal fun BottomBarStyleMiniPreview(style: Int, modifier: Modifier = Modifier
                         Box(
                             Modifier.fillMaxWidth(0.5f).fillMaxHeight().background(
                                 androidx.compose.ui.graphics.Brush.horizontalGradient(
-                                    listOf(AptvAccent, Color(0xFF3D82F7))
+                                    listOf(AptvAccent, tvPalette.accentBase)
                                 )
                             )
                         )

@@ -182,7 +182,7 @@ fun SourceManagerPanel(viewModel: AppViewModel, focusUrlInput: Boolean = false) 
             if (!sourceLoading && sourceWarningMsg.isNotBlank()) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Surface(
-                    color = Color(0x26FFB74D),
+                    color = tvPalette.warning.copy(alpha = 0.16f),
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -199,7 +199,8 @@ fun SourceManagerPanel(viewModel: AppViewModel, focusUrlInput: Boolean = false) 
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = sourceWarningMsg,
-                            color = Color(0xFFFFDCA8),
+                            // 固定 #FFDCA8 在浅色底上对比度约 1.2:1，几乎不可读；改用主题正文色
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontSize = 13.sp
                         )
                     }
@@ -223,7 +224,7 @@ fun SourceManagerPanel(viewModel: AppViewModel, focusUrlInput: Boolean = false) 
                 // 启动提示卡片：可被遥控器焦点选中（tvFocusBorder + focusable）
                 // 半透明白替代 surfaceVariant 实底：叠加在暗玻璃弹窗上不突兀
                 Surface(
-                    color = Color(0x14FFFFFF),
+                    color = tvPalette.borderSubtle,
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -640,7 +641,7 @@ private fun LanAdminInfoBar(
     Column {
         // 半透明白替代 surfaceVariant 实底：叠加在暗玻璃弹窗上不突兀
         Surface(
-            color = Color(0x14FFFFFF),
+            color = tvPalette.borderSubtle,
             shape = RoundedCornerShape(8.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -715,7 +716,7 @@ private fun LanAdminInfoBar(
                         Text(
                             text = "二维码生成失败",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color.Red
+                            color = MaterialTheme.colorScheme.error
                         )
                     }
                     Spacer(modifier = Modifier.height(8.dp))
@@ -861,9 +862,9 @@ private fun BackupRestoreBar(viewModel: AppViewModel) {
         }
     }
 
-    // 半透明白替代 surfaceVariant 实底：叠加在暗玻璃弹窗上不突兀
+    // 半透明衬底替代 surfaceVariant 实底：跟随主题（深色白 8%，浅色黑 8%）
     Surface(
-        color = Color(0x14FFFFFF),
+        color = tvPalette.borderSubtle,
         shape = RoundedCornerShape(8.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -987,7 +988,7 @@ private fun SourceManagerPanelAptv(viewModel: AppViewModel) {
             val iptvStatusWarnAptv by viewModel.iptvStatus.collectAsState()
             if (!sourceLoading && iptvStatusWarnAptv?.sourceWarning.orEmpty().isNotBlank()) {
                 Surface(
-                    color = Color(0x26FFB74D),
+                    color = tvPalette.warning.copy(alpha = 0.16f),
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -1004,7 +1005,8 @@ private fun SourceManagerPanelAptv(viewModel: AppViewModel) {
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = iptvStatusWarnAptv?.sourceWarning.orEmpty(),
-                            color = Color(0xFFFFDCA8),
+                            // 固定 #FFDCA8 在浅色底上不可读，改主题正文色
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontSize = 13.sp
                         )
                     }

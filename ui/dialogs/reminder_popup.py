@@ -40,9 +40,10 @@ class ReminderPopup(FloatingDialog):
 
         title_label = QLabel(tr('reminder_popup_title', '节目提醒'))
         title_label.setObjectName('popupTitle')
+        from ui.typography import scaled_pt
         title_font = QFont()
         title_font.setBold(True)
-        title_font.setPointSize(11)
+        title_font.setPointSizeF(scaled_pt(11))
         title_font.setFamily(ff)
         title_label.setFont(title_font)
         layout.addWidget(title_label)
@@ -55,7 +56,7 @@ class ReminderPopup(FloatingDialog):
         program_label.setObjectName('popupProgram')
         program_font = QFont()
         program_font.setBold(True)
-        program_font.setPointSize(10)
+        program_font.setPointSizeF(scaled_pt(10))
         program_font.setFamily(ff)
         program_label.setFont(program_font)
         layout.addWidget(program_label)

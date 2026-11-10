@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QMenu
 from core.log_manager import global_logger as logger
 from ui.elided_label import ElidedLabel
 from ui.styles import AppStyles
-from utils.platform_utils import is_android, get_ui_scale
+from utils.platform_utils import is_android
 
 
 
@@ -55,20 +55,81 @@ class ControlPanelMixin:
             self.floating_dock.hide()
 
 
+    def _control_panel_ui_metrics(self):
+        """控制栏尺寸基线：逻辑屏宽因子 × 用户界面缩放档位。
+
+        QSS 内的字号/内边距由 ui/typography 的统一拦截器换算；这里负责
+        setFixedSize / setIconSize 这类样式表管不到的固定尺寸，两处不能重复乘。
+        """
+        from utils.platform_utils import get_effective_ui_scale
+        from ui.typography import text_factor
+        scale = get_effective_ui_scale()
+        # 只有字号档位偏大时才用字体实际高度兜底；标准档保持既有观感不变，
+        # 避免「字号设置」本身把默认界面改高。
+        try:
+            text_h = self.fontMetrics().height()
+        except Exception:
+            text_h = 18
+        min_text_h = (text_h + 12) if text_factor() > 1.0 else 0
+        return {
+            'scale': scale,
+            'button_w': max(25, int(round(self.CTRL_BUTTON_WIDTH * scale))),
+            'button_h': max(22, int(round(self.CTRL_BUTTON_HEIGHT * scale)), min_text_h),
+            'icon': max(14, int(round(16 * scale))),
+            'info_h': max(16, int(round(22 * scale)), min_text_h),
+            'logo_w': max(40, int(round(self.CHANNEL_LOGO_WIDTH * scale))),
+            'logo_h': max(20, int(round(self.CHANNEL_LOGO_HEIGHT * scale))),
+            'volume_w': max(64, int(round(90 * scale))),
+            'spacing': max(4, int(round(6 * scale))),
+        }
+
+    def refresh_control_panel_metrics(self):
+        """字号/缩放在运行期变更后重算控制栏与信息行的固定尺寸。"""
+        metrics = self._control_panel_ui_metrics()
+        icon_size = QSize(metrics['icon'], metrics['icon'])
+        for name in (
+            'prev_ch_button', 'play_button', 'next_ch_button', 'stop_button',
+            'volume_button', 'more_button', 'fullscreen_button',
+        ):
+            btn = getattr(self, name, None)
+            if btn is None:
+                continue
+            btn.setIconSize(icon_size)
+            btn.setFixedSize(metrics['button_w'], metrics['button_h'])
+        slider = getattr(self, 'volume_slider', None)
+        if slider is not None:
+            slider.setFixedWidth(metrics['volume_w'])
+        for name in ('video_info', 'audio_info', 'network_info', 'buffer_info', 'hdr_badge'):
+            label = getattr(self, name, None)
+            if label is not None:
+                label.setFixedHeight(metrics['info_h'])
+        for name in ('video_info_icon', 'audio_info_icon', 'network_info_icon'):
+            icon_label = getattr(self, name, None)
+            if icon_label is not None:
+                icon_label.setFixedSize(metrics['icon'], metrics['icon'])
+        logo = getattr(self, 'channel_logo', None)
+        if logo is not None:
+            logo.setFixedSize(metrics['logo_w'], metrics['logo_h'])
+        row = getattr(self, 'control_row', None)
+        if row is not None and not is_android():
+            row.setSpacing(metrics['spacing'])
+
     def _set_info_label_icon(self, icon_label: QLabel, icon_name: str):
         """设置信息行前的小图标"""
         color = AppStyles.get_color('player_panel_text')
-        icon_path = AppStyles.get_icon(icon_name, color, 16)
+        metrics = self._control_panel_ui_metrics()
+        icon_path = AppStyles.get_icon(icon_name, color, metrics['icon'])
         if icon_path:
             pixmap = QPixmap(icon_path)
             if not pixmap.isNull():
                 icon_label.setPixmap(pixmap)
-                icon_label.setFixedSize(16, 16)
+                icon_label.setFixedSize(metrics['icon'], metrics['icon'])
                 icon_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
     def _create_media_row(self):
         """创建媒体信息行"""
         tr = self.language_manager.tr
+        info_h = self._control_panel_ui_metrics()['info_h']
 
         self.media_row = QHBoxLayout()
         self.media_row.setSpacing(6)
@@ -81,7 +142,7 @@ class ControlPanelMixin:
         self.video_info = QLabel()
         self.video_info.setStyleSheet(AppStyles.player_media_badge_style())
         self.video_info.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self.video_info.setFixedHeight(22)
+        self.video_info.setFixedHeight(info_h)
         self.video_info.setToolTip(tr('tooltip_video_info', '视频信息'))
         self.video_info.setText(tr('not_playing', 'Not playing'))
         self.media_row.addWidget(self.video_info)
@@ -89,7 +150,7 @@ class ControlPanelMixin:
         self.hdr_badge = QLabel()
         self.hdr_badge.setStyleSheet(AppStyles.player_hdr_badge_style())
         self.hdr_badge.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self.hdr_badge.setFixedHeight(22)
+        self.hdr_badge.setFixedHeight(info_h)
         self.hdr_badge.setToolTip(tr('tooltip_hdr', 'HDR状态'))
         self.hdr_badge.hide()
         self.media_row.addWidget(self.hdr_badge)
@@ -104,7 +165,7 @@ class ControlPanelMixin:
         self.audio_info = QLabel()
         self.audio_info.setStyleSheet(AppStyles.player_media_badge_style())
         self.audio_info.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self.audio_info.setFixedHeight(22)
+        self.audio_info.setFixedHeight(info_h)
         self.audio_info.setToolTip(tr('tooltip_audio_info', '音频信息'))
         self.audio_info.setText("--")
         self.media_row.addWidget(self.audio_info)
@@ -119,7 +180,7 @@ class ControlPanelMixin:
         self.network_info = QLabel()
         self.network_info.setStyleSheet(AppStyles.player_media_badge_style())
         self.network_info.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self.network_info.setFixedHeight(22)
+        self.network_info.setFixedHeight(info_h)
         self.network_info.setToolTip(tr('tooltip_network_info', '网络信息'))
         self.network_info.setText("--")
         self.media_row.addWidget(self.network_info)
@@ -127,7 +188,7 @@ class ControlPanelMixin:
         self.buffer_info = QLabel("")
         self.buffer_info.setStyleSheet(AppStyles.player_media_badge_style())
         self.buffer_info.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self.buffer_info.setFixedHeight(22)
+        self.buffer_info.setFixedHeight(info_h)
         self.buffer_info.setToolTip(tr('tooltip_buffer_info', '缓冲信息'))
         self.buffer_info.hide()
         self.media_row.addWidget(self.buffer_info)
@@ -152,10 +213,18 @@ class ControlPanelMixin:
 
         self.channel_logo = QLabel()
         self.channel_logo.setStyleSheet(AppStyles.player_channel_logo_style())
-        self.channel_logo.setFixedSize(self.CHANNEL_LOGO_WIDTH, self.CHANNEL_LOGO_HEIGHT)
+        self.channel_logo.setFixedSize(
+            self._control_panel_ui_metrics()['logo_w'],
+            self._control_panel_ui_metrics()['logo_h'],
+        )
         self.channel_logo.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
         from utils.general_utils import set_default_channel_logo
-        set_default_channel_logo(self.channel_logo, 100, 36)
+        logo_metrics = self._control_panel_ui_metrics()
+        set_default_channel_logo(
+            self.channel_logo,
+            max(60, int(round(100 * logo_metrics['scale']))),
+            max(24, int(round(36 * logo_metrics['scale']))),
+        )
         info_layout.addWidget(self.channel_logo, 0, Qt.AlignmentFlag.AlignVCenter)
 
         text_layout = QVBoxLayout()
@@ -188,6 +257,10 @@ class ControlPanelMixin:
         self.remain_label.setStyleSheet(AppStyles.player_status_badge_style())
         self.remain_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.remain_label.setMinimumWidth(70)
+        # 字号放大后「播放中...」的宽度会超过旧的 70px 下限，行内空间不足时
+        # QLabel 默认会被压到 minimumWidth。改为 Minimum 横向策略，让省略发生在
+        # channel_name / current_program 上，状态徽标始终按 sizeHint 显示完整文字。
+        self.remain_label.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
         row1.addWidget(self.remain_label, 0)
         text_layout.addLayout(row1)
 
@@ -229,12 +302,11 @@ class ControlPanelMixin:
         self.control_row.setSpacing(6 if not is_android() else 8)
 
         btn_color = AppStyles.get_color('player_panel_text')
-        # 按逻辑屏宽分级的尺寸因子：按钮、图标与全屏精简模式统一套用
-        ui_scale = get_ui_scale()
-        btn_w = max(25, int(round(self.CTRL_BUTTON_WIDTH * ui_scale)))
-        btn_h = max(22, int(round(self.CTRL_BUTTON_HEIGHT * ui_scale)))
-        _icon_px = max(14, int(round(16 * ui_scale)))
-        btn_icon_size = QSize(_icon_px, _icon_px)
+        # 按「逻辑屏宽 × 用户界面缩放」分级：按钮、图标与全屏精简模式统一套用
+        metrics = self._control_panel_ui_metrics()
+        btn_w = metrics['button_w']
+        btn_h = metrics['button_h']
+        btn_icon_size = QSize(metrics['icon'], metrics['icon'])
         if is_android():
             btn_icon_size = QSize(28, 28)
             btn_w = max(btn_w, 48)
@@ -315,7 +387,7 @@ class ControlPanelMixin:
         self.volume_slider = QSlider(Qt.Orientation.Horizontal)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(80)
-        self.volume_slider.setFixedWidth(max(64, int(round(90 * ui_scale))))
+        self.volume_slider.setFixedWidth(metrics['volume_w'])
         self.volume_slider.setStyleSheet(AppStyles.player_volume_slider_style())
         self.volume_slider.setToolTip(tr("panel_volume_slider", "音量调节"))
         self.volume_slider.valueChanged.connect(self.set_volume)

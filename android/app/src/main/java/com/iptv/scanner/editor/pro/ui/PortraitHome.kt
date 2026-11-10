@@ -233,18 +233,22 @@ internal fun MiniPlayerBar(
                 Icon(
                     imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
                     contentDescription = if (isPaused) "播放" else "暂停",
-                    tint = AptvAccent,
+                    tint = tvPalette.accentGraphic,
                     modifier = Modifier.size(22.dp)
                 )
             }
             Spacer(modifier = Modifier.width(8.dp))
             // 频道 logo（带自适应背景色，确保浅色台标在浅色模式下可见）
             if (channelLogo.isNotEmpty()) {
+                // 很多台标本身是白色 PNG：浅色胶囊 + 浅灰底 = 几乎不可见。
+                // 浅色主题用中性深灰衬底 + 1dp 描边；深色主题维持深底。
+                val logoBg = if (com.iptv.scanner.editor.pro.ui.theme.isDarkTheme()) Color(0xFF2A2A2A) else Color(0xFF8A8F98)
                 Box(
                     modifier = Modifier
                         .size(28.dp)
                         .clip(RoundedCornerShape(4.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                        .background(logoBg)
+                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f), RoundedCornerShape(4.dp)),
                     contentAlignment = Alignment.Center
                 ) {
                     AsyncImage(
@@ -262,6 +266,9 @@ internal fun MiniPlayerBar(
                     text = channelName,
                     color = MaterialTheme.colorScheme.onSurface,
                     fontSize = 13.sp,
+                    // 必须显式给 lineHeight：LocalTextStyle 默认是 bodyLarge 的 24sp 行高，
+                    // 两行 24+24=48sp 正好等于胶囊高度 48dp，加上字体额外内边距第二行被下沿裁切
+                    lineHeight = 16.sp,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -270,6 +277,7 @@ internal fun MiniPlayerBar(
                     text = progTitle,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 10.sp,
+                    lineHeight = 12.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -282,7 +290,7 @@ internal fun MiniPlayerBar(
                 ) {
                     Text(
                         text = groupName,
-                        color = AptvAccent,
+                        color = tvPalette.accentText,
                         fontSize = 9.sp,
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
                         maxLines = 1
@@ -312,7 +320,8 @@ internal fun MiniBadge(label: String) {
     ) {
         Text(
             text = label,
-            color = badgeColor,
+            // 15% 底上用深/亮强调文字色，而不是直接拿 #E8455F（浅底只有 2.8:1）
+            color = if (aptvStyle) tvPalette.accentText else badgeColor,
             fontSize = 9.sp,
             fontWeight = FontWeight.Medium,
             modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),

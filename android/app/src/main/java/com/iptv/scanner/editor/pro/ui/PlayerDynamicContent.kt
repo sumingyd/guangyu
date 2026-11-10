@@ -134,8 +134,6 @@ import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import android.net.Uri
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.material.icons.filled.FileOpen
@@ -188,12 +186,20 @@ internal fun PortraitPlayerDynamicContent(viewModel: AppViewModel) {
     val isLocalFile = currentChannel == null || currentIdx < 0
 
     // Tab 状态：订阅频道 = [分类, 频道, 节目, 信息]，本地文件 = [信息, 最近文件]
-    // 必须在下方 fileLoaded 提前 return 之前 remember：切台时 mpv 会短暂置
+    // 必须在下方占位提前 return 之前 remember：切台时 mpv 会短暂置
     // fileLoaded=false，若放在 return 之后，状态槽随组合销毁，新频道加载完成后
     // selectedTab 会被重置回「分类」，无法停留在「频道」列表连续选台
     var selectedTab by remember { mutableStateOf(0) }
 
-    if (!fileLoaded) {
+    // 占位条件：只有「首次进入且从未起播」才显示「未在播放」。
+    // 换台时 mpv 会短暂置 fileLoaded=false，若此时用占位整块替换，tab 栏与列表子树
+    // 会被销毁重建：列表滚动位置丢失、正文高度抖动，观感即「整个播放页重绘」。
+    // 一旦成功起过播，换台期间保持 tab 与列表常驻。
+    var hasEverLoaded by remember { mutableStateOf(false) }
+    LaunchedEffect(fileLoaded) {
+        if (fileLoaded) hasEverLoaded = true
+    }
+    if (!fileLoaded && !hasEverLoaded) {
         Box(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
@@ -242,11 +248,15 @@ internal fun PortraitPlayerDynamicContent(viewModel: AppViewModel) {
                             .clip(tabShape)
                             .then(
                                 if (isSelected) Modifier
-                                    .background(Color.White.copy(alpha = 0.20f), tabShape)
-                                    .border(1.dp, Color.White.copy(alpha = 0.45f), tabShape)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant, tabShape)
+                                    .border(
+                                        1.dp,
+                                        MaterialTheme.colorScheme.outline.copy(alpha = 0.65f),
+                                        tabShape
+                                    )
                                     .background(
                                         androidx.compose.ui.graphics.Brush.verticalGradient(
-                                            0f to Color.White.copy(alpha = 0.22f),
+                                            0f to tvPalette.glassGloss,
                                             1f to Color.Transparent
                                         ),
                                         tabShape
@@ -261,7 +271,7 @@ internal fun PortraitPlayerDynamicContent(viewModel: AppViewModel) {
                         Text(
                             text = label,
                             // 选中态用品牌色文字（白亮玻璃凸起上白字不可读，与底部 TAB 栏一致）
-                            color = if (isSelected) AptvAccent else oc.textSecondary,
+                            color = if (isSelected) tvPalette.accentText else oc.textSecondary,
                             fontSize = 13.sp,
                             fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
                             textAlign = TextAlign.Center,
@@ -417,7 +427,7 @@ internal fun PortraitLocalFileInfo(
                         LinearProgressIndicator(
                             progress = { (progress / 100).toFloat() },
                             modifier = Modifier.fillMaxWidth(),
-                            color = AptvAccent,
+                            color = tvPalette.accentGraphic,
                             trackColor = MaterialTheme.colorScheme.surfaceVariant
                         )
                         Spacer(modifier = Modifier.height(4.dp))
@@ -475,11 +485,11 @@ internal fun PortraitLocalFileInfo(
                         TextButton(
                             onClick = { viewModel.toggleAudioSettings() },
                             modifier = Modifier.weight(1f)
-                        ) { Text(stringResource(R.string.info_audio_settings), color = AptvAccent) }
+                        ) { Text(stringResource(R.string.info_audio_settings), color = tvPalette.accentText) }
                         TextButton(
                             onClick = { viewModel.toggleSubtitleSettings() },
                             modifier = Modifier.weight(1f)
-                        ) { Text(stringResource(R.string.info_subtitle_settings), color = AptvAccent) }
+                        ) { Text(stringResource(R.string.info_subtitle_settings), color = tvPalette.accentText) }
                     }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -488,11 +498,11 @@ internal fun PortraitLocalFileInfo(
                         TextButton(
                             onClick = { viewModel.togglePlaybackPanel() },
                             modifier = Modifier.weight(1f)
-                        ) { Text(stringResource(R.string.info_playback_speed), color = AptvAccent) }
+                        ) { Text(stringResource(R.string.info_playback_speed), color = tvPalette.accentText) }
                         TextButton(
                             onClick = { viewModel.toggleBookmarkPanel() },
                             modifier = Modifier.weight(1f)
-                        ) { Text(stringResource(R.string.info_bookmark_manager), color = AptvAccent) }
+                        ) { Text(stringResource(R.string.info_bookmark_manager), color = tvPalette.accentText) }
                     }
                 }
             }
@@ -603,7 +613,7 @@ internal fun PortraitCategoryContent(viewModel: AppViewModel, onGroupSelected: (
                 ) {
                     Text(
                         text = "全部",
-                        color = if (isSelected) AptvAccent else MaterialTheme.colorScheme.onSurface,
+                        color = if (isSelected) AptvAccentText else MaterialTheme.colorScheme.onSurface,
                         fontSize = 15.sp,
                         fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
                         modifier = Modifier.weight(1f)
@@ -629,7 +639,7 @@ internal fun PortraitCategoryContent(viewModel: AppViewModel, onGroupSelected: (
                 ) {
                     Text(
                         text = group,
-                        color = if (isSelected) AptvAccent else MaterialTheme.colorScheme.onSurface,
+                        color = if (isSelected) AptvAccentText else MaterialTheme.colorScheme.onSurface,
                         fontSize = 15.sp,
                         fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
                         maxLines = 1,
@@ -827,7 +837,7 @@ internal fun PortraitEpgContent(viewModel: AppViewModel) {
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
                         text = "${stringResource(R.string.epg_now_playing)}：${nowPlayingProgram.title}",
-                        color = AptvAccent,
+                        color = AptvAccentText,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
                         maxLines = 1,
@@ -835,7 +845,7 @@ internal fun PortraitEpgContent(viewModel: AppViewModel) {
                     )
                     Text(
                         text = "${portraitFormatTime(nowPlayingProgram.start)} - ${portraitFormatTime(nowPlayingProgram.stop.ifEmpty { nowPlayingProgram.end })}",
-                        color = AptvAccent,
+                        color = AptvAccentText,
                         fontSize = 11.sp
                     )
                 }
@@ -948,7 +958,7 @@ private fun PortraitEpgItem(
         }
         Text(
             text = portraitFormatTime(program.start),
-            color = AptvAccent,
+            color = AptvAccentText,
             fontSize = 13.sp,
             fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
             modifier = Modifier.width(56.dp)
@@ -972,12 +982,12 @@ private fun PortraitEpgItem(
         }
         if (statusText.isNotEmpty()) {
             val badgeColor = when {
-                isCurrent -> AptvAccent
+                isCurrent -> AptvAccentText
                 isPast -> tvPalette.accentBase
                 else -> oc.textSecondary
             }
             Surface(
-                color = badgeColor.copy(alpha = 0.15f),
+                color = (if (isCurrent) AptvAccent else badgeColor).copy(alpha = 0.15f),
                 shape = RoundedCornerShape(4.dp),
                 modifier = Modifier.padding(start = 6.dp)
             ) {
@@ -1051,9 +1061,42 @@ internal fun PortraitRecentLocalFiles(viewModel: AppViewModel) {
     }
 }
 
+/**
+ * 播放信息「关键指标块」：大字数值在上、小字标签在下（对齐 TiviMini 播放信息面板的层级）。
+ * 配色只走现有 token：数值 accentText、标签 textSecondary、底 surfaceVariant、描边 borderSubtle。
+ */
+@Composable
+private fun InfoStatChip(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .border(1.dp, tvPalette.borderSubtle, RoundedCornerShape(12.dp))
+            .padding(vertical = 10.dp, horizontal = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Text(
+            text = value,
+            color = tvPalette.accentText,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = label,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 11.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
 // -----------------------------------------------------------------
 // 播放信息面板（竖屏播放页 Tab）
-// 布局：顶部频谱（免开可视化面板即看）+ 两列紧凑信息网格，
+// 布局：顶部四块关键指标（分辨率+扫描/编码/码率/解码）+ 两列紧凑信息网格，
 // 全部字段中文翻译，面板高度内完整展示无需滑动
 @Composable
 internal fun PortraitPlayerInfoPanel(
@@ -1075,25 +1118,18 @@ internal fun PortraitPlayerInfoPanel(
     }
     val mediaInfo = remember(tick) { player.getMediaInfo() }
 
-    // 频谱：信息 Tab 打开期间持续采样（离开 Tab 停止）。
-    // RECORD_AUDIO 是系统 Visualizer 的硬性要求：未授权时主动弹申请，
-    // 此前仅「已授权才启动」导致从未授权的设备频谱恒为零（一排不动的矮条）
-    val spectrum by viewModel.audioSpectrum.collectAsState()
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val spectrumPermLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) viewModel.startSpectrumSampling()
-        else viewModel.setAudioSpectrumError("未授予麦克风权限\n系统 Visualizer 接口需要该权限才能获取真实频谱")
+    // 关键指标块（替代原频谱）：分辨率+扫描 / 编码 / 码率 / 解码方式。
+    // 全部取自 libmpv 属性，取不到的一律显示「—」，不做推断或写死。
+    // video-frame-info/interlaced 是 flag 类型，用字符串读回（"yes"/"no"）最稳。
+    val videoInterlaced: Boolean? = remember(tick) {
+        when (player.getPropertyString("video-frame-info/interlaced")) {
+            "yes", "1", "true" -> true
+            "no", "0", "false" -> false
+            else -> null
+        }
     }
-    DisposableEffect(Unit) {
-        val granted = androidx.core.content.ContextCompat.checkSelfPermission(
-            context, android.Manifest.permission.RECORD_AUDIO
-        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-        if (granted) viewModel.startSpectrumSampling()
-        else spectrumPermLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
-        onDispose { viewModel.stopSpectrumSampling() }
-    }
+    // video-bitrate 是 int64 属性，直接按 int 读；与分屏徽标同一数据源，避免显示不一致
+    val liveBitrate: Int? = remember(tick) { player.getPropertyInt("video-bitrate") }
 
     // ---- 值格式化 ----
     val fmtBitrate: (String?) -> String? = { v ->
@@ -1186,6 +1222,33 @@ internal fun PortraitPlayerInfoPanel(
         }
     }
 
+    // ---- 四块关键指标取值（取不到一律「—」）----
+    val resValue = if (videoWidth > 0 && videoHeight > 0) {
+        // 短边即扫描行数（1920×1080 → 1080）；隔行/逐行来自 video-frame-info/interlaced
+        val lines = minOf(videoWidth, videoHeight)
+        when (videoInterlaced) {
+            true -> "${lines}i"
+            false -> "${lines}p"
+            null -> "$lines"
+        }
+    } else "—"
+    val codecValue = when (val c = v("videoCodec")?.lowercase()) {
+        null -> "—"
+        "h264", "avc1" -> "H.264"
+        "hevc", "h265" -> "H.265"
+        "mpeg2video" -> "MPEG-2"
+        "mpeg4" -> "MPEG-4"
+        else -> c.uppercase()
+    }
+    val bitrateValue = (liveBitrate?.takeIf { it > 0 }?.toLong()
+        ?: v("bitrate")?.toLongOrNull()?.takeIf { it > 0 })?.let {
+        if (it >= 1_000_000) String.format("%.1f Mbps", it / 1e6) else "${it / 1000} kbps"
+    } ?: "—"
+    val decodeValue = mediaInfo["hwdec"]
+        ?.takeIf { it.isNotEmpty() && it != "null" }
+        ?.let { if (it == "no") "软解" else "硬解" }
+        ?: "—"
+
     AptvGroupCard(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
@@ -1193,40 +1256,16 @@ internal fun PortraitPlayerInfoPanel(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            // 顶部频谱区（玻璃卡内嵌：经典频谱仪样式）；
-            // 真频谱不可用（如拒绝麦克风权限）时显示原因，不画误导性的静态条
-            val spectrumError by viewModel.audioSpectrumError.collectAsState()
-            if (spectrumError.isNotEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(96.dp)
-                        .background(
-                            MaterialTheme.colorScheme.surface,
-                            shape = RoundedCornerShape(10.dp)
-                        )
-                        .clip(RoundedCornerShape(10.dp)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = spectrumError,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 12.sp,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 12.dp)
-                    )
-                }
-            } else SpectrumCanvas(
-                spectrum = spectrum,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(96.dp)
-                    .background(
-                        MaterialTheme.colorScheme.surface,
-                        shape = RoundedCornerShape(10.dp)
-                    )
-                    .clip(RoundedCornerShape(10.dp))
-            )
+            // 顶部四块关键指标（原频谱位置）：大字数值 + 小字标签
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                InfoStatChip("画面", resValue, Modifier.weight(1f))
+                InfoStatChip("编码", codecValue, Modifier.weight(1f))
+                InfoStatChip("码率", bitrateValue, Modifier.weight(1f))
+                InfoStatChip("解码", decodeValue, Modifier.weight(1f))
+            }
 
             Text(
                 text = stringResource(R.string.info_playback),

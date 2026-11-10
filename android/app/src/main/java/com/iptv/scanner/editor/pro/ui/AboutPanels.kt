@@ -244,7 +244,7 @@ fun UpdateDialog(viewModel: AppViewModel) {
     val isDownloading = apkState is ApkDownloadState.Downloading
     val progress = (apkState as? ApkDownloadState.Downloading)?.progress ?: 0
     val isAptv = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
-    val accentColor = if (isAptv) AptvAccent else MaterialTheme.colorScheme.primary
+    val accentColor = if (isAptv) tvPalette.accentText else MaterialTheme.colorScheme.primary
     val isTv = viewModel.uiMode.collectAsState().value.isTV
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -275,7 +275,7 @@ fun UpdateDialog(viewModel: AppViewModel) {
             Column {
                 Text(
                     "新版本 v${info.latestVersion} 已发布",
-                    color = if (isAptv) AptvAccent else MaterialTheme.colorScheme.tertiary,
+                    color = if (isAptv) tvPalette.accentText else MaterialTheme.colorScheme.tertiary,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Medium
                 )

@@ -251,12 +251,22 @@ internal fun PortraitToolsScreen(
     var showEpgAddForm by remember { mutableStateOf(false) }
     var newEpgUrl by remember { mutableStateOf("") }
     var newEpgName by remember { mutableStateOf("") }
+    val toolsScrollState = rememberScrollState()
+
+    // EPG 表单展开后「添加」按钮会落到悬浮底部 Tab 栏下面，不滑动点不到：
+    // 展开时等布局完成再把页面滚到底（末尾已有 130dp 占位，按钮会移到 Tab 栏上方）
+    LaunchedEffect(showEpgAddForm) {
+        if (showEpgAddForm) {
+            kotlinx.coroutines.delay(100)
+            toolsScrollState.animateScrollTo(toolsScrollState.maxValue)
+        }
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             // 不铺不透明底：透出内容区的环境画布（深/浅渐变+光斑）
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(toolsScrollState)
     ) {
         // 头部：编辑（左） + 刷新/添加（右）
         Row(
@@ -269,7 +279,7 @@ internal fun PortraitToolsScreen(
             AptvGlassChip(cornerRadius = 16.dp) {
                 Text(
                     text = if (editMode) "完成" else stringResource(R.string.settings_edit),
-                    color = AptvAccent,
+                    color = tvPalette.accentText,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier
@@ -294,7 +304,7 @@ internal fun PortraitToolsScreen(
                     Icon(
                         Icons.Default.Refresh,
                         contentDescription = "刷新源与频道",
-                        tint = AptvAccent,
+                        tint = tvPalette.accentGraphic,
                         modifier = Modifier.size(18.dp)
                     )
                 }
@@ -330,10 +340,10 @@ internal fun PortraitToolsScreen(
                     modifier = Modifier
                         .size(36.dp)
                         .clip(RoundedCornerShape(9.dp))
-                        .background(AptvAccent.copy(alpha = 0.90f)),
+                        .background(tvPalette.accentFill),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Default.Folder, contentDescription = null, tint = Color.White, modifier = Modifier.size(19.dp))
+                    Icon(Icons.Default.Folder, contentDescription = null, tint = tvPalette.accentOn, modifier = Modifier.size(19.dp))
                 }
                 Spacer(modifier = Modifier.width(14.dp))
                 Column(modifier = Modifier.weight(1f)) {
@@ -434,13 +444,13 @@ internal fun PortraitToolsScreen(
                 Icon(
                     Icons.Default.Add,
                     contentDescription = null,
-                    tint = AptvAccent,
+                    tint = tvPalette.accentGraphic,
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     "添加订阅源",
-                    color = AptvAccent,
+                    color = tvPalette.accentText,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium
                 )
@@ -456,7 +466,7 @@ internal fun PortraitToolsScreen(
                         unfocusedContainerColor = Color.Transparent,
                         focusedIndicatorColor = Color.Transparent,
                         unfocusedIndicatorColor = Color.Transparent,
-                        cursorColor = AptvAccent
+                        cursorColor = tvPalette.accentText
                     ),
                     textStyle = androidx.compose.ui.text.TextStyle(
                         color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp
@@ -473,7 +483,7 @@ internal fun PortraitToolsScreen(
                         unfocusedContainerColor = Color.Transparent,
                         focusedIndicatorColor = Color.Transparent,
                         unfocusedIndicatorColor = Color.Transparent,
-                        cursorColor = AptvAccent
+                        cursorColor = tvPalette.accentText
                     ),
                     textStyle = androidx.compose.ui.text.TextStyle(
                         color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp
@@ -486,7 +496,7 @@ internal fun PortraitToolsScreen(
                 ) {
                     Text(
                         text = stringResource(R.string.aptv_action_add),
-                        color = AptvAccent,
+                        color = tvPalette.accentText,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Medium,
                         modifier = Modifier
@@ -560,13 +570,13 @@ internal fun PortraitToolsScreen(
                 Icon(
                     Icons.Default.Add,
                     contentDescription = null,
-                    tint = AptvAccent,
+                    tint = tvPalette.accentGraphic,
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     stringResource(R.string.aptv_add_epg),
-                    color = AptvAccent,
+                    color = tvPalette.accentText,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium
                 )
@@ -582,7 +592,7 @@ internal fun PortraitToolsScreen(
                         unfocusedContainerColor = Color.Transparent,
                         focusedIndicatorColor = Color.Transparent,
                         unfocusedIndicatorColor = Color.Transparent,
-                        cursorColor = AptvAccent
+                        cursorColor = tvPalette.accentText
                     ),
                     textStyle = androidx.compose.ui.text.TextStyle(
                         color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp
@@ -599,7 +609,7 @@ internal fun PortraitToolsScreen(
                         unfocusedContainerColor = Color.Transparent,
                         focusedIndicatorColor = Color.Transparent,
                         unfocusedIndicatorColor = Color.Transparent,
-                        cursorColor = AptvAccent
+                        cursorColor = tvPalette.accentText
                     ),
                     textStyle = androidx.compose.ui.text.TextStyle(
                         color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp
@@ -612,7 +622,7 @@ internal fun PortraitToolsScreen(
                 ) {
                     Text(
                         text = stringResource(R.string.aptv_action_add),
-                        color = AptvAccent,
+                        color = tvPalette.accentText,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Medium,
                         modifier = Modifier

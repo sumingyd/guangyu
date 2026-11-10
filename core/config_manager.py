@@ -102,6 +102,22 @@ class ConfigManager(Singleton):
         """加载语言设置"""
         return self.get_value('Language', 'current_language', 'zh')
 
+    def save_display_settings(self, font_size_tier, ui_scale_percent):
+        """保存 PC 端字号档位与界面缩放档位。
+
+        字号档位与缩放的真源在 ui/typography.py，这里只负责持久化；
+        非法值由 typography 在校验层兜底，不会把坏配置写坏界面。
+        """
+        self.set_value('UI', 'font_size_tier', str(font_size_tier))
+        self.set_value('UI', 'ui_scale_percent', str(int(ui_scale_percent)))
+        return self.save_config()
+
+    def load_display_settings(self):
+        """加载字号档位与界面缩放，返回 (tier, percent)。"""
+        tier = self.get_value('UI', 'font_size_tier', 'standard') or 'standard'
+        percent = self.get_value('UI', 'ui_scale_percent', '100') or '100'
+        return tier, percent
+
     def save_scan_retry_settings(self, enable_retry):
         return self._network_settings_store.save_scan_retry_settings(enable_retry)
 

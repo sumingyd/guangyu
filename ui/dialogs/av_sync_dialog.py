@@ -63,7 +63,8 @@ class AVSyncWaveWidget(QWidget):
             # 中线标签
             painter.setPen(QPen(text_color))
             font = QFont()
-            font.setPointSize(8)
+            from ui.typography import scaled_pt
+            font.setPointSizeF(scaled_pt(8))
             painter.setFont(font)
             painter.drawText(4, int(cy) - 2, '0')
 
@@ -216,7 +217,8 @@ class AVSyncDialog(FloatingDialog):
         self._avdiff_label = QLabel('+0.000s')
         f = self._avdiff_label.font()
         f.setBold(True)
-        f.setPointSize(11)
+        from ui.typography import scaled_pt
+        f.setPointSizeF(scaled_pt(11))
         self._avdiff_label.setFont(f)
         avdiff_row.addWidget(self._avdiff_label)
         avdiff_row.addStretch()

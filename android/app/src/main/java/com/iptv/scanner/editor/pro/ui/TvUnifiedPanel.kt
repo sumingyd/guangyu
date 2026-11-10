@@ -92,13 +92,15 @@ import com.iptv.scanner.editor.pro.ui.theme.isLiquidBlurSupported
 import java.util.Locale
 
 // 侧边栏风格配色（主色统一为竖屏 APTV 橙红 AptvAccent）
-private val ACCENT_CYAN = tvPalette.info
-private val ICON_BG = Color(0x32FFFFFF)
+// 注意：顶层 val 会在类初始化时求值一次，若捕获 tvPalette 会永久停留在当时的主题配色，
+// 导致浅色主题下仍是深色 token，因此改为随重组求值的 Composable getter。
+private val ACCENT_CYAN: Color @Composable get() = tvPalette.info
+private val ICON_BG: Color @Composable get() = tvPalette.borderSubtle
 
 /** 面板可读性底色：玻璃霜层上垫深色底，避免亮色视频背景下文字看不清 */
 // 玻璃面板不再叠加实底 scrim：深色可读性由玻璃材质 overlayDark 暗玻璃霜层提供
 /** 栏间分隔条颜色 */
-private val TV_DIVIDER = Color(0x24FFFFFF)
+private val TV_DIVIDER: Color @Composable get() = tvPalette.borderSubtle
 
 /**
  * TV 端统一面板：五列布局（控制层 + 分组 + 频道列表 + 节目单 + 节目描述）。
@@ -575,7 +577,8 @@ private fun SourceSwitchColumn(
                     Spacer(modifier = Modifier.width(5.dp))
                     Text(
                         text = sourceName,
-                        color = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurface,
+                        color = if (isSelected) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 11.sp,
                         fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
                         maxLines = 1,
@@ -716,13 +719,15 @@ private fun QuickMenuIcon(
         Icon(
             imageVector = icon,
             contentDescription = label,
-            tint = if (isSelected) Color.White else Color(0xCCFFFFFF),
+            tint = if (isSelected) MaterialTheme.colorScheme.onSurface
+            else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(24.dp)
         )
         Spacer(modifier = Modifier.height(3.dp))
         Text(
             text = label,
-            color = if (isSelected) Color.White else Color(0x99FFFFFF),
+            color = if (isSelected) MaterialTheme.colorScheme.onSurface
+            else MaterialTheme.colorScheme.onSurfaceVariant,
             fontSize = 9.sp,
             lineHeight = 10.sp
         )
@@ -756,7 +761,7 @@ private fun GroupItemRow(
         Spacer(modifier = Modifier.width(8.dp))
         Text(
             text = label,
-            color = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+            color = MaterialTheme.colorScheme.onSurface,
             fontSize = 13.sp,
             fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
             maxLines = 1,
@@ -978,12 +983,13 @@ private fun TvChannelItem(
         // 侧边栏风格：序号显示（圆角矩形背景）
         if (!hideChannelNum) {
             Surface(
-                color = if (isPlaying) Color.White.copy(alpha = 0.2f) else ICON_BG,
+                color = if (isPlaying) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f) else ICON_BG,
                 shape = RoundedCornerShape(4.dp)
             ) {
                 Text(
                     text = "${channelIdx + 1}",
-                    color = if (isPlaying) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (isPlaying) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 12.sp,
                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                 )
@@ -1005,7 +1011,7 @@ private fun TvChannelItem(
             } else {
                 Text(
                     text = channel.name.take(1).ifEmpty { "·" },
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -1016,7 +1022,7 @@ private fun TvChannelItem(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = channel.name,
-                color = if (isPlaying) Color.White else MaterialTheme.colorScheme.onSurface,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 17.sp,
                 fontWeight = if (isPlaying) FontWeight.Medium else FontWeight.Normal,
                 maxLines = 1,
@@ -1025,7 +1031,7 @@ private fun TvChannelItem(
             // 侧边栏风格：当前节目名，EPG为空时显示"精彩节目"
             Text(
                 text = currentEpgTitle.ifEmpty { "精彩节目" },
-                color = Color.White.copy(alpha = 0.6f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 11.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -1168,7 +1174,7 @@ private fun MenuColumn(
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
             )
-            Divider(color = Color(0x20FFFFFF))
+            Divider(color = tvPalette.borderSubtle)
 
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -1215,7 +1221,7 @@ private fun TvMenuItemRow(item: TvMenuItem) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = item.title,
-                color = if (item.highlight) AptvAccent else MaterialTheme.colorScheme.onSurface,
+                color = if (item.highlight) AptvAccentText else MaterialTheme.colorScheme.onSurface,
                 fontSize = 14.sp,
                 fontWeight = if (item.highlight) FontWeight.Medium else FontWeight.Normal,
                 maxLines = 1,
@@ -1385,7 +1391,7 @@ private fun TvEpgItem(
                 text = program.title,
                 color = when {
                     isPast -> MaterialTheme.colorScheme.onSurfaceVariant
-                    isCurrent -> AptvAccent
+                    isCurrent -> AptvAccentText
                     else -> MaterialTheme.colorScheme.onSurface
                 },
                 fontSize = 13.sp,
@@ -1406,10 +1412,10 @@ private fun TvEpgItem(
         } else {
             if (hasReminder) {
                 Surface(color = AptvAccent.copy(alpha = 0.2f), shape = RoundedCornerShape(3.dp)) {
-                    Text("已预约", color = AptvAccent, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                    Text("已预约", color = AptvAccentText, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
                 }
             } else {
-                Surface(color = Color(0x20FFFFFF), shape = RoundedCornerShape(3.dp)) {
+                Surface(color = tvPalette.borderSubtle, shape = RoundedCornerShape(3.dp)) {
                     Text("预约", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
                 }
             }

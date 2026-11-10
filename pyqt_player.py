@@ -183,7 +183,8 @@ class VideoOverlayBadge(QWidget):
         self._icon_pixmap = None
 
     def _update_size(self):
-        self._font.setPixelSize(13)
+        from ui.typography import scale_px
+        self._font.setPixelSize(max(9, scale_px(13, text=True)))
         fm2 = QFontMetrics(self._font)
         text_w = fm2.horizontalAdvance(self._label_text)
         icon_w = 18 if self._icon_pixmap else 0
@@ -495,6 +496,13 @@ class IPTVPlayer(
         from utils.general_utils import suppress_urllib3_warnings
         suppress_urllib3_warnings()
         logger.debug("开始初始化 IPTVPlayer")
+        # 必须在任何 setStyleSheet 之前安装：QSS 的字号/间距统一由
+        # ui/typography.py 换算，避免各处散落的 font-size 各自为政。
+        try:
+            from ui.typography import install_qss_scaler
+            install_qss_scaler()
+        except Exception:
+            pass
         super().__init__(parent=parent, flags=flags)
 
         self._init_config()
@@ -587,6 +595,36 @@ class IPTVPlayer(
         self.channel_list_updated.connect(self._update_channel_list_ui)
         self.epg_list_updated.connect(self._populate_epg_list)
         self.status_message.connect(self.status_bar_show_message)
+
+    def refresh_typography(self):
+        """字号档位 / 界面缩放变更后刷新样式表管不到的固定尺寸。
+
+        QSS 部分由 ui/typography 的统一拦截器重放；这里只处理控制栏按钮、
+        频道项行高等 setFixedSize / setSizeHint 写死的尺寸。
+        """
+        refresh_panel = getattr(self, 'refresh_control_panel_metrics', None)
+        if callable(refresh_panel):
+            try:
+                refresh_panel()
+            except Exception as e:
+                logger.debug(f"刷新控制栏尺寸失败: {e}")
+        refresh_tabs = getattr(self, 'refresh_playlist_tab_metrics', None)
+        if callable(refresh_tabs):
+            try:
+                refresh_tabs()
+            except Exception as e:
+                logger.debug(f"刷新频道页签尺寸失败: {e}")
+        channel_ctrl = getattr(self, 'channel_ctrl', None)
+        if channel_ctrl is not None:
+            for attr in ('sub_channel_list', 'local_channel_list', 'fav_channel_list', 'history_channel_list'):
+                list_widget = getattr(self, attr, None)
+                if list_widget is None:
+                    continue
+                try:
+                    channel_ctrl.refresh_item_metrics(list_widget)
+                except Exception as e:
+                    logger.debug(f"刷新频道列表尺寸失败: {e}")
+        self.updateGeometry()
 
     def _init_controllers(self):
         """初始化所有业务控制器"""

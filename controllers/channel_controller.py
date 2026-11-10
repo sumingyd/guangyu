@@ -150,9 +150,9 @@ class ChannelController:
 
         from ui.styles import AppStyles
         from ui.elided_label import ElidedLabel
-        from utils.platform_utils import get_ui_scale
+        from utils.platform_utils import get_effective_ui_scale
         name_style = AppStyles.player_channel_list_name_style()
-        ui_scale = get_ui_scale()
+        ui_scale = get_effective_ui_scale()
 
         # 同名多路流（同一频道的不同分辨率/码流）在列表名称后追加分辨率后缀，
         # 让用户能区分两条同名频道；不影响频道数据本身
@@ -278,6 +278,31 @@ class ChannelController:
         except TypeError:
             pass
         safe_single_shot(50, self.window, lambda: self.load_visible_icons(list_widget, channels))
+
+    def refresh_item_metrics(self, list_widget):
+        """字号/缩放变更后更新已建频道项的行高与 logo 尺寸。
+
+        频道项是创建时写死 sizeHint 的，QSS 缩放管不到行高；这里按当前
+        单一真源重算，避免大字号下名称被裁或行间留白过大。
+        """
+        if list_widget is None:
+            return
+        from utils.platform_utils import get_effective_ui_scale
+        scale = get_effective_ui_scale()
+        is_grid = list_widget.viewMode() == QListWidget.ViewMode.IconMode
+        for index in range(list_widget.count()):
+            item = list_widget.item(index)
+            if item is None:
+                continue
+            if is_grid:
+                item.setSizeHint(QSize(int(round(220 * scale)), int(round(150 * scale))))
+                continue
+            item.setSizeHint(QSize(0, int(round(46 * scale))))
+            item_widget = list_widget.itemWidget(item)
+            if item_widget is None:
+                continue
+            for logo in item_widget.findChildren(QtWidgets.QLabel, "channel_logo_label"):
+                logo.setFixedSize(int(round(44 * scale)), int(round(32 * scale)))
 
     def load_visible_icons(self, list_widget, channels):
         w = self.window

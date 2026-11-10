@@ -345,10 +345,10 @@ fun PortraitEpgBottomSheet(viewModel: AppViewModel) {
                                     )
                             )
                         }
-                        // 磨砂底上的可读性提升：次要文字提亮、primary 用主题红
+                        // 磨砂底上的可读性提升：次要文字提亮、primary 用「强调色当文字」token
                         val sheetScheme = MaterialTheme.colorScheme.copy(
-                            primary = AptvAccent,
-                            onPrimary = Color.White,
+                            primary = tvPalette.accentText,
+                            onPrimary = tvPalette.accentOn,
                             onSurfaceVariant = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.78f)
                         )
                         MaterialTheme(colorScheme = sheetScheme) {

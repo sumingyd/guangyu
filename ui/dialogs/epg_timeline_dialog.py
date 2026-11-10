@@ -141,6 +141,20 @@ class EpgTimelineDialog(FloatingDialog):
         self.channel_header.update()
         self.time_header.update()
 
+    def refresh_typography(self):
+        """字号/缩放变更后重算 EPG 列宽、行高与表头高。
+
+        左右三个部件共用 epg_metrics() 的同一组数值，必须一起刷新，
+        否则频道列与节目区会逐行错位。
+        """
+        self.timeline_widget.apply_metrics()
+        self.channel_header.apply_metrics()
+        self.time_header.apply_metrics()
+        metrics = epg_metrics()
+        self.time_header_scroll.setFixedHeight(metrics['header_height'])
+        self.time_header.setFixedHeight(metrics['header_height'])
+        self.reapply_styles()
+
     def _update_date_edit_icon(self):
         try:
             icon_color = AppStyles.get_color('window_text')

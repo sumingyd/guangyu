@@ -229,6 +229,26 @@ class SettingsFileOperations:
 
         tab_widget.addTab(subscription_tab, tr("subscription_sources_tab", "订阅源管理"))
 
+        # ===== Tab 3：外观（字号档位 + 界面缩放）=====
+        # 单独成页：播放设置页已承载协议/关闭行为/屏保，外观不属于播放语义，
+        # 且用户反馈「字小」时第一眼就能在 Tab 上看到「外观」。
+        appearance_tab = QWidget()
+        appearance_tab_layout = QVBoxLayout(appearance_tab)
+        appearance_tab_layout.setContentsMargins(0, 0, 0, 0)
+
+        appearance_content = QWidget()
+        appearance_content_layout = QVBoxLayout(appearance_content)
+        appearance_content_layout.setContentsMargins(0, 0, 0, 0)
+        self._build_appearance_section(tr, appearance_content_layout)
+
+        appearance_scroll = QScrollArea()
+        appearance_scroll.setWidgetResizable(True)
+        appearance_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        appearance_scroll.setWidget(appearance_content)
+        appearance_tab_layout.addWidget(appearance_scroll)
+
+        tab_widget.addTab(appearance_tab, tr("appearance_settings_tab", "外观"))
+
         main_layout.addWidget(tab_widget, 1)
 
         self._connect_subscription_signals(playlist_section, epg_section)
@@ -237,7 +257,10 @@ class SettingsFileOperations:
         save_button = QPushButton(tr("save_button", "Save"))
         cancel_button = QPushButton(tr("cancel_button", "Cancel"))
         save_button.clicked.connect(lambda: self._save_and_close_settings(dialog))
-        cancel_button.clicked.connect(dialog.close)
+        # 外观是即时预览：取消时回到打开对话框前的档位，避免"改完未保存却已生效"
+        from ui import typography
+        initial_display = typography.current_display()
+        cancel_button.clicked.connect(lambda: self._cancel_settings(dialog, initial_display))
         button_layout.addStretch()
         button_layout.addWidget(save_button)
         button_layout.addWidget(cancel_button)
@@ -255,7 +278,17 @@ class SettingsFileOperations:
         # _fix_first_paint 负责（ensurePolished + invalidate/activate + resize 抖动）。
         dialog.layout().activate()
         dialog.adjustSize()
-        dialog.resize(720, 500)
+        # 大字号下 sizeHint 可能超过基准宽度：取两者较大值并限制在屏幕内，
+        # 避免订阅源表格/外观说明被横向裁切。
+        hint = dialog.sizeHint()
+        width = max(typography.scale_px(720), hint.width())
+        height = max(typography.scale_px(500), hint.height())
+        screen = dialog.screen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            width = min(width, int(available.width() * 0.92))
+            height = min(height, int(available.height() * 0.92))
+        dialog.resize(width, height)
 
         if focus == 'screensaver':
             tab_widget.setCurrentIndex(0)
@@ -289,10 +322,84 @@ class SettingsFileOperations:
         except TypeError:
             dialog = FloatingDialog(self.window)
         dialog.setWindowTitle(self._tr("subscription_settings_title", "Subscription Settings"))
-        dialog.setMinimumSize(680, 440)
-        dialog.resize(720, 500)
+        from ui import typography
+        min_w, min_h = typography.scale_size(680, 440)
+        screen = dialog.screen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            # 小屏幕 + 150% 时不能把对话框撑出屏幕
+            min_w = min(min_w, int(available.width() * 0.9))
+            min_h = min(min_h, int(available.height() * 0.9))
+        dialog.setMinimumSize(min_w, min_h)
+        dialog.resize(*typography.scale_size(720, 500))
         dialog.setStyleSheet(AppStyles.dialog_style())
         return dialog
+
+    def _build_appearance_section(self, tr, parent_layout):
+        """构建「外观」分组：字号档位 + 界面缩放。
+
+        两者共用 ui/typography.py 这一份真源：
+        * 界面缩放整体等比（文字/图标/间距/行高）；
+        * 字号档位只在缩放基础上再偏文字。
+        改动即时生效并写入配置，取消时由 _cancel_settings 回滚。
+        """
+        from ui import typography
+
+        group = QGroupBox(tr("appearance_settings", "外观"))
+        layout = QFormLayout(group)
+
+        tier_combo = QComboBox()
+        tier_combo.setObjectName("font_size_tier_combo")
+        for key in ('small', 'standard', 'large', 'xlarge'):
+            tier_info = typography.FONT_TIERS[key]
+            text = tr(f"font_size_{key}", f"{tier_info['zh']}（{tier_info['pt']:g}pt）")
+            tier_combo.addItem(text, key)
+
+        scale_combo = QComboBox()
+        scale_combo.setObjectName("ui_scale_combo")
+        for percent in typography.UI_SCALE_OPTIONS:
+            scale_combo.addItem(f"{percent}%", percent)
+
+        tier, percent = typography.current_display()
+        tier_combo.setCurrentIndex(max(0, tier_combo.findData(tier)))
+        scale_combo.setCurrentIndex(max(0, scale_combo.findData(percent)))
+
+        layout.addRow(QLabel(tr("font_size_label", "字体大小:")), tier_combo)
+        layout.addRow(QLabel(tr("ui_scale_label", "界面缩放:")), scale_combo)
+
+        hint = QLabel(tr(
+            "appearance_hint",
+            "界面缩放会等比放大文字、图标与间距；字体大小只调整文字，"
+            "适合只想看清文字、不想减少可视内容的情况。修改后立即生效。"
+        ))
+        hint.setWordWrap(True)
+        hint.setStyleSheet(AppStyles.hint_label_style())
+        layout.addRow(hint)
+
+        def _apply(*_args):
+            self._apply_display_settings(tier_combo.currentData(), scale_combo.currentData())
+
+        tier_combo.currentIndexChanged.connect(_apply)
+        scale_combo.currentIndexChanged.connect(_apply)
+
+        parent_layout.addWidget(group)
+        parent_layout.addStretch()
+        return tier_combo, scale_combo
+
+    def _apply_display_settings(self, tier, percent):
+        """把档位写入单一真源并触发全局重刷（QSS + 固定尺寸）。"""
+        try:
+            get_theme_manager().set_display_settings(tier, percent)
+        except Exception as e:
+            logger.error(f"应用字号/缩放设置失败: {e}")
+
+    def _cancel_settings(self, dialog, initial_display):
+        """取消外观预览：恢复到打开对话框前的档位并关闭。"""
+        try:
+            get_theme_manager().set_display_settings(*initial_display)
+        except Exception as e:
+            logger.debug(f"回滚字号/缩放设置失败: {e}")
+        dialog.close()
 
     def _build_close_behavior_section(self, tr):
         group = QGroupBox(tr("close_behavior_settings", "关闭行为"))

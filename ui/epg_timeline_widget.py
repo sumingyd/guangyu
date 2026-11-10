@@ -24,17 +24,28 @@ def _scaled_font(point_delta: int = 0) -> QFont:
 
 
 def epg_metrics() -> Dict[str, int]:
-    """EPG 尺寸基线：时间刻度宽 / 行高 / 表头高 / 左栏宽，统一按逻辑屏宽分级。"""
+    """EPG 尺寸基线：时间刻度宽 / 行高 / 表头高 / 左栏宽。
+
+    同时跟随逻辑屏宽与用户界面缩放档位（非 QSS 尺寸，无法由样式表换算）。
+    文字则由 ``_scaled_font`` 基于应用字体派生，应用字体已包含字号档位与缩
+    放，因此这里只算布局，不重复放大文字。
+    """
     try:
-        from utils.platform_utils import get_ui_scale
-        scale = get_ui_scale()
+        from utils.platform_utils import get_effective_ui_scale
+        scale = get_effective_ui_scale()
     except Exception:
         scale = 1.0
+    try:
+        from ui.typography import text_factor
+        text_scale = max(1.0, text_factor())
+    except Exception:
+        text_scale = 1.0
     return {
         'hour_width': max(96, int(round(120 * scale))),
         'row_height': max(36, int(round(44 * scale))),
         'header_height': max(28, int(round(32 * scale))),
-        'left_margin': max(96, int(round(120 * scale))),
+        # 左栏承载「序号 + 频道名」，需随字号一起放宽，否则最大档下频道名会被省略
+        'left_margin': max(96, int(round(120 * scale * text_scale))),
     }
 
 
@@ -77,6 +88,15 @@ class EpgTimelineWidget(QWidget):
         self.setAutoFillBackground(False)
         self._cached_rects: List[List[Dict[str, Any]]] = []
         self._cache_valid = False
+
+    def apply_metrics(self):
+        """字号/缩放变更后重算刻度与行高，并用现有数据重绘。"""
+        metrics = epg_metrics()
+        self.HOUR_WIDTH = metrics['hour_width']
+        self.ROW_HEIGHT = metrics['row_height']
+        self.HEADER_HEIGHT = metrics['header_height']
+        self.LEFT_MARGIN = metrics['left_margin']
+        self.set_data(self._channels, self._selected_date)
 
     def set_data(self, channels: List[Dict[str, Any]], selected_date=None):
         self._channels = channels
@@ -363,6 +383,15 @@ class EpgChannelHeaderWidget(QWidget):
         self._logo_pixmaps: Dict[str, Any] = {}
         self.setAutoFillBackground(False)
 
+    def apply_metrics(self):
+        """与节目区共用基线：重算行高与台号/台标尺寸并重绘。"""
+        metrics = epg_metrics()
+        self.ROW_HEIGHT = metrics['row_height']
+        self.NUM_WIDTH = max(22, int(round(26 * metrics['row_height'] / 44)))
+        self.LOGO_WIDTH = max(28, int(round(34 * metrics['row_height'] / 44)))
+        self.LOGO_HEIGHT = max(20, int(round(26 * metrics['row_height'] / 44)))
+        self.set_data(self._channels)
+
     def set_data(self, channels: List[Dict[str, Any]]):
         self._channels = channels
         n = len(self._channels)
@@ -510,6 +539,13 @@ class EpgTimeHeaderWidget(QWidget):
         self._start_hour = 0
         self._hours = 24
         self.setAutoFillBackground(False)
+
+    def apply_metrics(self):
+        """字号/缩放变更后重算时间刻度宽与表头高。"""
+        metrics = epg_metrics()
+        self.HOUR_WIDTH = metrics['hour_width']
+        self.HEADER_HEIGHT = metrics['header_height']
+        self.set_start_hour(self._start_hour)
 
     def set_start_hour(self, start_hour):
         self._start_hour = start_hour
