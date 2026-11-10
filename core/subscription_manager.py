@@ -12,6 +12,10 @@ from utils.singleton import Singleton
 EPG_MAX_BYTES = 256 * 1024 * 1024
 EPG_MAX_MB = EPG_MAX_BYTES // (1024 * 1024)
 
+# 同一 EPG URL 下载结果的复用窗口（秒）。重载风暴期间到达的重复请求
+# 直接复用刚完成的结果，避免同一个大文件被并行/连续下载多次。
+EPG_DOWNLOAD_REUSE_SECONDS = 60
+
 
 class SubscriptionManager(Singleton):
 
@@ -27,6 +31,11 @@ class SubscriptionManager(Singleton):
         # 最近一次 EPG 加载失败的可读原因（成功时为空串），供上层提示用户
         self._last_epg_error = ''
         self._update_callbacks = []
+        # 全量 EPG 加载单飞锁：同一时刻只允许一个 load_all_epg_data 在跑
+        self._epg_load_lock = threading.Lock()
+        # 同一 URL 的下载单飞/结果复用表：{url: {'lock': Lock, 'ts': float, 'data': dict|None}}
+        self._epg_download_entries = {}
+        self._epg_download_guard = threading.Lock()
         self._initialized = True
 
     def _get_cache_dir(self) -> str:
@@ -242,6 +251,22 @@ class SubscriptionManager(Singleton):
         self._config.update_epg_source_last_update(index, timestamp)
     
     def load_all_epg_data(self, status_callback=None) -> bool:
+        """加载所有EPG源的数据（单飞：并发请求合并到正在执行的那一次）
+
+        同一时刻只允许一个全量加载任务；重载风暴期间到达的重复请求直接返回，
+        由正在执行的任务完成结果，避免同一 EPG 文件被并行下载多份。
+        """
+        if not self._epg_load_lock.acquire(blocking=False):
+            logger.info("已有 EPG 全量加载在进行中，本次请求合并等待其完成")
+            if status_callback:
+                status_callback("EPG 正在加载中，已合并本次请求")
+            return True
+        try:
+            return self._load_all_epg_data_inner(status_callback)
+        finally:
+            self._epg_load_lock.release()
+
+    def _load_all_epg_data_inner(self, status_callback=None) -> bool:
         """加载所有EPG源的数据，多源依次替补
 
         同一个频道只使用第一个有该频道数据的EPG源，不合并多个源的数据。
@@ -299,6 +324,7 @@ class SubscriptionManager(Singleton):
         with self._epg_lock:
             self._epg_data = merged_data
             self._last_epg_update = datetime.now()
+        self._clear_epg_matcher_cache()
         
         total_channels = len(merged_data)
         total_programs = sum(len(progs) for progs in merged_data.values())
@@ -352,6 +378,7 @@ class SubscriptionManager(Singleton):
                         new_channels += 1
                 
                 self._last_epg_update = datetime.now()
+            self._clear_epg_matcher_cache()
             
             total_channels = len(self._epg_data)
             total_programs = sum(len(progs) for progs in self._epg_data.values())
@@ -405,6 +432,7 @@ class SubscriptionManager(Singleton):
                             self._epg_data[channel_id] = programs
                             new_channels += 1
                     self._last_epg_update = datetime.now()
+                self._clear_epg_matcher_cache()
 
                 total_channels = len(data)
                 total_programs = sum(len(progs) for progs in data.values())
@@ -435,7 +463,11 @@ class SubscriptionManager(Singleton):
             return False
     
     def _load_single_epg(self, epg_url: str) -> dict:
-        """加载单个EPG源的数据
+        """加载单个EPG源的数据（同一 URL 单飞 + 结果复用）
+
+        - 同一 URL 同时只允许一个下载+解析任务；
+        - 重载期间到达的重复请求等待在途任务结束，并复用其刚完成的结果，
+          避免同一个 8MB EPG 被并行下载、并行解析多份。
 
         失败时把可读原因写入 self._last_epg_error，供上层向用户展示真实原因。
 
@@ -445,6 +477,40 @@ class SubscriptionManager(Singleton):
         Returns:
             EPG数据字典
         """
+        if not epg_url:
+            self._last_epg_error = '未配置EPG地址'
+            return {}
+
+        with self._epg_download_guard:
+            entry = self._epg_download_entries.get(epg_url)
+            if entry is None:
+                entry = {'lock': threading.Lock(), 'ts': 0.0, 'data': None}
+                self._epg_download_entries[epg_url] = entry
+
+        lock = entry['lock']
+        if not lock.acquire(blocking=False):
+            # 已有同 URL 下载在跑：等待其结束并直接复用结果（不再重复下载）
+            logger.info(f"EPG 下载已在进行中，等待复用其结果: {epg_url}")
+            with lock:
+                pass
+            data = entry['data']
+            return dict(data) if data else {}
+
+        try:
+            age = _time.time() - entry['ts']
+            if entry['data'] is not None and age < EPG_DOWNLOAD_REUSE_SECONDS:
+                logger.info(f"复用 {age:.0f}s 内的 EPG 下载结果，跳过重复下载: {epg_url}")
+                return dict(entry['data'])
+            data = self._download_single_epg(epg_url)
+            if data:
+                entry['data'] = data
+                entry['ts'] = _time.time()
+            return data
+        finally:
+            lock.release()
+
+    def _download_single_epg(self, epg_url: str) -> dict:
+        """实际执行单个 EPG 源的下载与解析（调用方需持该 URL 的单飞锁）"""
         if not epg_url:
             self._last_epg_error = '未配置EPG地址'
             return {}
@@ -871,6 +937,15 @@ class SubscriptionManager(Singleton):
         with self._epg_lock:
             return dict(self._epg_channel_names)
 
+    @staticmethod
+    def _clear_epg_matcher_cache() -> None:
+        """EPG 数据变更后清空匹配缓存，避免旧匹配结果在新数据上继续生效"""
+        try:
+            from services.epg_matcher import EpgMatcher
+            EpgMatcher.clear_cache()
+        except Exception:
+            pass
+
     def get_channel_epg(self, channel_name: str, tvg_id: str | None = None,
                         tvg_name: str | None = None, comma_name: str | None = None) -> list:
         """获取频道的EPG节目列表（仅精确匹配）
@@ -1059,6 +1134,7 @@ class SubscriptionManager(Singleton):
                     for channel_id in data.keys():
                         self._epg_channel_names[channel_id] = channel_id
                 self._last_epg_update = datetime.now()
+            self._clear_epg_matcher_cache()
             
             logger.info(f"load_cached_epg_data: 成功加载 {len(self._epg_data)} 个频道")
             return True

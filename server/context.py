@@ -665,6 +665,9 @@ class ServerContext:
         self._source_loading = False
         self._source_load_status: Dict = {'loading': False, 'total': 0, 'loaded': 0, 'channels': 0, 'message': '空闲', 'warning': ''}
         self._source_load_lock = threading.Lock()
+        # EPG 重载单飞：并发请求合并到正在执行的那次，避免同一 EPG 被重复下载
+        self._epg_reload_lock = threading.Lock()
+        self._epg_reloading = False
 
         if self._standalone:
             self._config = ConfigManager()
@@ -700,8 +703,27 @@ class ServerContext:
                     data = json.load(f)
                 channels = data.get('channels', [])
                 if channels:
+                    # 清理历史订阅源残留：缓存里的 source 若不属于任何现存订阅源，
+                    # 说明该订阅源已被删除/替换。继续保留 source 会让客户端把它判为
+                    # 「残留频道」并触发自动重载，而重载也清不掉它 → 启动期自触发无限重载。
+                    # 这些频道本就没有对应订阅源，按本地频道（source 为空）处理。
+                    try:
+                        known_sources = {
+                            s.get('url', '') for s in (self._config.load_playlist_sources() or [])
+                        }
+                    except Exception:
+                        known_sources = set()
+                    stale_count = 0
+                    for c in channels:
+                        src = c.get('source', '')
+                        if src and src not in known_sources:
+                            c['source'] = ''
+                            stale_count += 1
                     with self._channels_lock:
                         self._channels = channels
+                    if stale_count:
+                        logger.info(f"频道缓存中有 {stale_count} 个频道来自已删除的订阅源，已转为本地频道")
+                        self._save_channels_to_cache()
                     # 设置 _last_load_time 防止 reload_if_needed 立即触发同步 HTTP 重载
                     # （后台 _load_channels_from_file 线程会异步更新频道和网络拉取完成后刷新此时间戳）
                     self._last_load_time = time.time()
@@ -1131,13 +1153,23 @@ class ServerContext:
             sm = SubscriptionManager()
             self._epg_parser = sm
             # 先尝试从缓存加载EPG数据（进程重启后立即可用）
-            if sm.load_cached_epg_data():
+            cache_loaded = False
+            try:
+                cache_loaded = sm.load_cached_epg_data()
+            except Exception as cache_err:
+                logger.warning(f"独立模式：加载 EPG 缓存失败: {cache_err}")
+            if cache_loaded:
                 logger.info("独立模式：EPG缓存加载成功")
             # 若已有 EPG 源则后台加载（下载新数据）
             sources = sm.get_epg_sources() if hasattr(sm, 'get_epg_sources') else []
             if sources:
-                logger.info(f"独立模式：检测到 {len(sources)} 个 EPG 源，开始后台加载 EPG 数据")
-                threading.Thread(target=self._load_epg_async, args=(sm,), daemon=True).start()
+                # 缓存已加载且有效（未过期、含今日节目）时不再启动下载，
+                # 否则每次冷启动都会无条件重下 8MB 文件并解析约 100MB XML。
+                if cache_loaded and getattr(sm, '_epg_data', None) and sm.is_epg_valid():
+                    logger.info("独立模式：EPG 缓存有效，跳过启动期下载")
+                else:
+                    logger.info(f"独立模式：检测到 {len(sources)} 个 EPG 源，开始后台加载 EPG 数据")
+                    threading.Thread(target=self._load_epg_async, args=(sm,), daemon=True).start()
             else:
                 logger.info("独立模式：未配置 EPG 源，跳过 EPG 加载")
         except Exception as e:
@@ -1151,10 +1183,27 @@ class ServerContext:
             logger.error(f"独立模式后台加载 EPG 失败: {e}")
 
     def reload_epg(self):
-        """重新加载 EPG 数据（添加 EPG 源后调用）"""
+        """重新加载 EPG 数据（添加 EPG 源后调用）
+
+        单飞：已有重载在跑时直接合并本次请求，避免并发重载把同一 EPG
+        并行下载多份（实测 1 分钟内同一 URL 被并发下载 6 次）。
+        """
         if not self._standalone or not self._epg_parser:
             return False
-        threading.Thread(target=self._load_epg_async, args=(self._epg_parser,), daemon=True).start()
+        with self._epg_reload_lock:
+            if self._epg_reloading:
+                logger.info("EPG 重载已在进行中，合并本次请求")
+                return True
+            self._epg_reloading = True
+
+        def _worker():
+            try:
+                self._load_epg_async(self._epg_parser)
+            finally:
+                with self._epg_reload_lock:
+                    self._epg_reloading = False
+
+        threading.Thread(target=_worker, daemon=True).start()
         return True
 
     def get_scan_dialog(self):

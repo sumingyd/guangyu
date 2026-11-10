@@ -237,41 +237,53 @@ internal fun AppViewModel.toggleSourceEnabled(idx: Int, enabled: Boolean) {
     }
 }
 
-internal fun AppViewModel.reloadSources() {
-    viewModelScope.launch {
+internal fun AppViewModel.reloadSources(auto: Boolean = false) {
+    // 单飞：已有重载在跑时直接合并本次请求，避免并发触发多轮重载（每次都会重下 EPG）
+    if (sourceReloadJob?.isActive == true) {
+        Log.i(AppViewModel.TAG, "reloadSources: already running, request merged (auto=$auto)")
+        return
+    }
+    sourceReloadJob = viewModelScope.launch {
         _sourceLoading.value = true
-        showOsd("正在重载订阅源...")
+        if (!auto) showOsd("正在重载订阅源...")
         val result = withContext(Dispatchers.IO) { repository.reloadSources() }
         result.onSuccess { started ->
             if (started) {
-                showOsd("订阅源重载已启动", "请稍候...")
-                pollSourceStatus()
+                // 自动（非用户触发）重载只记日志，不打扰用户
+                if (!auto) showOsd("订阅源重载已启动", "请稍候...")
+                pollSourceStatus(auto = auto)
             } else {
                 _sourceLoading.value = false
-                showOsd("订阅源重载失败")
+                if (!auto) showOsd("订阅源重载失败")
             }
         }.onFailure {
             _sourceLoading.value = false
-            showOsd("重载失败", it.message ?: "")
+            if (!auto) showOsd("重载失败", it.message ?: "")
         }
     }
 }
 
-internal fun AppViewModel.reloadEpgSources() {
-    viewModelScope.launch {
-        showOsd("正在重载 EPG...")
+internal fun AppViewModel.reloadEpgSources(notify: Boolean = true) {
+    // 单飞：同一时刻只允许一个 EPG 重载在跑，期间到达的请求直接合并，
+    // 避免同一 EPG URL 被并发下载/解析多份（实测 1 分钟内下载 6 次）
+    if (epgReloadJob?.isActive == true) {
+        Log.i(AppViewModel.TAG, "reloadEpgSources: already running, request merged (notify=$notify)")
+        return
+    }
+    epgReloadJob = viewModelScope.launch {
+        if (notify) showOsd("正在重载 EPG...")
         epgCache.clear()
         _epgCacheVersion.value++
         _focusedEpg.value = emptyList()
         _currentEpg.value = emptyList()
         val result = withContext(Dispatchers.IO) { repository.reloadEpg() }
         result.onSuccess {
-            showOsd("EPG 重载已启动")
+            if (notify) showOsd("EPG 重载已启动")
             // 大体积 EPG 解析可能远超 10s，固定延时容易错过刷新 —— 轮询直到 lastUpdate 落盘
             val startTime = System.currentTimeMillis()
             while (isActive) {
                 if (System.currentTimeMillis() - startTime > 120_000L) {
-                    showOsd("EPG 解析超时", "请检查 EPG 源地址是否可达")
+                    if (notify) showOsd("EPG 解析超时", "请检查 EPG 源地址是否可达")
                     loadEpgSources()
                     return@launch
                 }
@@ -288,35 +300,60 @@ internal fun AppViewModel.reloadEpgSources() {
             if (_currentIdx.value >= 0) fetchEpgForCurrent()
             fetchEpgForChannel(_currentIdx.value)
             loadEpgSources()
+            // 时间线行骨架持有的是旧 epgCache 的加载状态：EPG 更新后重建骨架，
+            // 让可视窗口重新拉取节目，否则车机时间线会一直是空白网格。
+            if (_epgTimelineRows.value.isNotEmpty()) loadEpgTimeline()
         }
-            .onFailure { showOsd("EPG 重载失败", it.message ?: "") }
+            .onFailure { if (notify) showOsd("EPG 重载失败", it.message ?: "") }
     }
 }
 
-internal fun AppViewModel.pollSourceStatus() {
+internal fun AppViewModel.pollSourceStatus(auto: Boolean = false) {
     viewModelScope.launch {
         val startTime = System.currentTimeMillis()
         while (isActive) {
             if (System.currentTimeMillis() - startTime > 60_000L) {
                 _sourceLoading.value = false
-                showOsd("订阅源加载超时")
+                if (!auto) showOsd("订阅源加载超时")
                 return@launch
             }
             val result = withContext(Dispatchers.IO) { repository.getSourceStatus() }
             result.onSuccess { status ->
                 _sourceLoading.value = status.loading
                 _sourceMessage.value = status.message
-if (!status.loading) {
-showOsd("订阅源加载完成", "频道数: ${status.channelsTotal}")
-loadChannels()
-// 订阅源可能包含 M3U 内嵌的 x-tvg-url EPG 源，
-// 加载完成后刷新 EPG 源列表并自动重载
-loadEpgSources()
-reloadEpgSources()
-return@launch
-}
+                if (!status.loading) {
+                    // 自动重载（启动期/残留检测触发）不弹 toast，只在日志记录
+                    if (!auto) showOsd("订阅源加载完成", "频道数: ${status.channelsTotal}")
+                    else Log.i(AppViewModel.TAG, "source load finished (auto): ${status.channelsTotal} channels")
+                    loadChannels()
+                    // 订阅源可能包含 M3U 内嵌的 x-tvg-url EPG 源：只有 EPG 源列表
+                    // 真的变化时才重载 EPG，否则每次订阅源加载完成都会重下 8MB EPG
+                    refreshEpgSourcesAndReloadIfChanged()
+                    return@launch
+                }
             }
             delay(1000L)
+        }
+    }
+}
+
+/**
+ * 刷新 EPG 源列表，仅在列表内容真的变化（如新 M3U 内嵌 x-tvg-url）时触发 EPG 重载。
+ * 避免订阅源加载完成 → 无条件 reloadEpgSources → 重复下载大文件。
+ */
+internal fun AppViewModel.refreshEpgSourcesAndReloadIfChanged() {
+    viewModelScope.launch {
+        val before = _epgSources.value.map { it.url }.filter { it.isNotEmpty() }.toSet()
+        val result = withContext(Dispatchers.IO) { repository.getEpgSources() }
+        result.onSuccess { list ->
+            _epgSources.value = list
+            val after = list.map { it.url }.filter { it.isNotEmpty() }.toSet()
+            // before 为空表示尚未知（冷启动首刷）：此时不触发重载，
+            // 启动期 EPG 已由 Python 侧按缓存有效性决定是否加载
+            if (before.isNotEmpty() && after != before) {
+                Log.i(AppViewModel.TAG, "EPG sources changed: $before -> $after, reload EPG")
+                reloadEpgSources(notify = false)
+            }
         }
     }
 }

@@ -531,10 +531,17 @@ def init_context(ext_files_dir='', files_dir='', log_level='info', native_lib_di
             try:
                 _ctx = ServerContext.get_instance(main_window=None)
                 _sm = _ctx.get_epg_parser()
-                if _sm and _sm.load_cached_epg_data():
-                    _log('init_context: EPG cache loaded from disk')
+                # EPG 缓存的「探测 + 加载 + 是否需要下载」统一由
+                # ServerContext._init_epg_parser 在后台线程完成（同一路径、同一判定）。
+                # 这里只读取它的结果，不要再做一次独立的 exists 探测：否则会出现
+                # 「探测说没缓存、紧接着又从同一文件加载 81MB」的矛盾日志，
+                # 并让每次冷启动都被误判为需要重下 EPG。
+                if _sm is None:
+                    _log('init_context: EPG parser init in progress (background)')
+                elif getattr(_sm, '_epg_data', None):
+                    _log(f'init_context: EPG cache ready ({len(_sm._epg_data)} channels)')
                 else:
-                    _log('init_context: no EPG cache found, will download later')
+                    _log('init_context: EPG cache not loaded yet (background init pending)')
             except Exception as _e:
                 _log(f'init_context: load EPG cache failed: {_e}', 'W')
 

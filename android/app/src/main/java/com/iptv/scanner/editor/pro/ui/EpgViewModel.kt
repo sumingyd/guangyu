@@ -560,18 +560,49 @@ internal fun AppViewModel.ensureEpgTimelineRowsLoaded(fromRow: Int, toRow: Int) 
             if (epgTimelineGeneration != gen) break
             val row = _epgTimelineRows.value.getOrNull(i) ?: continue
             if (row.programsLoaded) continue
+            // 行内的 channelIdx 是 loadEpgTimeline 建骨架时的 _channels 快照索引；
+            // 订阅源重载后 _channels 会被整体替换，索引可能漂移甚至越界。
+            // 因此优先按索引取值并校验频道名，不一致时按频道名兜底解析，
+            // 否则 channel 为 null 会被当成"无节目"永久标记已加载（时间线整块空白）。
+            // 兜底只在名称唯一时生效：同一频道多路流（同名不同地址）时
+            // firstOrNull 会把另一路流的节目挂到本行上。
             val channel = channels.getOrNull(row.channelIdx)
-            val programs = if (channel == null) emptyList() else withContext(Dispatchers.IO) {
-                epgCache[row.channelIdx] ?: run {
-                    repository.getEpg(
-                        channelName = channel.name,
-                        tvgId = channel.tvgId,
-                        tvgName = channel.tvgName,
-                        commaName = channel.name
-                    ).getOrDefault(IptvEpgList()).programmes.also {
-                        if (it.isNotEmpty()) epgCache[row.channelIdx] = it
+                ?.takeIf { it.name == row.channelName }
+                ?: channels.filter { it.name == row.channelName }
+                    .takeIf { it.size == 1 }?.first()
+            if (channel == null) {
+                // 频道确实已不存在（源被删除）：只解除 pending，不标记已加载，
+                // 等 loadChannels 重建行骨架后再重新请求
+                synchronized(epgTimelinePendingRows) { epgTimelinePendingRows.remove(i) }
+                continue
+            }
+            val cacheIdx = channels.indexOf(channel)
+            // 区分"桥接失败"与"确实无节目"：原来用 getOrDefault 会把超时/异常
+            // 当成空列表并置 programsLoaded=true，之后可视窗口不再重试 → 永久空白。
+            var programs: List<IptvEpgProgram>? = null
+            var attempt = 0
+            while (programs == null && attempt < 3) {
+                if (epgTimelineGeneration != gen) return@launch
+                if (attempt > 0) delay(1500L)
+                attempt++
+                programs = withContext(Dispatchers.IO) {
+                    epgCache[cacheIdx] ?: run {
+                        repository.getEpg(
+                            channelName = channel.name,
+                            tvgId = channel.tvgId,
+                            tvgName = channel.tvgName,
+                            commaName = channel.name
+                        ).getOrNull()?.programmes?.also {
+                            if (it.isNotEmpty()) epgCache[cacheIdx] = it
+                        }
                     }
                 }
+            }
+            if (programs == null) {
+                // 重试仍有界失败（EPG 尚未解析完成/桥接超时）：解除 pending 但不标记已加载，
+                // 可视窗口下次变化会重新请求，避免时间线被永久判死
+                synchronized(epgTimelinePendingRows) { epgTimelinePendingRows.remove(i) }
+                continue
             }
             if (epgTimelineGeneration != gen) break
             // 按日期过滤（与当天有交集的节目）

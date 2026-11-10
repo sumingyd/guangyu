@@ -48,6 +48,10 @@ def _make_manager():
     obj._epg_lock = threading.RLock()
     obj._last_epg_error = ''
     obj._last_epg_update = None
+    # 单飞相关状态（与 SubscriptionManager.__init__ 保持一致）
+    obj._epg_load_lock = threading.Lock()
+    obj._epg_download_entries = {}
+    obj._epg_download_guard = threading.Lock()
     return obj
 
 

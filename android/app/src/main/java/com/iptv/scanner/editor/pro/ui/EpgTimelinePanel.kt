@@ -283,7 +283,10 @@ maxLines = 1
                     }
                 }
                 else -> {
+                    // 显式占满标题/筛选后的剩余高度：分屏/内嵌场景下父 Column 的非 weight 子项
+                    // 高度易被压成 0，导致时间线整块不可见
                     TimelineGrid(
+                        modifier = Modifier.weight(1f),
                         rows = rows,
                         currentIdx = currentIdx,
                         dateOffset = dateOffset,
@@ -480,7 +483,10 @@ private fun EpgTimelinePanelAptvInner(viewModel: AppViewModel, glassContainer: B
                     }
                 }
                 else -> {
+                    // 显式占满标题/筛选后的剩余高度：分屏/内嵌场景下父 Column 的非 weight 子项
+                    // 高度易被压成 0，导致时间线整块不可见
                     TimelineGrid(
+                        modifier = Modifier.weight(1f),
                         rows = rows,
                         currentIdx = currentIdx,
                         dateOffset = dateOffset,
@@ -510,7 +516,11 @@ private val CHANNEL_NAME_WIDTH_DP = 118.dp
 private val TIME_HEADER_HEIGHT_DP = 24.dp
 // 横屏（TV/平板）加大行高与频道列提升可读性；竖屏保持紧凑密度
 private val ROW_HEIGHT_DP_LAND = 80.dp
-private val CHANNEL_NAME_WIDTH_DP_LAND = 156.dp
+// 频道列宽：156dp 时扣除台号(26)/台标(34)/间距(7)/左右内边距(12) 后只剩 77dp，
+// 13sp 中文约 5 个字，「CCTV-1 综合」「湖南卫视高清」这类名字会被省略成「CCTV-…」。
+// 加宽到 196dp 后正文可用 ~123dp（约 9 字/行），配合频道名允许 2 行，绝大多数台名完整显示。
+// 代价：时间轴可视宽度减少 40dp ≈ 0.74 小时（HOUR_WIDTH_DP=54），时间轴本身可横向滚动。
+private val CHANNEL_NAME_WIDTH_DP_LAND = 196.dp
 
 /**
  * 时间线网格布局：
@@ -533,7 +543,8 @@ private fun TimelineGrid(
     verticalScroll: androidx.compose.foundation.ScrollState,
     channels: List<com.iptv.scanner.editor.pro.data.IptvChannel> = emptyList(),
     onVisibleRows: (Int, Int) -> Unit = { _, _ -> },
-    onProgramClick: (IptvEpgProgram) -> Unit
+    onProgramClick: (IptvEpgProgram) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
     // 横屏用加大行高/频道列，竖屏保持紧凑
@@ -577,8 +588,11 @@ private fun TimelineGrid(
     val secondaryColor = MaterialTheme.colorScheme.secondary
     val surfaceVariantArgb = MaterialTheme.colorScheme.surfaceVariant.toArgb()
     val errorColor = MaterialTheme.colorScheme.error
-    val tertiaryColor = MaterialTheme.colorScheme.tertiary
-    val primaryColor = MaterialTheme.colorScheme.primary
+    // 强调色当文字 / 当底承白字：不能直接复用 primary（#E8455F 在浅底只有 2.8~3.5:1）
+    val accentTextColor = tvPalette.accentText
+    val accentFillColor = tvPalette.accentFill
+    // 选中块用深琥珀底承白字（原 tertiary #FF9800 上白字仅 2.2:1）
+    val warningFillColor = tvPalette.warningText
     val onSurfaceVariantArgb = onSurfaceVariantColor.toArgb()
     val outlineArgb = outlineColor.toArgb()
 
@@ -623,7 +637,7 @@ private fun TimelineGrid(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = modifier.fillMaxSize()) {
         // -----------------------------------------------------------------
         // 顶部：时间刻度行（左上角空白 + 时间刻度水平滚动）
         // -----------------------------------------------------------------
@@ -705,6 +719,18 @@ private fun TimelineGrid(
             // 供 Canvas 绘制时裁剪可视区外行/节目块，避免全量绘制造成切 tab 卡顿
             var gridViewPortWidth by remember { mutableStateOf(0f) }
             var gridViewPortHeight by remember { mutableStateOf(0f) }
+            // 分屏/首帧时视口宽度还是 0，此时 scrollTo 会被 ScrollState 以 maxValue=0 截断，
+            // 页面级「定位到当前时间」的滚动会丢失，时间线停在 00:00，看起来像空白。
+            // 等视口真正测量出来后再补一次初始定位。
+            var didInitialScroll by remember(dateOffset, rows.size) { mutableStateOf(false) }
+            LaunchedEffect(gridViewPortWidth, dateOffset, rows.size) {
+                if (didInitialScroll || gridViewPortWidth <= 0f || rows.isEmpty()) return@LaunchedEffect
+                if (dateOffset == 0) {
+                    val hours = (System.currentTimeMillis() - dayStartMs) / 3600000.0
+                    horizontalScroll.scrollTo((hours * hourWidthPx).toInt().coerceAtLeast(0))
+                }
+                didInitialScroll = true
+            }
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -776,10 +802,18 @@ private fun TimelineGrid(
                         }
                 ) {
                     // 背景：不再铺实底色（玻璃容器下透出磨砂玻璃，非玻璃场景透出面板底色）
-                    // 可视行范围裁剪：只绘制滚动视口内的行（±1 行余量），避免全量绘制卡顿
-                    val firstVisibleRow = ((verticalScroll.value / rowHeightPx).toInt() - 1).coerceAtLeast(0)
-                    val lastVisibleRow = (((verticalScroll.value + gridViewPortHeight) / rowHeightPx).toInt() + 1)
-                        .coerceIn(0, rows.size - 1)
+                    // 可视行范围裁剪：只绘制滚动视口内的行（±1 行余量），避免全量绘制卡顿。
+                    // 分屏/首帧时视口可能尚未测量（=0），此时若照旧裁剪会把节目块全部裁掉，
+                    // 表现为整块时间线空白；未测量时退回全量绘制，测量后下一帧自然收窄。
+                    val measuredHeight = gridViewPortHeight > 0f
+                    val measuredWidth = gridViewPortWidth > 0f
+                    val firstVisibleRow = if (measuredHeight) {
+                        ((verticalScroll.value / rowHeightPx).toInt() - 1).coerceAtLeast(0)
+                    } else 0
+                    val lastVisibleRow = if (measuredHeight) {
+                        (((verticalScroll.value + gridViewPortHeight) / rowHeightPx).toInt() + 1)
+                            .coerceIn(0, rows.size - 1)
+                    } else rows.size - 1
 
                     // 网格线 + 节目块抽为 DrawScope 扩展函数（避免超长方法触发 VerifyError）
                     drawTimelineGridLines(
@@ -802,12 +836,14 @@ private fun TimelineGrid(
                         hourWidthPx = hourWidthPx,
                         rowHeightPx = rowHeightPx,
                         scrollX = horizontalScroll.value.toFloat(),
-                        viewRight = horizontalScroll.value.toFloat() + gridViewPortWidth,
+                        // 视口宽度未测量时不做右侧裁剪（否则分屏下会整屏空白）
+                        viewRight = if (measuredWidth) horizontalScroll.value.toFloat() + gridViewPortWidth
+                        else Float.MAX_VALUE,
                         selectedRow = selectedRow,
                         selectedProgramIdx = selectedProgramIdx,
                         surfaceVariantArgb = surfaceVariantArgb,
-                        tertiaryColor = tertiaryColor,
-                        primaryColor = primaryColor,
+                        accentFillColor = accentFillColor,
+                        warningFillColor = warningFillColor,
                         secondaryColor = secondaryColor,
                         onSurfaceColor = onSurfaceColor,
                         programTextPaint = programTextPaint,
@@ -859,6 +895,9 @@ private fun TimelineChannelColumn(
     onVisibleRows: (Int, Int) -> Unit
 ) {
     val onSurfaceVariantColor = MaterialTheme.colorScheme.onSurfaceVariant
+    // 当前行台号/频道名用「强调色当文字」token：浅色 #A81C34 在 #F3DCE4 上 5.6:1，
+    // 深色 #FF8A9B 在 #3A2A30 上 >4.5:1；直接用 primary(#E8455F) 只有 2.9:1
+    val accentTextColor = tvPalette.accentText
     val density = LocalDensity.current
     val rowHeightPx = with(density) { rowHeightDp.toPx() }
     val viewPortHeightPx = viewPortHeightState.value
@@ -895,13 +934,13 @@ private fun TimelineChannelColumn(
             ) {
                 // 台号 + 台标 + 频道名（台标带圆角衬底，避免浅色主题下白色 logo 幽灵化）
                 // 横屏大行高下台标/字号同步放大，避免 80dp 行内 22dp 小台标显空
-                val logoSize = if (isLandscape) 34.dp else 22.dp
+                val logoSize = if (isLandscape) 30.dp else 22.dp
                 val logoCorner = if (isLandscape) 7.dp else 4.dp
-                val numWidth = if (isLandscape) 26.dp else 20.dp
+                val numWidth = if (isLandscape) 24.dp else 20.dp
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = "${row.channelIdx + 1}",
-                        color = if (isCurrent) MaterialTheme.colorScheme.primary else onSurfaceVariantColor,
+                        color = if (isCurrent) accentTextColor else onSurfaceVariantColor,
                         fontSize = if (isLandscape) 12.sp else 9.sp,
                         fontWeight = FontWeight.Medium,
                         modifier = Modifier.width(numWidth)
@@ -930,12 +969,14 @@ private fun TimelineChannelColumn(
                             )
                         }
                     }
-                    Spacer(modifier = Modifier.width(7.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = row.channelName,
-                        color = if (isCurrent) MaterialTheme.colorScheme.primary else onSurfaceVariantColor,
+                        color = if (isCurrent) accentTextColor else onSurfaceVariantColor,
                         fontSize = if (isLandscape) 13.sp else 10.sp,
-                        maxLines = 1,
+                        // 允许 2 行：列宽放不下的长台名换成第二行显示，而不是直接省略成「CCTV-…」
+                        lineHeight = if (isLandscape) 16.sp else 11.sp,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         fontWeight = if (isCurrent) FontWeight.Medium else FontWeight.Normal
                     )
@@ -1068,8 +1109,8 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTimelineProgram
     selectedRow: Int,
     selectedProgramIdx: Int,
     surfaceVariantArgb: Int,
-    tertiaryColor: Color,
-    primaryColor: Color,
+    accentFillColor: Color,
+    warningFillColor: Color,
     secondaryColor: Color,
     onSurfaceColor: Color,
     programTextPaint: android.graphics.Paint,
@@ -1098,8 +1139,8 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTimelineProgram
 
                 // 节目块背景
                 val bgColor = when {
-                    isSelected -> tertiaryColor  // 选中：主题 tertiary
-                    isCurrent -> primaryColor     // 当前：主题 primary
+                    isSelected -> warningFillColor  // 选中：深琥珀（承白字 ≥4.5:1）
+                    isCurrent -> accentFillColor    // 当前：深强调色（承白字 5.6:1）
                     isPast -> Color(surfaceVariantArgb).copy(alpha = 0.45f)  // 过去：半透明随主题变
                     else -> secondaryColor.copy(alpha = 0.3f)  // 普通：浅蓝
                 }

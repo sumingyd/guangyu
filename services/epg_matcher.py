@@ -3,7 +3,32 @@ import threading
 import unicodedata
 from collections import OrderedDict
 
+try:
+    from core.log_manager import global_logger as logger
+except Exception:  # pragma: no cover - 日志模块不可用时退化为标准 logging
+    import logging
+    logger = logging.getLogger(__name__)
+
 _MAX_CACHE_SIZE = 5000
+
+# 通用缀词：剥离后仍必须保留至少一个区分性词（地名/品牌名）才允许判等。
+# 顺序必须"长词优先"，否则"新闻综合"会被"综合"先吃掉一半。
+_GENERIC_SUFFIXES = (
+    '新闻综合', '综合频道', '新闻频道',
+    '超高清', '高清', '标清',
+    '综合', '新闻',
+    '频道', '电视台',
+    '体育赛事',
+    'fhd', 'uhd', 'hd',
+    '4k', '8k',
+    '台',
+)
+
+# 剥离后不允许剩下这些"看起来像频道、其实没有区分度"的核心词
+_USELESS_CORES = {'cctv', 'tv', 'hd', 'sd', 'cc', '频道', '电视台', '电视', '新闻', '综合', '台'}
+# 剥离后仍只是通用词的组合，同样不允许作为判等依据
+_GENERIC_CORES = _USELESS_CORES | {'新闻综合', '综合频道', '新闻频道', '高清', '超高清', '标清',
+                                    'fhd', 'uhd', '4k', '8k'}
 
 _COMMON_ALIASES = {
     'cctv1': 'CCTV-1 综合',
@@ -54,34 +79,73 @@ def _normalize(name):
     return name
 
 
-def _levenshtein_distance(s1, s2):
-    if len(s1) < len(s2):
-        return _levenshtein_distance(s2, s1)
-    if len(s2) == 0:
-        return len(s1)
-    prev_row = list(range(len(s2) + 1))
-    for i, c1 in enumerate(s1):
-        curr_row = [i + 1]
-        for j, c2 in enumerate(s2):
-            insertions = prev_row[j + 1] + 1
-            deletions = curr_row[j] + 1
-            substitutions = prev_row[j] + (c1 != c2)
-            curr_row.append(min(insertions, deletions, substitutions))
-        prev_row = curr_row
-    return prev_row[-1]
+def _core_name(name):
+    """剥离通用缀词后的"区分性核心词"，无法得到有效核心时返回空串。
+
+    只在核心词非空、且确实发生了剥离时才返回；这样：
+    - 吴江新闻综合 -> 吴江，靖江新闻综合 -> 靖江，镇江新闻综合 -> 镇江（互不相等）
+    - 新闻综合/高清/HD/4K 这类纯通用词 -> 空串（不允许作为唯一判等依据）
+    - Astro AEC / Astro AOD 不含通用后缀，核心词就是全文（仍要求整词相等）
+    """
+    if not name:
+        return ''
+    norm = _normalize(name)
+    if not norm:
+        return ''
+    core = norm
+    stripped = False
+    changed = True
+    while changed:
+        changed = False
+        for token in _GENERIC_SUFFIXES:
+            if not core.endswith(token) or len(core) <= len(token):
+                continue
+            rest = core[:-len(token)]
+            # 纯数字/近似品牌缩写不剥离：CCTV4K 不能被剥成 cctv
+            if not rest or rest.isdigit() or rest in _USELESS_CORES:
+                continue
+            core = rest
+            stripped = True
+            changed = True
+            break
+    if not stripped or core == norm:
+        return ''
+    if len(core) < 2 or core in _GENERIC_CORES:
+        return ''
+    return core
 
 
-def _similarity(s1, s2):
-    if not s1 or not s2:
-        return 0.0
-    max_len = max(len(s1), len(s2))
-    if max_len == 0:
-        return 1.0
-    dist = _levenshtein_distance(s1, s2)
-    return 1.0 - dist / max_len
+def _index_add(index, key, epg_id):
+    """向索引写入 key -> epg_id；同一 key 命中不同 id 时记为歧义（元组）。"""
+    if not key:
+        return
+    if key not in index:
+        index[key] = epg_id
+        return
+    current = index[key]
+    if isinstance(current, tuple):
+        if epg_id not in current:
+            index[key] = current + (epg_id,)
+        return
+    if current != epg_id:
+        index[key] = (current, epg_id)
+
+
+def _lookup(index, key):
+    """返回 (命中的 epg_id, 歧义候选元组)。两者最多一个非空。"""
+    if not key:
+        return None, None
+    value = index.get(key)
+    if value is None:
+        return None, None
+    if isinstance(value, tuple):
+        return None, value
+    return value, None
 
 
 class EpgMatcher:
+    """EPG 频道匹配：只做精确/别名/核心词判等，不做相似度、包含、前缀匹配。"""
+
     _smart_cache: OrderedDict = OrderedDict()
     _cache_lock = threading.Lock()
 
@@ -90,71 +154,45 @@ class EpgMatcher:
         by_id = {}
         by_name = {}
         by_norm_name = {}
+        by_core_name = {}
         if isinstance(epg_channels, dict):
-            for epg_id, epg_display_name in epg_channels.items():
-                by_id[epg_id] = epg_id
-                if epg_display_name not in by_name:
-                    by_name[epg_display_name] = epg_id
-                norm = _normalize(epg_display_name)
-                if norm and norm not in by_norm_name:
-                    by_norm_name[norm] = epg_id
+            items = epg_channels.items()
         elif isinstance(epg_channels, list):
+            items = []
             for item in epg_channels:
                 if isinstance(item, dict):
-                    epg_id = item.get('id', '')
-                    epg_display_name = item.get('name', '')
+                    items.append((item.get('id', ''), item.get('name', '')))
                 elif isinstance(item, (list, tuple)) and len(item) >= 2:
-                    epg_id, epg_display_name = item[0], item[1]
-                else:
-                    continue
-                by_id[epg_id] = epg_id
-                if epg_display_name not in by_name:
-                    by_name[epg_display_name] = epg_id
-                norm = _normalize(epg_display_name)
-                if norm and norm not in by_norm_name:
-                    by_norm_name[norm] = epg_id
-        return by_id, by_name, by_norm_name
-
-    @classmethod
-    def _fuzzy_match_by_normalize(cls, name, by_norm_name):
-        if not name:
-            return None
-        norm = _normalize(name)
-        if not norm:
-            return None
-        if norm in by_norm_name:
-            return by_norm_name[norm]
-        alias = _COMMON_ALIASES.get(norm)
-        if alias:
-            alias_norm = _normalize(alias)
-            if alias_norm in by_norm_name:
-                return by_norm_name[alias_norm]
-        pinyin_match = _PINYIN_MAP.get(name.strip())
-        if pinyin_match:
-            pinyin_norm = _normalize(pinyin_match)
-            if pinyin_norm in by_norm_name:
-                return by_norm_name[pinyin_norm]
-        return None
-
-    @classmethod
-    def _fuzzy_match_by_similarity(cls, name, by_norm_name, threshold=0.7):
-        if not name:
-            return None
-        norm = _normalize(name)
-        if not norm:
-            return None
-        best_score = 0.0
-        best_result = None
-        for epg_norm, epg_id in by_norm_name.items():
-            if abs(len(epg_norm) - len(norm)) > max(len(norm), len(epg_norm)) * 0.4:
+                    items.append((item[0], item[1]))
+        else:
+            items = []
+        for epg_id, epg_display_name in items:
+            if not epg_id:
                 continue
-            score = _similarity(norm, epg_norm)
-            if score > best_score:
-                best_score = score
-                best_result = epg_id
-        if best_score >= threshold:
-            return best_result
-        return None
+            by_id[epg_id] = epg_id
+            _index_add(by_name, epg_display_name, epg_id)
+            _index_add(by_norm_name, _normalize(epg_display_name), epg_id)
+            # 核心词索引同时收录"原始归一化名"和"剥离通用词后的核心"，
+            # 这样 CCTV1综合(核心 cctv1) 能对上 EPG 的 CCTV-1(归一化 cctv1)，
+            # 但匹配仍要求整词相等，不做任何模糊/包含。
+            _index_add(by_core_name, _normalize(epg_display_name), epg_id)
+            _index_add(by_core_name, _core_name(epg_display_name), epg_id)
+        return by_id, by_name, by_norm_name, by_core_name
+
+    @classmethod
+    def _resolve_tier(cls, indexes):
+        """在一个匹配层级内按优先级查找，返回 (epg_id, 歧义键, 歧义候选)。
+
+        同层内任一候选出现歧义且没有唯一命中时，向上抛出歧义（宁可留空）。
+        """
+        ambiguous = None
+        for index, key in indexes:
+            hit, candidates = _lookup(index, key)
+            if hit:
+                return hit, None, None
+            if candidates and ambiguous is None:
+                ambiguous = (key, candidates)
+        return None, (ambiguous[0] if ambiguous else None), (ambiguous[1] if ambiguous else None)
 
     @classmethod
     def match(cls, channel_name, epg_channels, tvg_id=None, tvg_name=None, comma_name=None):
@@ -167,42 +205,105 @@ class EpgMatcher:
                 cls._smart_cache.move_to_end(cache_key)
                 return cls._smart_cache[cache_key]
 
-        by_id, by_name, by_norm_name = cls._build_index(epg_channels)
+        by_id, by_name, by_norm_name, by_core_name = cls._build_index(epg_channels)
+
+        # 标识符优先级：tvg-id > tvg-name > 逗号后名称 > 频道名
+        identifiers = (
+            ('tvg_id', tvg_id),
+            ('tvg_name', tvg_name),
+            ('comma_name', comma_name),
+            ('channel_name', channel_name),
+        )
 
         result = None
+        tier = ''
 
-        if tvg_name:
-            result = by_name.get(tvg_name) or by_id.get(tvg_name)
+        # 第 1 级：原始字符串精确（id 或显示名逐字符相等）
+        for field, value in identifiers:
+            if not value:
+                continue
+            hit, amb_key, amb_ids = cls._resolve_tier(
+                ((by_id, value), (by_name, value))
+            )
+            if hit:
+                result, tier = hit, f'{field} 精确'
+                break
+            if amb_key:
+                return cls._finish(cache_key, None, channel_name, tvg_id, tvg_name,
+                                   comma_name, ambiguous=(amb_key, amb_ids, field))
 
-        if result is None and tvg_id:
-            result = by_id.get(tvg_id)
+        # 第 2 级：归一化后精确相等
+        if result is None:
+            norm_indexes = tuple(
+                (by_norm_name, _normalize(value))
+                for _, value in identifiers if value
+            )
+            hit, amb_key, amb_ids = cls._resolve_tier(norm_indexes)
+            if hit:
+                result, tier = hit, '归一化精确'
+            elif amb_key:
+                return cls._finish(cache_key, None, channel_name, tvg_id, tvg_name,
+                                   comma_name, ambiguous=(amb_key, amb_ids, '归一化'))
 
-        if result is None and comma_name:
-            result = by_name.get(comma_name) or by_id.get(comma_name)
+        # 第 3 级：严格别名表（人工维护白名单）
+        if result is None:
+            alias_indexes = []
+            for _, value in identifiers:
+                if not value:
+                    continue
+                alias = _COMMON_ALIASES.get(_normalize(value))
+                if alias:
+                    alias_indexes.append((by_norm_name, _normalize(alias)))
+                    if _core_name(alias):
+                        alias_indexes.append((by_core_name, _core_name(alias)))
+                pinyin_alias = _PINYIN_MAP.get(str(value).strip())
+                if pinyin_alias:
+                    alias_indexes.append((by_norm_name, _normalize(pinyin_alias)))
+                    if _core_name(pinyin_alias):
+                        alias_indexes.append((by_core_name, _core_name(pinyin_alias)))
+            hit, amb_key, amb_ids = cls._resolve_tier(alias_indexes)
+            if hit:
+                result, tier = hit, '别名表'
+            elif amb_key:
+                return cls._finish(cache_key, None, channel_name, tvg_id, tvg_name,
+                                   comma_name, ambiguous=(amb_key, amb_ids, '别名表'))
 
-        if result is None and channel_name:
-            result = by_name.get(channel_name) or by_id.get(channel_name)
+        # 第 4 级：剥离通用词后核心词整词相等（必须仍保留区分性词）
+        if result is None:
+            core_indexes = tuple(
+                (by_core_name, _core_name(value))
+                for _, value in identifiers if _core_name(value)
+            )
+            hit, amb_key, amb_ids = cls._resolve_tier(core_indexes)
+            if hit:
+                result, tier = hit, '核心词精确'
+            elif amb_key:
+                return cls._finish(cache_key, None, channel_name, tvg_id, tvg_name,
+                                   comma_name, ambiguous=(amb_key, amb_ids, '核心词'))
 
-        if result is None and tvg_name:
-            result = cls._fuzzy_match_by_normalize(tvg_name, by_norm_name)
+        return cls._finish(cache_key, result, channel_name, tvg_id, tvg_name,
+                           comma_name, tier=tier)
 
-        if result is None and comma_name:
-            result = cls._fuzzy_match_by_normalize(comma_name, by_norm_name)
-
-        if result is None and channel_name:
-            result = cls._fuzzy_match_by_normalize(channel_name, by_norm_name)
-
-        if result is None and channel_name:
-            result = cls._fuzzy_match_by_similarity(channel_name, by_norm_name)
-
-        if result is None and tvg_name:
-            result = cls._fuzzy_match_by_similarity(tvg_name, by_norm_name)
-
+    @classmethod
+    def _finish(cls, cache_key, result, channel_name, tvg_id, tvg_name, comma_name,
+                tier='', ambiguous=None):
+        if ambiguous:
+            key, candidates, level = ambiguous
+            logger.debug(
+                f"EPG匹配歧义未匹配: channel={channel_name!r} tvg_id={tvg_id!r} "
+                f"tvg_name={tvg_name!r} comma_name={comma_name!r} "
+                f"层级={level} key={key!r} 候选={list(candidates)!r}"
+            )
+        else:
+            logger.debug(
+                f"EPG匹配: channel={channel_name!r} tvg_id={tvg_id!r} "
+                f"tvg_name={tvg_name!r} comma_name={comma_name!r} "
+                f"-> epg_id={result!r}" + (f" via {tier}" if result else " via 未匹配")
+            )
         with cls._cache_lock:
             if len(cls._smart_cache) >= _MAX_CACHE_SIZE:
                 cls._smart_cache.popitem(last=False)
             cls._smart_cache[cache_key] = result
-
         return result
 
     @classmethod
