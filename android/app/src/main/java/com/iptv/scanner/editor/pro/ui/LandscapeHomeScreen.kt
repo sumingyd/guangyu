@@ -124,33 +124,27 @@ internal fun LandscapeHomeScreen(
                             .drawBehind {
                                 drawRect(
                                     androidx.compose.ui.graphics.Brush.verticalGradient(
-                                        if (canvasDark) listOf(
-                                            androidx.compose.ui.graphics.Color(0xFF0B0F1A),
-                                            androidx.compose.ui.graphics.Color(0xFF151B2C)
-                                        ) else listOf(
-                                            tvPalette.textTertiary,
-                                            tvPalette.textPrimary
-                                        )
+                                        listOf(tvPalette.canvasStart, tvPalette.canvasEnd)
                                     )
                                 )
                                 val g = if (canvasDark) 0.32f else 0.24f
                                 drawCircle(
                                     brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                        listOf(androidx.compose.ui.graphics.Color(0x5B8CFF).copy(alpha = g), androidx.compose.ui.graphics.Color.Transparent)
+                                        listOf(tvPalette.spotBlue.copy(alpha = g), androidx.compose.ui.graphics.Color.Transparent)
                                     ),
                                     radius = size.width * 0.85f,
                                     center = androidx.compose.ui.geometry.Offset(size.width * 0.15f, size.height * 0.12f)
                                 )
                                 drawCircle(
                                     brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                        listOf(androidx.compose.ui.graphics.Color(0xC084FC).copy(alpha = g * 0.85f), androidx.compose.ui.graphics.Color.Transparent)
+                                        listOf(tvPalette.spotPurple.copy(alpha = g * 0.85f), androidx.compose.ui.graphics.Color.Transparent)
                                     ),
                                     radius = size.width * 0.75f,
                                     center = androidx.compose.ui.geometry.Offset(size.width * 0.95f, size.height * 0.52f)
                                 )
                                 drawCircle(
                                     brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                        listOf(androidx.compose.ui.graphics.Color(0x34D399).copy(alpha = g * 0.7f), androidx.compose.ui.graphics.Color.Transparent)
+                                        listOf(tvPalette.spotGreen.copy(alpha = g * 0.7f), androidx.compose.ui.graphics.Color.Transparent)
                                     ),
                                     radius = size.width * 0.7f,
                                     center = androidx.compose.ui.geometry.Offset(size.width * 0.2f, size.height * 0.95f)
@@ -164,10 +158,11 @@ internal fun LandscapeHomeScreen(
                         com.iptv.scanner.editor.pro.ui.theme.LocalGlassOnCanvas provides true
                     ) {
                         val aptvScheme = MaterialTheme.colorScheme.copy(
-                            primary = AptvAccent,
-                            onPrimary = Color.White,
-                            primaryContainer = AptvAccent.copy(alpha = 0.15f),
-                            onPrimaryContainer = AptvAccent,
+                            // primary 驱动 Switch/单选点等图形（≥3.0）；容器内文字用 accentText（≥4.5）
+                            primary = tvPalette.accentGraphic,
+                            onPrimary = tvPalette.accentOn,
+                            primaryContainer = tvPalette.accentFill.copy(alpha = 0.15f),
+                            onPrimaryContainer = tvPalette.accentText,
                             onSurfaceVariant = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.78f)
                         )
                         MaterialTheme(colorScheme = aptvScheme) {
@@ -386,7 +381,7 @@ private fun LandscapeChannelSplitContent(viewModel: AppViewModel) {
                 AptvGlassChip(cornerRadius = 14.dp) {
                     Text(
                         text = if (selectedGroup.isEmpty()) "全部频道" else selectedGroup,
-                        color = AptvAccent,
+                        color = tvPalette.accentText,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Medium,
                         maxLines = 1,
@@ -401,13 +396,13 @@ private fun LandscapeChannelSplitContent(viewModel: AppViewModel) {
                 Spacer(modifier = Modifier.weight(1f))
                 AptvGlassChip(cornerRadius = 20.dp, modifier = Modifier.size(36.dp).tvFocusBorder(cornerRadius = 20, focusedScale = 1.18f)) {
                     IconButton(onClick = { showSourceSheet = true }, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Default.SwapHoriz, "切换订阅源", tint = AptvAccent, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.SwapHoriz, "切换订阅源", tint = tvPalette.accentGraphic, modifier = Modifier.size(18.dp))
                     }
                 }
                 Spacer(modifier = Modifier.width(6.dp))
                 AptvGlassChip(cornerRadius = 20.dp, modifier = Modifier.size(36.dp).tvFocusBorder(cornerRadius = 20, focusedScale = 1.18f)) {
                     IconButton(onClick = { viewModel.loadChannels() }, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Default.Refresh, "刷新频道", tint = AptvAccent, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.Refresh, "刷新频道", tint = tvPalette.accentGraphic, modifier = Modifier.size(18.dp))
                     }
                 }
             }
@@ -642,10 +637,13 @@ private fun LandscapeChannelSplitContent(viewModel: AppViewModel) {
                 .padding(start = 4.dp, end = 8.dp, top = 4.dp, bottom = 68.dp)
         ) {
             // 首次组合自动加载：竖屏流程由 toggleEpgTimelinePanel 触发首次加载，
-            // 横屏首页为直接嵌入面板，不走 toggle，需在此自行触发（延迟等频道列表就绪）
-            LaunchedEffect(Unit) {
-                kotlinx.coroutines.delay(300)
-                if (viewModel.epgTimelineRows.value.isEmpty()) {
+            // 横屏首页为直接嵌入面板，不走 toggle，需在此自行触发。
+            // 冷启动时频道列表晚于首页组合到达，原先「固定延迟 300ms + 只跑一次」在频道
+            // 还没加载时就把状态写成「无频道数据」，之后没人再触发，时间线永久空白。
+            // 改为跟随频道数量重试：频道到齐且行骨架仍为空时再建一次骨架。
+            val channels by viewModel.channels.collectAsState()
+            LaunchedEffect(channels.size) {
+                if (channels.isNotEmpty() && viewModel.epgTimelineRows.value.isEmpty()) {
                     viewModel.loadEpgTimeline()
                 }
             }
@@ -768,13 +766,13 @@ private fun LandscapeSystemOverviewPanel(viewModel: AppViewModel) {
                     modifier = Modifier
                         .size(36.dp)
                         .clip(RoundedCornerShape(9.dp))
-                        .background(AptvAccent.copy(alpha = 0.90f)),
+                        .background(tvPalette.accentFill),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         Icons.Filled.PlayArrow,
                         contentDescription = null,
-                        tint = Color.White,
+                        tint = tvPalette.accentOn,
                         modifier = Modifier.size(19.dp)
                     )
                 }
@@ -910,7 +908,7 @@ private fun LandscapeSystemOverviewPanel(viewModel: AppViewModel) {
                         Icon(
                             Icons.Default.Refresh,
                             contentDescription = "刷新日志",
-                            tint = AptvAccent,
+                            tint = tvPalette.accentGraphic,
                             modifier = Modifier.size(16.dp)
                         )
                     }
@@ -964,7 +962,7 @@ private fun OverviewStatCard(label: String, value: String) {
         ) {
             Text(
                 text = value,
-                color = AptvAccent,
+                color = tvPalette.accentText,
                 fontSize = 22.sp,
                 fontWeight = FontWeight.Bold
             )
