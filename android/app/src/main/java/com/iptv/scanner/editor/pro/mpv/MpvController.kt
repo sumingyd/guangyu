@@ -2,6 +2,7 @@ package com.iptv.scanner.editor.pro.mpv
 
 import android.util.Log
 import `is`.xyz.mpv.MPVLib
+import com.iptv.scanner.editor.pro.NativeCrashLogger
 import com.iptv.scanner.editor.pro.data.UserPrefs
 import com.iptv.scanner.editor.pro.mpv.controller.MpvAudioEqController
 import com.iptv.scanner.editor.pro.mpv.controller.MpvControllerHost
@@ -301,6 +302,12 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
             try {
                 MPVLib.setPropertyString("hwdec", effectiveHwdec)
                 _hwdecCache = effectiveHwdec
+                // 立刻把新 hwdec 记进会话标记：硬解在一些车机上切换后几百毫秒内就会
+                // SIGSEGV，等到 file-loaded 再写就来不及，下次启动会误判成「软解崩的」，
+                // 于是又用崩溃值启动一次、多崩一轮才进黑名单。
+                mpvView?.asView()?.context?.let {
+                    NativeCrashLogger.setActiveHwdec(it, effectiveHwdec)
+                }
                 mpvView?.reattachSurfaceWithVo(vo)
                 _voCache = vo
 
