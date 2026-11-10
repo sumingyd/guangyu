@@ -146,8 +146,15 @@ internal fun AppViewModel.prevChannel() {
     val channels = _channels.value
     if (channels.isEmpty()) return
     if (channels.size <= 1) return
-    val next = if (cur > 0) cur - 1 else channels.lastIndex
-    if (next >= 0 && next < channels.size) playChannelDebounced(next)
+    // 触屏（手机/车机）：到第一条就停住，不做首尾回绕 —— 回绕会让右侧频道列表
+    // 从顶部瞬移到底部，用户分不清列表的头和尾；TV 遥控器保留回绕方便连续换台。
+    val wrap = uiMode.value.isTV
+    val next = when {
+        cur > 0 -> cur - 1
+        wrap -> channels.lastIndex
+        else -> cur
+    }
+    if (next != cur && next >= 0 && next < channels.size) playChannelDebounced(next)
 }
 
 internal fun AppViewModel.nextChannel() {
@@ -169,8 +176,13 @@ internal fun AppViewModel.nextChannel() {
         if (next in _channels.value.indices) playChannelDebounced(next)
         return
     }
-    val next = if (cur < _channels.value.lastIndex) cur + 1 else 0
-    if (next in _channels.value.indices) playChannelDebounced(next)
+    val next = when {
+        cur < _channels.value.lastIndex -> cur + 1
+        // 同 prevChannel：只有 TV 遥控器保留首尾回绕
+        uiMode.value.isTV -> 0
+        else -> cur
+    }
+    if (next != cur && next in _channels.value.indices) playChannelDebounced(next)
 }
 
 internal fun AppViewModel.playChannelDebounced(idx: Int) {
