@@ -243,8 +243,6 @@ fun MainPlayerScreen(viewModel: AppViewModel) {
 
     val player = viewModel.mpv  // 当前 Player 实例（类型为 Player 接口）
     val paused by player.paused.collectAsState()
-    val videoWidth by player.videoWidth.collectAsState()
-    val videoHeight by player.videoHeight.collectAsState()
     val fileLoaded by player.fileLoaded.collectAsState()
     val showHome by viewModel.showHome.collectAsState()
     val portraitTab by viewModel.portraitTab.collectAsState()
@@ -361,20 +359,6 @@ fun MainPlayerScreen(viewModel: AppViewModel) {
         viewModel.showControlsAutoHide()
     }
 
-
-    // 视频宽高比：用于 SurfaceView 比例保持（解决竖屏下视频被拉长铺满的问题）。
-    // 根因：vo=mediacodec_embed 直接用 MediaCodec 渲染到 Surface buffer，不经过 GPU 渲染管线，
-    // mpv 的 keepaspect/keepaspect-window 选项对 mediacodec_embed 不生效。
-    // 如果 SurfaceView 全屏（fillMaxSize），Surface buffer 是全屏尺寸（如竖屏 1440x2984），
-    // MediaCodec 会把视频帧拉伸到 buffer 尺寸，破坏 16:9 比例。
-    // 用 aspectRatio modifier 限制 SurfaceView 尺寸，让 Surface buffer 匹配视频比例，
-    // 视频会居中显示并保持比例（上下/左右黑边）。
-    // vo=gpu 时也兼容（mpv 内部 keepaspect 已处理，aspectRatio 只影响 SurfaceView 外框，不影响渲染）。
-    val aspectRatio = if (videoWidth > 0 && videoHeight > 0) {
-        videoWidth.toFloat() / videoHeight.toFloat()
-    } else {
-        16f / 9f  // 默认 16:9（未加载时）
-    }
 
     val anyPanelOpen by viewModel.anyPanelOpenFlow.collectAsState()
     val showControls = controlsVisible && !anyPanelOpen
@@ -670,33 +654,27 @@ viewModel.mpv.setMute(savedMute)
                             .drawBehind {
                                 drawRect(
                                     androidx.compose.ui.graphics.Brush.verticalGradient(
-                                        if (canvasDark) listOf(
-                                            androidx.compose.ui.graphics.Color(0xFF0B0F1A),
-                                            androidx.compose.ui.graphics.Color(0xFF151B2C)
-                                        ) else listOf(
-                                            androidx.compose.ui.graphics.Color(0xFFE9EEF7),
-                                            androidx.compose.ui.graphics.Color(0xFFF9FBFF)
-                                        )
+                                        listOf(tvPalette.canvasStart, tvPalette.canvasEnd)
                                     )
                                 )
                                 val g = if (canvasDark) 0.32f else 0.15f
                                 drawCircle(
                                     brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                        listOf(androidx.compose.ui.graphics.Color(0x5B8CFF).copy(alpha = g), androidx.compose.ui.graphics.Color.Transparent)
+                                        listOf(tvPalette.spotBlue.copy(alpha = g), androidx.compose.ui.graphics.Color.Transparent)
                                     ),
                                     radius = size.width * 0.85f,
                                     center = androidx.compose.ui.geometry.Offset(size.width * 0.15f, size.height * 0.12f)
                                 )
                                 drawCircle(
                                     brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                        listOf(androidx.compose.ui.graphics.Color(0xC084FC).copy(alpha = g * 0.85f), androidx.compose.ui.graphics.Color.Transparent)
+                                        listOf(tvPalette.spotPurple.copy(alpha = g * 0.85f), androidx.compose.ui.graphics.Color.Transparent)
                                     ),
                                     radius = size.width * 0.75f,
                                     center = androidx.compose.ui.geometry.Offset(size.width * 0.95f, size.height * 0.52f)
                                 )
                                 drawCircle(
                                     brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                        listOf(androidx.compose.ui.graphics.Color(0x34D399).copy(alpha = g * 0.7f), androidx.compose.ui.graphics.Color.Transparent)
+                                        listOf(tvPalette.spotGreen.copy(alpha = g * 0.7f), androidx.compose.ui.graphics.Color.Transparent)
                                     ),
                                     radius = size.width * 0.7f,
                                     center = androidx.compose.ui.geometry.Offset(size.width * 0.2f, size.height * 0.95f)
@@ -892,34 +870,28 @@ viewModel.mpv.setMute(savedMute)
                                             .drawBehind {
                                                 drawRect(
                                                     androidx.compose.ui.graphics.Brush.verticalGradient(
-                                                        if (canvasDark) listOf(
-                                                            androidx.compose.ui.graphics.Color(0xFF0B0F1A),
-                                                            androidx.compose.ui.graphics.Color(0xFF151B2C)
-                                                        ) else listOf(
-                                                            androidx.compose.ui.graphics.Color(0xFFE9EEF7),
-                                                            androidx.compose.ui.graphics.Color(0xFFF9FBFF)
-                                                        )
+                                                        listOf(tvPalette.canvasStart, tvPalette.canvasEnd)
                                                     )
                                                 )
                                                 // 浅色画布光斑需更明显：白底上淡光斑易被吞没，玻璃无内容可透会失去质感
                                                 val g = if (canvasDark) 0.32f else 0.24f
                                                 drawCircle(
                                                     brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                                        listOf(androidx.compose.ui.graphics.Color(0x5B8CFF).copy(alpha = g), androidx.compose.ui.graphics.Color.Transparent)
+                                                        listOf(tvPalette.spotBlue.copy(alpha = g), androidx.compose.ui.graphics.Color.Transparent)
                                                     ),
                                                     radius = size.width * 0.85f,
                                                     center = androidx.compose.ui.geometry.Offset(size.width * 0.15f, size.height * 0.12f)
                                                 )
                                                 drawCircle(
                                                     brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                                        listOf(androidx.compose.ui.graphics.Color(0xC084FC).copy(alpha = g * 0.85f), androidx.compose.ui.graphics.Color.Transparent)
+                                                        listOf(tvPalette.spotPurple.copy(alpha = g * 0.85f), androidx.compose.ui.graphics.Color.Transparent)
                                                     ),
                                                     radius = size.width * 0.75f,
                                                     center = androidx.compose.ui.geometry.Offset(size.width * 0.95f, size.height * 0.52f)
                                                 )
                                                 drawCircle(
                                                     brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                                        listOf(androidx.compose.ui.graphics.Color(0x34D399).copy(alpha = g * 0.7f), androidx.compose.ui.graphics.Color.Transparent)
+                                                        listOf(tvPalette.spotGreen.copy(alpha = g * 0.7f), androidx.compose.ui.graphics.Color.Transparent)
                                                     ),
                                                     radius = size.width * 0.7f,
                                                     center = androidx.compose.ui.geometry.Offset(size.width * 0.2f, size.height * 0.95f)
@@ -934,10 +906,10 @@ viewModel.mpv.setMute(savedMute)
                                         com.iptv.scanner.editor.pro.ui.theme.LocalGlassOnCanvas provides true
                                     ) {
                                         val aptvScheme = MaterialTheme.colorScheme.copy(
-                                            primary = AptvAccent,
-                                            onPrimary = Color.White,
-                                            primaryContainer = AptvAccent.copy(alpha = 0.15f),
-                                            onPrimaryContainer = AptvAccent,
+                                            primary = tvPalette.accentGraphic,
+                                            onPrimary = tvPalette.accentOn,
+                                            primaryContainer = tvPalette.accentFill.copy(alpha = 0.15f),
+                                            onPrimaryContainer = tvPalette.accentText,
                                             // 玻璃页面上次要文字提亮，保证磨砂底上的可读性
                                             onSurfaceVariant = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.78f),
                                         )
@@ -981,6 +953,20 @@ viewModel.mpv.setMute(savedMute)
                 }
             } else {
                 // ---- 横屏模式（手机横屏 + TV横屏统一） ----
+
+                // 视频宽高比：用于 SurfaceView 比例保持（解决视频被拉长铺满的问题）。
+                // 根因：vo=mediacodec_embed 直接用 MediaCodec 渲染到 Surface buffer，不经过
+                // GPU 渲染管线，mpv 的 keepaspect 选项不生效；Surface buffer 会按 SurfaceView
+                // 尺寸拉伸视频。用 aspectRatio 限制 SurfaceView 外框，让 buffer 匹配视频比例。
+                // 仅横屏/TV 需要：放到竖屏分支外会让 videoWidth/videoHeight 的变化在竖屏
+                // 换台时触发整页重组，故只在横屏分支内按需订阅。
+                val videoWidth by player.videoWidth.collectAsState()
+                val videoHeight by player.videoHeight.collectAsState()
+                val aspectRatio = if (videoWidth > 0 && videoHeight > 0) {
+                    videoWidth.toFloat() / videoHeight.toFloat()
+                } else {
+                    16f / 9f  // 默认 16:9（未加载时）
+                }
 
                 if (multiViewState.active) {
                     // ---- 多画面模式：沉浸式侧边栏 + 底栏 ----

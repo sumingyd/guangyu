@@ -21,7 +21,9 @@
         "player": "#1a1a1a",
         "player_placeholder": "#1a1a1a",
         "overlay": "rgba(0, 0, 0, 0.55)",
-        "tooltip": "#2a2a2a"
+        "tooltip": "#2a2a2a",
+        "canvas_start": "#0b0f1a",
+        "canvas_end": "#151b2c"
       },
       "text": {
         "primary": "#ffffff",
@@ -61,7 +63,10 @@
         "base": "#4a7eff",
         "hover": "#3a6eff",
         "pressed": "#2a5eff",
-        "on": "#ffffff"
+        "on": "#ffffff",
+        "text": "#ff8a9b",
+        "graphic": "#ff8a9b",
+        "fill": "#c42a3f"
       },
       "focus": {
         "indicator": "#6a9eff",
@@ -82,7 +87,8 @@
         "info": "#2196F3",
         "favorite": "#FFD700",
         "favorite_background": "rgba(255, 215, 0, 0.12)",
-        "favorite_border": "rgba(255, 215, 0, 0.5)"
+        "favorite_border": "rgba(255, 215, 0, 0.5)",
+        "warning_text": "#ffb74d"
       },
       "slider": {
         "track": "#555555",
@@ -117,7 +123,15 @@
       },
       "effect": {
         "neumorphic_light": "#323232",
-        "neumorphic_dark": "#0a0a0a"
+        "neumorphic_dark": "#0a0a0a",
+        "glass_fill": "rgba(0, 0, 0, 0.25)",
+        "glass_fill_soft": "rgba(255, 255, 255, 0.14)",
+        "glass_border": "rgba(255, 255, 255, 0.30)",
+        "glass_gloss": "rgba(255, 255, 255, 0.12)",
+        "glass_shadow": "rgba(0, 0, 0, 0.10)",
+        "spot_blue": "#5b8cff",
+        "spot_purple": "#c084fc",
+        "spot_green": "#34d399"
       },
       "metrics": {
         "window_opacity": 140
@@ -133,7 +147,9 @@
         "player": "#e0e0e0",
         "player_placeholder": "#e0e0e0",
         "overlay": "rgba(0, 0, 0, 0.35)",
-        "tooltip": "#ffffff"
+        "tooltip": "#ffffff",
+        "canvas_start": "#e9eef7",
+        "canvas_end": "#f9fbff"
       },
       "text": {
         "primary": "#333333",
@@ -173,7 +189,10 @@
         "base": "#2a6eff",
         "hover": "#1a5eff",
         "pressed": "#0a4eff",
-        "on": "#ffffff"
+        "on": "#ffffff",
+        "text": "#a81c34",
+        "graphic": "#c42a3f",
+        "fill": "#c42a3f"
       },
       "focus": {
         "indicator": "#2a6eff",
@@ -194,7 +213,8 @@
         "info": "#2196F3",
         "favorite": "#FFD700",
         "favorite_background": "rgba(255, 215, 0, 0.12)",
-        "favorite_border": "rgba(255, 215, 0, 0.5)"
+        "favorite_border": "rgba(255, 215, 0, 0.5)",
+        "warning_text": "#8a5200"
       },
       "slider": {
         "track": "#c0c0c0",
@@ -229,7 +249,15 @@
       },
       "effect": {
         "neumorphic_light": "#ffffff",
-        "neumorphic_dark": "#d0d0d0"
+        "neumorphic_dark": "#d0d0d0",
+        "glass_fill": "rgba(0, 0, 0, 0.05)",
+        "glass_fill_soft": "rgba(0, 0, 0, 0.06)",
+        "glass_border": "rgba(82, 91, 107, 0.16)",
+        "glass_gloss": "rgba(255, 255, 255, 0.30)",
+        "glass_shadow": "rgba(0, 0, 0, 0.05)",
+        "spot_blue": "#5b8cff",
+        "spot_purple": "#c084fc",
+        "spot_green": "#34d399"
       },
       "metrics": {
         "window_opacity": 160

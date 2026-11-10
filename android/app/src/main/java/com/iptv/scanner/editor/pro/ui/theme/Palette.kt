@@ -2,6 +2,9 @@ package com.iptv.scanner.editor.pro.ui.theme
 
 import android.content.Context
 import android.util.Log
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import org.json.JSONObject
 
@@ -60,6 +63,14 @@ data class PaletteTokens(
     val accentHover: Color,
     val accentPressed: Color,
     val accentOn: Color,
+    /** 强调色「当文字」：浅色主题用更深的值（≥4.5:1），深色主题用更亮的值 */
+    val accentText: Color,
+    /** 强调色「当图标/图形」：只要求 3.0:1，比 accentText 略亮/饱和度更高 */
+    val accentGraphic: Color,
+    /** 强调色「当底、上面放白字」：深到白字能到 4.5:1 */
+    val accentFill: Color,
+    /** warning 当文字/图形用（比 warning 本身更深，浅色底上可达 4.5:1） */
+    val warningText: Color,
     val focusIndicator: Color,
     val focusRing: Color,
 
@@ -90,7 +101,23 @@ data class PaletteTokens(
 
     val shadowLight: Color,
     val shadowDark: Color,
-    val shadowSubtle: Color
+    val shadowSubtle: Color,
+
+    /** 播放页/横屏首页环境画布渐变的起止色（深色为深蓝黑，浅色为冷白） */
+    val canvasStart: Color,
+    val canvasEnd: Color,
+
+    /** 玻璃胶囊（搜索框/小按钮/迷你底栏预览）的通用材质 token，按主题自带透明度 */
+    val glassFill: Color,
+    val glassFillSoft: Color,
+    val glassBorder: Color,
+    val glassGloss: Color,
+    val glassShadow: Color,
+
+    /** 画布装饰光斑（纯装饰，不承载信息） */
+    val spotBlue: Color,
+    val spotPurple: Color,
+    val spotGreen: Color
 )
 
 /** 内置回退值（与 themes/palette.json 的 dark 模式一致）。 */
@@ -137,6 +164,11 @@ internal val DEFAULT_DARK = PaletteTokens(
     accentHover = Color(0xFF3A6EFF),
     accentPressed = Color(0xFF2A5EFF),
     accentOn = Color(0xFFFFFFFF),
+    // 三用途强调色（深色主题）：文字/图形用亮粉，承白字的底用深红
+    accentText = Color(0xFFFF8A9B),
+    accentGraphic = Color(0xFFFF8A9B),
+    accentFill = Color(0xFFC42A3F),
+    warningText = Color(0xFFFFB74D),
     focusIndicator = Color(0xFF6A9EFF),
     focusRing = Color(0x4DFFFFFF),
 
@@ -167,7 +199,20 @@ internal val DEFAULT_DARK = PaletteTokens(
 
     shadowLight = Color(0x0DFFFFFF),
     shadowDark = Color(0x66000000),
-    shadowSubtle = Color(0x4D000000)
+    shadowSubtle = Color(0x4D000000),
+
+    canvasStart = Color(0xFF0B0F1A),
+    canvasEnd = Color(0xFF151B2C),
+
+    glassFill = Color(0x40000000),
+    glassFillSoft = Color(0x24FFFFFF),
+    glassBorder = Color(0x4DFFFFFF),
+    glassGloss = Color(0x1FFFFFFF),
+    glassShadow = Color(0x1A000000),
+
+    spotBlue = Color(0xFF5B8CFF),
+    spotPurple = Color(0xFFC084FC),
+    spotGreen = Color(0xFF34D399)
 )
 
 /** 内置回退值（与 themes/palette.json 的 light 模式一致）。 */
@@ -214,6 +259,11 @@ internal val DEFAULT_LIGHT = PaletteTokens(
     accentHover = Color(0xFF1A5EFF),
     accentPressed = Color(0xFF0A4EFF),
     accentOn = Color(0xFFFFFFFF),
+    // 三用途强调色（浅色主题）：文字/图形加深到在浅底上达标，承白字的底用深红
+    accentText = Color(0xFFA81C34),
+    accentGraphic = Color(0xFFC42A3F),
+    accentFill = Color(0xFFC42A3F),
+    warningText = Color(0xFF8A5200),
     focusIndicator = Color(0xFF2A6EFF),
     focusRing = Color(0x33000000),
 
@@ -244,7 +294,20 @@ internal val DEFAULT_LIGHT = PaletteTokens(
 
     shadowLight = Color(0xCCFFFFFF),
     shadowDark = Color(0x1F000000),
-    shadowSubtle = Color(0x14000000)
+    shadowSubtle = Color(0x14000000),
+
+    canvasStart = Color(0xFFE9EEF7),
+    canvasEnd = Color(0xFFF9FBFF),
+
+    glassFill = Color(0x0D000000),
+    glassFillSoft = Color(0x0F000000),
+    glassBorder = Color(0x29525B6B),
+    glassGloss = Color(0x4DFFFFFF),
+    glassShadow = Color(0x0D000000),
+
+    spotBlue = Color(0xFF5B8CFF),
+    spotPurple = Color(0xFFC084FC),
+    spotGreen = Color(0xFF34D399)
 )
 
 /**
@@ -254,14 +317,15 @@ internal val DEFAULT_LIGHT = PaletteTokens(
  * Compose 子树重组，因此读取方总能拿到新值。
  */
 object TvColors {
-    @Volatile
-    var isDark: Boolean = true
+    // 用 Compose 快照状态承载：UI 层大量代码直接读 [p]/[isDark]（非 Composable 参数、
+    // draw 回调、remember 外部等）。若只是普通字段，主题切换时这些读取点不会失效，
+    // 页面会停留在旧配色上（表现为「切成浅色没生效」）。改成快照状态后，主题切换会
+    // 让所有读取点在同一帧内一起重组/重绘。
+    var isDark: Boolean by mutableStateOf(true)
 
-    @Volatile
-    var dark: PaletteTokens = DEFAULT_DARK
+    var dark: PaletteTokens by mutableStateOf(DEFAULT_DARK)
 
-    @Volatile
-    var light: PaletteTokens = DEFAULT_LIGHT
+    var light: PaletteTokens by mutableStateOf(DEFAULT_LIGHT)
 
     val p: PaletteTokens
         get() = if (isDark) dark else light
@@ -360,6 +424,10 @@ object PaletteLoader {
             accentHover = c("accent.hover", d.accentHover),
             accentPressed = c("accent.pressed", d.accentPressed),
             accentOn = c("accent.on", d.accentOn),
+            accentText = c("accent.text", d.accentText),
+            accentGraphic = c("accent.graphic", d.accentGraphic),
+            accentFill = c("accent.fill", d.accentFill),
+            warningText = c("state.warning_text", d.warningText),
             focusIndicator = c("focus.indicator", d.focusIndicator),
             focusRing = c("focus.ring", d.focusRing),
 
@@ -390,7 +458,20 @@ object PaletteLoader {
 
             shadowLight = c("shadow.light", d.shadowLight),
             shadowDark = c("shadow.dark", d.shadowDark),
-            shadowSubtle = c("shadow.subtle", d.shadowSubtle)
+            shadowSubtle = c("shadow.subtle", d.shadowSubtle),
+
+            canvasStart = c("background.canvas_start", d.canvasStart),
+            canvasEnd = c("background.canvas_end", d.canvasEnd),
+
+            glassFill = c("effect.glass_fill", d.glassFill),
+            glassFillSoft = c("effect.glass_fill_soft", d.glassFillSoft),
+            glassBorder = c("effect.glass_border", d.glassBorder),
+            glassGloss = c("effect.glass_gloss", d.glassGloss),
+            glassShadow = c("effect.glass_shadow", d.glassShadow),
+
+            spotBlue = c("effect.spot_blue", d.spotBlue),
+            spotPurple = c("effect.spot_purple", d.spotPurple),
+            spotGreen = c("effect.spot_green", d.spotGreen)
         )
     }
 

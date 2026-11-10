@@ -115,6 +115,12 @@ internal fun TvSplitLayout(
     val currentIdx by viewModel.currentIdx.collectAsState()
     val paused by viewModel.mpv.paused.collectAsState()
     val fileLoaded by viewModel.mpv.fileLoaded.collectAsState()
+    // 曾成功起播标记：换台加载中 fileLoaded 会短暂为 false，
+    // 手势层不能因此整块移除（否则上下滑切台被禁用）。
+    var hasEverLoaded by remember { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(fileLoaded) {
+        if (fileLoaded) hasEverLoaded = true
+    }
     val muted by viewModel.mpv.muted.collectAsState()
     val currentEpg by viewModel.currentEpg.collectAsState()
 
@@ -195,33 +201,27 @@ internal fun TvSplitLayout(
             .drawBehind {
                 drawRect(
                     androidx.compose.ui.graphics.Brush.verticalGradient(
-                        if (canvasDark) listOf(
-                            androidx.compose.ui.graphics.Color(0xFF0B0F1A),
-                            androidx.compose.ui.graphics.Color(0xFF151B2C)
-                        ) else listOf(
-                            tvPalette.textTertiary,
-                            tvPalette.textPrimary
-                        )
+                        listOf(tvPalette.canvasStart, tvPalette.canvasEnd)
                     )
                 )
                 val g = if (canvasDark) 0.32f else 0.24f
                 drawCircle(
                     brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                        listOf(androidx.compose.ui.graphics.Color(0x5B8CFF).copy(alpha = g), androidx.compose.ui.graphics.Color.Transparent)
+                        listOf(tvPalette.spotBlue.copy(alpha = g), androidx.compose.ui.graphics.Color.Transparent)
                     ),
                     radius = size.width * 0.85f,
                     center = androidx.compose.ui.geometry.Offset(size.width * 0.15f, size.height * 0.12f)
                 )
                 drawCircle(
                     brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                        listOf(androidx.compose.ui.graphics.Color(0xC084FC).copy(alpha = g * 0.85f), androidx.compose.ui.graphics.Color.Transparent)
+                        listOf(tvPalette.spotPurple.copy(alpha = g * 0.85f), androidx.compose.ui.graphics.Color.Transparent)
                     ),
                     radius = size.width * 0.75f,
                     center = androidx.compose.ui.geometry.Offset(size.width * 0.95f, size.height * 0.52f)
                 )
                 drawCircle(
                     brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                        listOf(androidx.compose.ui.graphics.Color(0x34D399).copy(alpha = g * 0.7f), androidx.compose.ui.graphics.Color.Transparent)
+                        listOf(tvPalette.spotGreen.copy(alpha = g * 0.7f), androidx.compose.ui.graphics.Color.Transparent)
                     ),
                     radius = size.width * 0.7f,
                     center = androidx.compose.ui.geometry.Offset(size.width * 0.2f, size.height * 0.95f)
@@ -291,7 +291,7 @@ internal fun TvSplitLayout(
                     ) {
                         Text(
                             text = displayInfo.group,
-                            color = AptvAccent,
+                            color = tvPalette.accentText,
                             fontSize = 11.sp,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                             maxLines = 1
@@ -357,7 +357,9 @@ internal fun TvSplitLayout(
                 ) {
                     primaryPlayer()
                     // 视频触控层：单击暂停/恢复 + 双击全屏 + 上下滑切台（与竖屏一致）
-                    if (fileLoaded) {
+                    // 门控放宽：只有「从未起播」才不挂手势层；换台加载中仍允许上下滑切台，
+                    // 单击暂停在未起播时忽略。
+                    if (fileLoaded || hasEverLoaded) {
                         val haptic = LocalHapticFeedback.current
                         Box(
                             modifier = Modifier
@@ -365,6 +367,7 @@ internal fun TvSplitLayout(
                                 .pointerInput(Unit) {
                                     detectTapGestures(
                                         onTap = {
+                                            if (!viewModel.mpv.fileLoaded.value) return@detectTapGestures
                                             if (viewModel.mpv.paused.value) viewModel.mpv.setPause(false)
                                             else viewModel.mpv.setPause(true)
                                         },
@@ -421,7 +424,7 @@ internal fun TvSplitLayout(
                             .fillMaxWidth()
                             .padding(top = 6.dp)
                             .height(1.dp)
-                            .background(Color(0x1FFFFFFF))
+                            .background(tvPalette.borderSubtle)
                     )
 
                     // 行2：最近节目单（当前节目 LIVE + 后续预告）
@@ -433,7 +436,7 @@ internal fun TvSplitLayout(
                             .fillMaxWidth()
                             .padding(top = 6.dp)
                             .height(1.dp)
-                            .background(Color(0x1FFFFFFF))
+                            .background(tvPalette.borderSubtle)
                     )
 
                     // 行3：实时频谱（与右侧信息 Tab 共用采样，引用计数共存）
@@ -445,7 +448,7 @@ internal fun TvSplitLayout(
                             .fillMaxWidth()
                             .padding(top = 6.dp)
                             .height(1.dp)
-                            .background(Color(0x1FFFFFFF))
+                            .background(tvPalette.borderSubtle)
                     )
 
                     // 行4：单行核心控制（上一台/播放/下一台/静音/停止 | 收藏/工具/设置/全屏）
@@ -536,6 +539,14 @@ private fun SplitSidePanel(viewModel: AppViewModel) {
     val player = viewModel.mpv
     val fileLoaded by player.fileLoaded.collectAsState()
 
+    // 占位条件对齐竖屏 PlayerDynamicContent：只有「首次进入且从未起播」才显示「未在播放」。
+    // 换台时 mpv 会短暂置 fileLoaded=false，若整块替换成加载态，分屏右栏的 tab/列表子树
+    // 会被销毁重建，导致滚动位置丢失与整块重绘。
+    var hasEverLoaded by remember { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(fileLoaded) {
+        if (fileLoaded) hasEverLoaded = true
+    }
+
     // 本地文件 vs 订阅频道（与竖屏 PortraitPlayerDynamicContent 一致）
     val isLocalFile = currentChannel == null || currentIdx < 0
 
@@ -577,7 +588,7 @@ private fun SplitSidePanel(viewModel: AppViewModel) {
                 Icon(
                     Icons.Default.Cast,
                     contentDescription = "投屏",
-                    tint = if (dlnaConnected != null) AptvAccent else oc.iconTint,
+                    tint = if (dlnaConnected != null) tvPalette.accentGraphic else oc.iconTint,
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -589,9 +600,10 @@ private fun SplitSidePanel(viewModel: AppViewModel) {
             }
         }
 
-        // 分段控件：iOS 白亮玻璃凸起选中态（与竖屏播放页下方 TAB 一致）
+        // 分段控件：选中态用主题描边/底色（原实现写死白色半透明，
+        // 浅色主题下白底白字不可读）
         Surface(
-            color = Color.White.copy(alpha = 0.08f),
+            color = tvPalette.borderSubtle,
             shape = RoundedCornerShape(12.dp),
             modifier = Modifier
                 .fillMaxWidth()
@@ -611,11 +623,11 @@ private fun SplitSidePanel(viewModel: AppViewModel) {
                             .clip(tabShape)
                             .then(
                                 if (isSelected) Modifier
-                                    .background(Color.White.copy(alpha = 0.20f), tabShape)
-                                    .border(1.dp, Color.White.copy(alpha = 0.45f), tabShape)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant, tabShape)
+                                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.65f), tabShape)
                                     .background(
                                         androidx.compose.ui.graphics.Brush.verticalGradient(
-                                            0f to Color.White.copy(alpha = 0.22f),
+                                            0f to tvPalette.glassGloss,
                                             1f to Color.Transparent
                                         ),
                                         tabShape
@@ -629,7 +641,7 @@ private fun SplitSidePanel(viewModel: AppViewModel) {
                     ) {
                         Text(
                             text = label,
-                            color = if (isSelected) AptvAccent else oc.textSecondary,
+                            color = if (isSelected) tvPalette.accentText else oc.textSecondary,
                             fontSize = 13.sp,
                             fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
                             textAlign = TextAlign.Center,
@@ -642,7 +654,7 @@ private fun SplitSidePanel(viewModel: AppViewModel) {
 
         // 内容区：复用竖屏播放页视频下方4大内容
         Box(modifier = Modifier.fillMaxSize()) {
-            if (!fileLoaded) {
+            if (!fileLoaded && !hasEverLoaded) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
                         text = "未在播放",
@@ -725,8 +737,8 @@ private fun SplitBadgeRow(viewModel: AppViewModel, isFavorite: Boolean) {
     val statusBadge = when {
         !fileLoaded -> null
         playbackState.mode == PlayMode.TIMESHIFT -> "时移" to tvPalette.info
-        showExitCatchup -> "回看" to tvPalette.warning
-        else -> "直播" to AptvAccent
+        showExitCatchup -> "回看" to tvPalette.warningText
+        else -> "直播" to tvPalette.accentText
     }
 
     LazyRow(
@@ -750,16 +762,17 @@ private fun SplitBadgeRow(viewModel: AppViewModel, isFavorite: Boolean) {
     }
 }
 
-/** 徽章胶囊：白微透轻玻璃底 + 语义色文字（暗玻璃面板内使用） */
+/** 徽章胶囊：轻玻璃底 + 语义色文字（随主题：深色白字 / 浅色深字） */
 @Composable
-private fun SplitBadge(text: String, accent: Boolean = false, tint: Color = Color(0xCCFFFFFF)) {
+private fun SplitBadge(text: String, accent: Boolean = false, tint: Color = Color.Unspecified) {
+    val fg = if (tint == Color.Unspecified) tvPalette.textPrimary else tint
     Surface(
-        color = if (accent) AptvAccent.copy(alpha = 0.22f) else tint.copy(alpha = 0.18f),
+        color = if (accent) AptvAccent.copy(alpha = 0.22f) else fg.copy(alpha = 0.18f),
         shape = RoundedCornerShape(4.dp)
     ) {
         Text(
             text = text,
-            color = if (accent) AptvAccent else tint,
+            color = if (accent) tvPalette.accentText else fg,
             fontSize = 10.sp,
             fontWeight = FontWeight.Medium,
             modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
@@ -834,14 +847,14 @@ private fun SplitEpgBlock(
                             .width(90.dp)
                             .height(3.dp)
                             .clip(RoundedCornerShape(1.5.dp))
-                            .background(Color(0x30FFFFFF))
+                            .background(tvPalette.borderSubtle)
                     ) {
                         Box(
                             modifier = Modifier
                                 .fillMaxHeight()
                                 .fillMaxWidth(progress)
                                 .clip(RoundedCornerShape(1.5.dp))
-                                .background(AptvAccent)
+                                .background(tvPalette.accentGraphic)
                         )
                     }
                 }
@@ -883,37 +896,74 @@ private fun SplitEpgBlock(
  */
 @Composable
 private fun SplitSpectrumBlock(viewModel: AppViewModel) {
+    val oc = rememberPlayerOverlayColors()
     val spectrum by viewModel.audioSpectrum.collectAsState()
     val spectrumError by viewModel.audioSpectrumError.collectAsState()
     val context = LocalContext.current
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    // 用户拒绝后不再自动弹窗，改为「点击授权」引导
+    var denied by remember { mutableStateOf(false) }
+    var requestedOnce by remember { mutableStateOf(false) }
+
+    fun hasPermission(): Boolean =
+        androidx.core.content.ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.RECORD_AUDIO
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) viewModel.startSpectrumSampling()
-        else viewModel.setAudioSpectrumError("未授予麦克风权限\n系统 Visualizer 接口需要该权限才能获取真实频谱")
-    }
-    DisposableEffect(Unit) {
-        val granted = androidx.core.content.ContextCompat.checkSelfPermission(
-            context, android.Manifest.permission.RECORD_AUDIO
-        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-        if (granted) viewModel.startSpectrumSampling()
-        else permLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
-        onDispose { viewModel.stopSpectrumSampling() }
+        if (granted) {
+            denied = false
+            viewModel.startSpectrumSampling()
+        } else {
+            denied = true
+        }
     }
 
-    if (spectrumError.isNotEmpty()) {
+    // 进入分屏播放页即初始化频谱（不依赖是否打开过「信息」Tab）。
+    // 根因：首帧（onCreate → setContent）阶段 Activity 尚未 RESUMED，此时直接
+    // launch 权限申请会被系统丢弃，采样永远起不来，频谱只剩「无权限」。
+    // 因此先等 RESUMED 再申请；已授权则直接开始采样。
+    DisposableEffect(Unit) {
+        onDispose { viewModel.stopSpectrumSampling() }
+    }
+    LaunchedEffect(Unit) {
+        if (hasPermission()) {
+            viewModel.startSpectrumSampling()
+            return@LaunchedEffect
+        }
+        var waited = 0
+        while (waited < 3000 &&
+            !lifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+        ) {
+            delay(100)
+            waited += 100
+        }
+        if (!requestedOnce) {
+            requestedOnce = true
+            permLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    if (spectrumError.isNotEmpty() || denied) {
+        // 不用「无权限」这类生硬提示：给出可点击的授权引导；点一下即重新申请/重试
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 6.dp)
-                .height(40.dp)
+                .height(48.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .background(Color(0x14000000)),
+                .background(tvPalette.borderSubtle)
+                .clickable {
+                    if (hasPermission()) viewModel.startSpectrumSampling()
+                    else permLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                },
             contentAlignment = Alignment.Center
         ) {
             Text(
-                text = spectrumError.replace("\n", " · "),
-                color = Color(0x99FFFFFF),
+                text = "频谱不可用 · 点按授权麦克风",
+                color = oc.textSecondary,
                 fontSize = 10.sp,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(horizontal = 10.dp)
@@ -925,9 +975,11 @@ private fun SplitSpectrumBlock(viewModel: AppViewModel) {
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 6.dp)
-                .height(40.dp)
+                // 默认 48dp（@240dpi ≈ 72px）：40dp 在分屏里偏矮，加上原始振幅小，
+                // 视觉上退化成一排虚线
+                .height(48.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .background(Color(0x14000000))
+                .background(tvPalette.borderSubtle)
         )
     }
 }

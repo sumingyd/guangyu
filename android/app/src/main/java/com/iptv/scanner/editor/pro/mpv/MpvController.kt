@@ -80,6 +80,23 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     private val _fileLoaded = MutableStateFlow(false)
     override val fileLoaded: StateFlow<Boolean> = _fileLoaded.asStateFlow()
 
+    /** mpv 实际生效的 hwdec（hwdec-current），用于设置页展示，避免用户不知道自己在软解 */
+    private val _actualHwdec = MutableStateFlow("")
+    val actualHwdec: StateFlow<String> = _actualHwdec.asStateFlow()
+
+    /** 硬解崩溃黑名单当前是否生效 */
+    private val _hwdecBlacklisted = MutableStateFlow(false)
+    val hwdecBlacklisted: StateFlow<Boolean> = _hwdecBlacklisted.asStateFlow()
+
+    /** VO 健康检查（每个文件只做一次） */
+    private var voHealthCheckRunnable: Runnable? = null
+
+    /** 稳定硬解 N 分钟后解除崩溃黑名单 */
+    private var hwdecGraceRunnable: Runnable? = null
+
+    /** 本会话内“会话级软解降级”的重试次数上限，防止在坏设备上反复崩溃 */
+    private var hwdecRetryCount = 0
+
     private val _currentChapter = MutableStateFlow(-1)
     override val currentChapter: StateFlow<Int> = _currentChapter.asStateFlow()
 
@@ -158,8 +175,15 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
             MPVLib.observeProperty("speed", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
             MPVLib.observeProperty("path", MPVLib.MpvFormat.MPV_FORMAT_STRING)
             MPVLib.observeProperty("sub-visibility", MPVLib.MpvFormat.MPV_FORMAT_FLAG)
+            MPVLib.observeProperty("hwdec-current", MPVLib.MpvFormat.MPV_FORMAT_STRING)
         } catch (e: Throwable) {
             Log.w(TAG, "observeProperty failed: ${e.message}")
+        }
+
+        try {
+            _hwdecBlacklisted.value = UserPrefs.getInstance().isHwdecBlacklisted()
+        } catch (e: Throwable) {
+            Log.w(TAG, "attach: read hwdec blacklist failed: ${e.message}")
         }
 
         try {
@@ -182,6 +206,7 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 MPVLib.observeProperty("speed", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
                 MPVLib.observeProperty("path", MPVLib.MpvFormat.MPV_FORMAT_STRING)
                 MPVLib.observeProperty("sub-visibility", MPVLib.MpvFormat.MPV_FORMAT_FLAG)
+                MPVLib.observeProperty("hwdec-current", MPVLib.MpvFormat.MPV_FORMAT_STRING)
             } catch (e: Throwable) {
                 Log.w(TAG, "onInstanceRecreated: observeProperty failed: ${e.message}")
             }
@@ -301,6 +326,40 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
         return if (hasFile) "reloaded" else null
     }
 
+    /**
+     * 如果当前处于“会话级软解降级”，解除降级并重新尝试硬解。
+     *
+     * 旧实现里 sessionHwdecOverride 一旦置位在进程内永不恢复，
+     * 用户手动改回硬解 / 换台都救不回来（表现为“MPV 一直卡，ExoPlayer 不卡”）。
+     * 这里加一个进程内重试预算，避免在真正会崩的设备上反复触发。
+     */
+    fun retryHardwareDecodeIfDegraded(trigger: String) {
+        if (!MPVView.hasSessionHwdecOverride()) return
+        if (hwdecRetryCount >= MAX_HWDEC_RETRIES_PER_SESSION) {
+            Log.w(TAG, "retryHardwareDecode skipped ($trigger): retry budget exhausted ($hwdecRetryCount)")
+            return
+        }
+        hwdecRetryCount++
+        MPVView.clearSessionHwdecOverride(trigger)
+        val desired = try { UserPrefs.getInstance().getHwdec() } catch (_: Throwable) { MPVView.DEFAULT_HWDEC }
+        val effective = MPVView.sanitizeHwdec(desired)
+        _hwdecCache = effective
+        Log.w(TAG, "retryHardwareDecode: trigger=$trigger, retry=$hwdecRetryCount, desired=$desired, effective=$effective")
+        if (effective == "no") return
+        postOnUiThread {
+            try {
+                MPVLib.setPropertyString("hwdec", effective)
+            } catch (e: Throwable) {
+                Log.w(TAG, "retryHardwareDecode: set hwdec failed: ${e.message}")
+            }
+        }
+    }
+
+    /** 用户手动切换 hwdec：重置重试预算，给一次干净的重试机会 */
+    fun resetHwdecRetryBudget() {
+        hwdecRetryCount = 0
+    }
+
     override fun setHardwareDecode(enabled: Boolean): Boolean {
         val currentVo = try { _voCache } catch (e: Throwable) { "gpu" }
 
@@ -398,6 +457,100 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
         }, delayMs)
     }
 
+    /**
+     * VO 健康检查（每个文件最多一次）：
+     * FILE_LOADED 后 1.5s，如果有视频轨但 `vo-configured` 仍不是 yes，
+     * 说明 VO 没真正接管 Surface（表现为“只有声音没画面”），
+     * 自动重建一次 VO 并重新 loadfile —— 等价于用户手动“切一次 VO”。
+     */
+    private fun scheduleVoHealthCheck() {
+        cancelVoHealthCheck()
+        val runnable = Runnable {
+            voHealthCheckRunnable = null
+            try {
+                val videoFormat = MPVLib.getPropertyString("video-format") ?: ""
+                if (videoFormat.isEmpty()) {
+                    Log.i(TAG, "vo health check: no video track, skip")
+                    return@Runnable
+                }
+                val configured = try {
+                    MPVLib.getPropertyBoolean("vo-configured")
+                } catch (_: Throwable) {
+                    null
+                }
+                if (configured == true) {
+                    Log.i(TAG, "vo health check: ok (video-format=$videoFormat)")
+                    return@Runnable
+                }
+                Log.w(TAG, "vo health check: video-format=$videoFormat but vo-configured=$configured, rebuilding VO once")
+                suppressFileError()
+                mpvView?.reattachSurfaceWithVo(_voCache)
+                val path = try { MPVLib.getPropertyString("path") } catch (_: Throwable) { null }
+                if (!path.isNullOrEmpty()) {
+                    mpvView?.playFile(path)
+                }
+                clearSuppressFileError(1200)
+            } catch (e: Throwable) {
+                Log.w(TAG, "vo health check failed: ${e.message}")
+            }
+        }
+        voHealthCheckRunnable = runnable
+        mpvView?.asView()?.postDelayed(runnable, VO_HEALTH_CHECK_DELAY_MS)
+    }
+
+    private fun cancelVoHealthCheck() {
+        voHealthCheckRunnable?.let { mpvView?.asView()?.removeCallbacks(it) }
+        voHealthCheckRunnable = null
+    }
+
+    /**
+     * 硬解稳定运行 N 分钟后确认这部分设备可硬解，解除崩溃黑名单。
+     * （旧实现只写不清，黑名单一旦写入就永久软解。）
+     */
+    private fun scheduleHwdecGraceClear() {
+        hwdecGraceRunnable?.let { mpvView?.asView()?.removeCallbacks(it) }
+        val runnable = Runnable {
+            hwdecGraceRunnable = null
+            try {
+                if (!_fileLoaded.value) return@Runnable
+                val current = _actualHwdec.value.ifEmpty { MPVLib.getPropertyString("hwdec-current") ?: "" }
+                if (current.isEmpty() || current == "no") return@Runnable
+                hwdecRetryCount = 0
+                if (UserPrefs.getInstance().isHwdecBlacklisted()) {
+                    UserPrefs.getInstance().setHwdecBlacklisted(false)
+                    _hwdecBlacklisted.value = false
+                    Log.w(TAG, "hwdec blacklist cleared after ${HWDEC_GRACE_MS / 1000}s stable hardware playback ($current)")
+                } else {
+                    Log.i(TAG, "hwdec stable for ${HWDEC_GRACE_MS / 1000}s ($current), nothing to clear")
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "hwdec grace clear failed: ${e.message}")
+            }
+        }
+        hwdecGraceRunnable = runnable
+        mpvView?.asView()?.postDelayed(runnable, HWDEC_GRACE_MS)
+    }
+
+    /**
+     * 用户在设置页显式选择了硬解：解除崩溃黑名单并给一次干净的重试机会。
+     * 若该机型真的会崩，NativeCrashLogger 会在下次启动重新写入黑名单。
+     */
+    fun confirmHardwareDecodeSelection(hwdec: String) {
+        if (hwdec == "no") return
+        hwdecRetryCount = 0
+        MPVView.confirmHardwareDecodeByUser()
+        MPVView.clearSessionHwdecOverride("user selected hwdec=$hwdec")
+        try {
+            if (UserPrefs.getInstance().isHwdecBlacklisted()) {
+                UserPrefs.getInstance().setHwdecBlacklisted(false)
+                Log.w(TAG, "user selected hwdec=$hwdec, crash blacklist cleared")
+            }
+            _hwdecBlacklisted.value = false
+        } catch (e: Throwable) {
+            Log.w(TAG, "confirmHardwareDecodeSelection failed: ${e.message}")
+        }
+    }
+
     fun forceRecreate() = postOnUiThread {
         mpvView?.forceRecreate()
     }
@@ -457,16 +610,20 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
      */
     private fun degradeHwdecOnLoadFailure() {
         try {
-            val current = MPVLib.getPropertyString("hwdec") ?: ""
+            // 用 hwdec-current（实际生效值）判断：hwdec 是“期望值”，
+            // 在已被降级/被黑名单接管时仍是 auto-copy，会导致降级逻辑重复执行。
+            val current = try { MPVLib.getPropertyString("hwdec-current") } catch (_: Throwable) { null }
+                ?: MPVLib.getPropertyString("hwdec") ?: ""
             if (current.isEmpty() || current == "no") return
             consecutiveLoadFailures++
-            Log.w(TAG, "playback failure #$consecutiveLoadFailures (hwdec=$current)")
+            Log.w(TAG, "playback failure #$consecutiveLoadFailures (hwdec-current=$current)")
             if (consecutiveLoadFailures < 2) return
             consecutiveLoadFailures = 0
-            MPVView.forceSoftwareDecodeForSession("repeated playback failures with hwdec=$current")
+            MPVView.forceSoftwareDecodeForSession("repeated playback failures with hwdec-current=$current")
             postOnUiThread {
                 try {
                     MPVLib.setPropertyString("hwdec", "no")
+                    _hwdecCache = "no"
                 } catch (e: Throwable) {
                     Log.w(TAG, "degrade hwdec runtime apply failed: ${e.message}")
                 }
@@ -730,6 +887,7 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
             "media-title" -> _mediaTitle.value = value
             "track-list" -> _trackListJson.value = value
             "path" -> { _eofReached.value = false }
+            "hwdec-current" -> _actualHwdec.value = value
         }
     }
 
@@ -746,17 +904,24 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 try {
                     val w = MPVLib.getPropertyInt("width") ?: 0
                     val h = MPVLib.getPropertyInt("height") ?: 0
-                    if (w >= 3840 || h >= 2160) {
-                        MPVLib.setPropertyString("demuxer-max-bytes", MpvProtocolConstants.DEMUXER_MAX_BYTES_4K)
-                        MPVLib.setPropertyString("demuxer-max-back-bytes", "32MiB")
-                        Log.i(TAG, "4K buffer adjusted: ${MpvProtocolConstants.DEMUXER_MAX_BYTES_4K}/32MiB (${w}x${h})")
-                    } else {
-                        MPVLib.setPropertyString("demuxer-max-bytes", MpvProtocolConstants.DEMUXER_MAX_BYTES_DEFAULT)
-                        MPVLib.setPropertyString("demuxer-max-back-bytes", "12MiB")
-                    }
+                    // 预算固定 16MiB/4MiB：直播场景足够，低内存设备不易 OOM；
+                    // 不再按 4K 抬到 128MiB（大缓存对直播无收益，只会放大坏流破坏面）
+                    MPVLib.setPropertyString("demuxer-max-bytes", MpvProtocolConstants.DEMUXER_MAX_BYTES_DEFAULT)
+                    MPVLib.setPropertyString("demuxer-max-back-bytes", MpvProtocolConstants.DEMUXER_MAX_BACK_BYTES)
+                    Log.i(TAG, "buffer: ${MpvProtocolConstants.DEMUXER_MAX_BYTES_DEFAULT}/${MpvProtocolConstants.DEMUXER_MAX_BACK_BYTES} (video=${w}x$h)")
                 } catch (e: Throwable) {
                     Log.w(TAG, "buffer adjust failed: ${e.message}")
                 }
+
+                // 记录实际生效的 hwdec（设置页展示，避免用户不知道自己在软解）
+                try {
+                    _actualHwdec.value = MPVLib.getPropertyString("hwdec-current") ?: ""
+                    Log.i(TAG, "hwdec-current=${_actualHwdec.value}")
+                } catch (_: Throwable) {
+                }
+
+                scheduleVoHealthCheck()
+                scheduleHwdecGraceClear()
 
                 mpvView?.let { v ->
                     val pos = v.pendingResumePos
@@ -786,16 +951,16 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 _fileLoaded.value = false
                 _videoWidth.value = 0
                 _videoHeight.value = 0
-                val endedUrl = try { MPVLib.getPropertyString("path") ?: "" } catch (_: Throwable) { "" }
-                val replacedByNew = playbackController.loadingUrl.isNotEmpty() && endedUrl != playbackController.loadingUrl
-                val wasPlaying = wasLoaded || endedUrl == playbackController.lastLoadedUrl
-                // 目标流失败：END_FILE 属于当前正在切换到的那路流（而不是被替换掉的旧流）。
-                // 旧流的 END_FILE 需要抑制，目标流的失败必须上报，否则换台失败会被永久吞掉。
-                val targetStreamFailed = playbackController.switchingChannel &&
-                    playbackController.loadingUrl.isNotEmpty() &&
-                    endedUrl == playbackController.loadingUrl
+                // END_FILE 归属判定：不再依赖全局 path。
+                // loadfile replace 时 path 很可能已经指向新 URL，用它判断归属会失真。
+                // 现在用「上一次真正 FILE_LOADED 的 URL」+「换台代次」记账。
+                val switching = playbackController.switchingChannel
+                val endedUrl = playbackController.lastLoadedUrl.ifEmpty { playbackController.loadingUrl }
+                val wasPlaying = wasLoaded || playbackController.lastLoadedUrl.isNotEmpty()
+                val gen = playbackController.switchGeneration
 
                 cancelPendingFileError()
+                cancelVoHealthCheck()
 
                 if (suppressFileErrorFlag) {
                     Log.i(TAG, "MPV_EVENT_END_FILE: suppressed (surface rebuilding), wasLoaded=$wasLoaded")
@@ -804,28 +969,44 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                     Log.i(TAG, "MPV_EVENT_END_FILE: suppressed (user stopped playback)")
                     userStopped = false
                     playbackController.clearSwitchingState()
-                } else if (playbackController.switchingChannel && !targetStreamFailed) {
-                    Log.i(TAG, "MPV_EVENT_END_FILE: suppressed (old stream replaced during channel switching), wasLoaded=$wasLoaded")
+                    playbackController.clearPendingLoadUrl()
+                } else if (switching) {
+                    // 换台在途：END_FILE 可能属于被替换的旧流，也可能属于目标流。
+                    // 需求：换台进行中一律不弹「频道断流 尝试重连」；
+                    // 目标流失败由 MpvController 的超时换源逻辑负责，不在这里误报。
+                    Log.i(TAG, "MPV_EVENT_END_FILE: suppressed (channel switching in progress, " +
+                        "gen=$gen, lastLoaded=${playbackController.lastLoadedUrl}, pending=${playbackController.pendingLoadUrl})")
                     playbackController.clearSwitchingState()
-                } else if (!wasPlaying && !replacedByNew) {
+                } else if (!wasPlaying) {
                     Log.w(TAG, "MPV_EVENT_END_FILE: file '$endedUrl' failed to load, notifying error")
                     // 换台失败：必须清理切换标志，否则后续错误回调全部被当成「换台中」跳过
                     playbackController.clearSwitchingState()
+                    playbackController.clearPendingLoadUrl()
                     degradeHwdecOnLoadFailure()
                     postOnUiThread { onFileError?.invoke() }
                 } else if (wasPlaying && !_eofReached.value) {
-                    Log.i(TAG, "MPV_EVENT_END_FILE: stream '$endedUrl' ended mid-stream (wasLoaded=$wasLoaded), delayed error check 300ms")
+                    Log.i(TAG, "MPV_EVENT_END_FILE: stream '$endedUrl' ended mid-stream (wasLoaded=$wasLoaded), delayed error check 300ms (gen=$gen)")
                     val runnable = Runnable {
-                        Log.w(TAG, "MPV_EVENT_END_FILE: stream ended mid-stream, no START_FILE followed, notifying error")
-                        playbackController.clearSwitchingState()
-                        degradeHwdecOnLoadFailure()
-                        postOnUiThread { onFileError?.invoke() }
+                        // 300ms 检查绑定换台代次：期间已经开始新一次换台就作废，避免误报
+                        if (playbackController.switchGeneration != gen) {
+                            Log.i(TAG, "MPV_EVENT_END_FILE: 300ms check skipped, generation changed " +
+                                "($gen -> ${playbackController.switchGeneration})")
+                            return@Runnable
+                        }
+                        if (!_fileLoaded.value) {
+                            Log.w(TAG, "MPV_EVENT_END_FILE: stream ended mid-stream, no FILE_LOADED followed, notifying error (gen=$gen)")
+                            playbackController.clearSwitchingState()
+                            playbackController.clearPendingLoadUrl()
+                            degradeHwdecOnLoadFailure()
+                            postOnUiThread { onFileError?.invoke() }
+                        }
                     }
                     playbackController.pendingEndFileError = runnable
                     mpvView?.asView()?.postDelayed(runnable, 300)
                 } else {
                     Log.i(TAG, "MPV_EVENT_END_FILE: stream '$endedUrl' ended normally (wasLoaded=$wasLoaded, eof=${_eofReached.value})")
                     playbackController.clearSwitchingState()
+                    playbackController.clearPendingLoadUrl()
                 }
                 playbackController.onEndFile()
             }
@@ -836,6 +1017,9 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 val wasActive = _fileLoaded.value || playbackController.loadingUrl.isNotEmpty()
                 _fileLoaded.value = false
                 _eofReached.value = true
+                cancelVoHealthCheck()
+                playbackController.clearSwitchingState()
+                playbackController.clearPendingLoadUrl()
                 mpvView?.markInstanceDead()
                 if (wasActive) {
                     playbackController.clearSwitchingState()
@@ -847,6 +1031,15 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
 
     companion object {
         private const val TAG = "MpvController"
+
+        /** FILE_LOADED 后多久做一次 VO 健康检查 */
+        private const val VO_HEALTH_CHECK_DELAY_MS = 1500L
+
+        /** 硬解稳定运行多久后解除崩溃黑名单 */
+        private const val HWDEC_GRACE_MS = 180_000L
+
+        /** 进程内允许的“会话级软解降级”恢复重试次数 */
+        private const val MAX_HWDEC_RETRIES_PER_SESSION = 3
 
         @Volatile
         private var INSTANCE: MpvController? = null

@@ -72,6 +72,8 @@ fun PlayerSettingsPanel(viewModel: AppViewModel) {
     }
     val currentVo by viewModel.currentVo.collectAsState()
     val currentHwdec by viewModel.currentHwdec.collectAsState()
+    val actualHwdec by viewModel.actualHwdec.collectAsState()
+    val hwdecBlacklisted by viewModel.hwdecBlacklisted.collectAsState()
     val currentRtspTransport by viewModel.currentRtspTransport.collectAsState()
     val currentDeinterlace by viewModel.currentDeinterlace.collectAsState()
     val logLevel by viewModel.logLevel.collectAsState()
@@ -155,6 +157,8 @@ private fun PlayerSettingsLeftColumn(viewModel: AppViewModel) {
     val currentPlayerType by viewModel.playerType.collectAsState()
     val currentVo by viewModel.currentVo.collectAsState()
     val currentHwdec by viewModel.currentHwdec.collectAsState()
+    val actualHwdec by viewModel.actualHwdec.collectAsState()
+    val hwdecBlacklisted by viewModel.hwdecBlacklisted.collectAsState()
     val hardwareDecode by viewModel.hardwareDecode.collectAsState()
     val timeoutSwitch by viewModel.timeoutSwitchSource.collectAsState()
     val reconnectIdx by viewModel.reconnectIndex.collectAsState()
@@ -318,6 +322,14 @@ private fun PlayerSettingsLeftColumn(viewModel: AppViewModel) {
             else -> "未知 hwdec: $currentHwdec"
         }
         Text(text = hwdecDesc, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp))
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = hwdecActualText(actualHwdec, hwdecBlacklisted),
+            color = if (actualHwdec == "no" && currentHwdec != "no") MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(horizontal = 4.dp)
+        )
         Spacer(modifier = Modifier.height(20.dp))
     }
 
@@ -533,6 +545,8 @@ private fun PlayerSettingsPanelAptv(viewModel: AppViewModel) {
     val currentPlayerType by viewModel.playerType.collectAsState()
     val currentVo by viewModel.currentVo.collectAsState()
     val currentHwdec by viewModel.currentHwdec.collectAsState()
+    val actualHwdec by viewModel.actualHwdec.collectAsState()
+    val hwdecBlacklisted by viewModel.hwdecBlacklisted.collectAsState()
     val currentRtspTransport by viewModel.currentRtspTransport.collectAsState()
     val currentDeinterlace by viewModel.currentDeinterlace.collectAsState()
     val logLevel by viewModel.logLevel.collectAsState()
@@ -689,6 +703,13 @@ private fun PlayerSettingsPanelAptv(viewModel: AppViewModel) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp,
                         modifier = Modifier.padding(vertical = 8.dp)
+                    )
+                    Text(
+                        text = hwdecActualText(actualHwdec, hwdecBlacklisted),
+                        color = if (actualHwdec == "no" && currentHwdec != "no") MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(bottom = 8.dp)
                     )
                 }
             }
@@ -874,4 +895,14 @@ private fun PlayerSettingsPanelAptv(viewModel: AppViewModel) {
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = if (useGlass) 0.82f else 1f))
         ) { body() }
     }
+}
+
+/** 实际生效的 hwdec 展示文案（读取 mpv hwdec-current） */
+private fun hwdecActualText(actual: String, blacklisted: Boolean): String {
+    val actualPart = when {
+        actual.isBlank() -> "实际生效：未知（尚未开始播放）"
+        actual == "no" -> "实际生效：软解（no）"
+        else -> "实际生效：$actual"
+    }
+    return if (blacklisted) "$actualPart · 该设备在硬解崩溃黑名单中（成功硬解 3 分钟后自动解除）" else actualPart
 }

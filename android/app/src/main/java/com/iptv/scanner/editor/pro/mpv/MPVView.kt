@@ -64,6 +64,14 @@ class MPVView @JvmOverloads constructor(
     private var surfaceAttached = false
 
     /**
+     * VO 延迟创建标志：surfaceCreated 时若拿不到有效尺寸，
+     * 不建立 VO，等 surfaceChanged 提供真实尺寸后再创建，
+     * 避免“先在 0x0 窗口上建 VO、再改尺寸”导致只有声音没画面。
+     */
+    @Volatile
+    private var pendingVoUntilSize = false
+
+    /**
      * mpv 核心重建回调。当 ensureInstanceAlive() 重新创建 mpv 实例后调用，
      * 让外部（MpvController）能重新注册 observeProperty 和同步状态。
      */
@@ -112,6 +120,11 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
             try {
                 // 运行时更新 hwdec（vo 由 surfaceCreated 设置，此时 surface 还没创建）
                 MPVLib.setPropertyString("hwdec", effectiveHwdec)
+                // 会话内从硬解切到软解时，补开跳过类优化（init 阶段未设置）
+                if (effectiveHwdec == "no") {
+                    MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
+                    MPVLib.setPropertyString("vd-lavc-skipframe", "nonref")
+                }
                 // 更新日志等级（运行时可切换）
                 updateLogLevel()
             } catch (e: Throwable) {
@@ -147,13 +160,20 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
             instanceState.nativeHandleCreated = true
         }
 
-        MPVLib.setOptionString("config", "yes")
-        MPVLib.setOptionString("config-dir", configDir)
+        setOptionChecked("config", "yes")
+        setOptionChecked("config-dir", configDir)
         for (opt in arrayOf("gpu-shader-cache-dir", "icc-cache-dir"))
-            MPVLib.setOptionString(opt, cacheDir)
+            setOptionChecked(opt, cacheDir)
 
-        MPVLib.setOptionString("vo", vo)
-        MPVLib.setOptionString("hwdec", effectiveHwdec)
+        setOptionChecked("vo", vo)
+        setOptionChecked("hwdec", effectiveHwdec)
+        // 所有编解码器都允许走 MediaCodec：避免 mpv 因个别 codec 不在默认清单里
+        // 直接回落软解（低端电视上软解 1080i/4K 必掉帧）。
+        setOptionChecked("hwdec-codecs", "all")
+        // gpu / gpu-next 路径启用 PBO 上传：减少每帧 glTexImage2D 的同步拷贝开销。
+        if (vo == "gpu" || vo == "gpu-next") {
+            setOptionChecked("opengl-pbo", "yes")
+        }
         // 记录本次会话实际生效的 hwdec：进程若因硬解 teardown native 崩溃，
         // 下次启动据此把该设备加入硬解黑名单
         NativeCrashLogger.setActiveHwdec(context, effectiveHwdec)
@@ -161,9 +181,9 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
         // 与 PC 端不同，Android 端在 loadfile 前会发送 stop（对齐 PC 端 play_file 的逻辑），
         // 用 always 确保 stop → loadfile 之间画面不消失。
         // yes 只在 EOF 时保留，stop 会清空画面；always 在 stop 时也保留。
-        MPVLib.setOptionString("keep-open", "always")
-        MPVLib.setOptionString("keepaspect", "yes")
-        MPVLib.setOptionString("keepaspect-window", "no")
+        setOptionChecked("keep-open", "always")
+        setOptionChecked("keepaspect", "yes")
+        setOptionChecked("keepaspect-window", "no")
         // FBO 格式：根据 HDR 模式选择。
         // rgba16hf（16-bit 半浮点）允许 HDR 内容以高色深渲染，但很多 GPU（尤其
         // 电视盒子如 Homatics、部分 Mali/Adreno）不支持 16-bit 浮点帧缓冲，
@@ -171,57 +191,57 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
         // 默认用 rgba8（8-bit，全设备兼容），仅在 HDR 模式非 disable 时使用 rgba16hf。
         val hdrMode = UserPrefs.getInstance().getHdrMode()
         val fboFormat = if (hdrMode == "disable") "rgba8" else "rgba16hf"
-        MPVLib.setOptionString("fbo-format", fboFormat)
+        setOptionChecked("fbo-format", fboFormat)
         // 4K 安全选项：降低 GPU 渲染负担
         // - dither-depth：限制抖动深度为 8-bit，避免 4K 时 GPU 过载
         // - gpu-texture-resolution：限制 GPU 纹理分辨率（0=自动, 1=最高, 2=高, 3=中）
-        MPVLib.setOptionString("dither-depth", "8")
+        setOptionChecked("dither-depth", "8")
         // target-colorspace-hint：仅 HDR 模式启用。
         // 部分设备显示控制器无法处理 colorspace 切换信号，会导致黑屏。
         if (hdrMode != "disable") {
-            MPVLib.setOptionString("target-colorspace-hint", "yes")
+            setOptionChecked("target-colorspace-hint", "yes")
         }
 
-        MPVLib.setOptionString("framedrop", "all")
-        MPVLib.setOptionString("video-sync", "audio")
-        MPVLib.setOptionString("cache-pause-initial", "no")
+        setOptionChecked("framedrop", "all")
+        setOptionChecked("video-sync", "audio")
+        setOptionChecked("cache-pause-initial", "no")
 
         // 缓存大小：Android TV 内存有限（通常 1-2GB），过大的 demuxer 缓存在播放坏流时
         // 会导致 native 内存耗尽 → malloc 返回 null → SIGABRT 崩溃。
-        // 48MiB 前向 + 12MiB 后向：比原来略大，4K 高码率流需要更多缓冲，
-        // 同时不会在低内存设备上导致 OOM。
-        MPVLib.setOptionString("demuxer-max-bytes", "48MiB")
-        MPVLib.setOptionString("demuxer-max-back-bytes", "12MiB")
-        MPVLib.setOptionString("demuxer-readahead-secs", "10")
-        MPVLib.setOptionString("demuxer-seekable-cache", "yes")
-        MPVLib.setOptionString("force-seekable", "yes")
+        // 16MiB 前向 + 4MiB 后向 + 4s 预读：直播场景足够，且不会在低内存设备上 OOM。
+        // 4K 不再单独抬到 128MiB（大缓存只会放大坏流的破坏面，且换台时释放更慢）。
+        setOptionChecked("demuxer-max-bytes", MpvProtocolConstants.DEMUXER_MAX_BYTES_DEFAULT)
+        setOptionChecked("demuxer-max-back-bytes", MpvProtocolConstants.DEMUXER_MAX_BACK_BYTES)
+        setOptionChecked("demuxer-readahead-secs", MpvProtocolConstants.DEMUXER_READAHEAD_SECS.toString())
+        setOptionChecked("demuxer-seekable-cache", "yes")
+        setOptionChecked("force-seekable", "yes")
         // 不等待缓存填满就开始播放，实现秒开（与 PC 端 cache-pause-initial=no 配合）
-        MPVLib.setOptionString("demuxer-cache-wait", "no")
+        setOptionChecked("demuxer-cache-wait", "no")
 
         // 网络超时：缩短到 8 秒（原来 30 秒太长）。
         // 坏流场景：mpv demuxer 线程会卡在网络读取上，30s 超时期间所有
         // 后续 loadfile 命令都无法执行，导致切到坏频道后所有频道都无法播放。
         // 8s 足够覆盖合法流的连接时间，同时配合 startTimeoutSwitchSource
         // 中的 stop 命令（5s 超时换源时先 stop 强制中断 demuxer）双重保障。
-        MPVLib.setOptionString("network-timeout", "8")
-        MPVLib.setOptionString("source-timeout", "8")
-        MPVLib.setOptionString("stream-open-timeout", "8")
+        setOptionChecked("network-timeout", "8")
+        setOptionChecked("source-timeout", "8")
+        setOptionChecked("stream-open-timeout", "8")
         // demuxer 读取超时：lavf 读取数据超时后触发 end-file 事件，
         // 防止坏流时 demuxer 无限重试消耗内存。
-        MPVLib.setOptionString("demuxer-read-timeout", "5")
+        setOptionChecked("demuxer-read-timeout", "5")
 
-        MPVLib.setOptionString("stream-lavf-o", "verify=1")
-        MPVLib.setOptionString("tls-verify", "yes")
+        setOptionChecked("stream-lavf-o", "verify=1")
+        setOptionChecked("tls-verify", "yes")
 
-        // vd-lavc-threads：4K 内容需要更多解码线程。
-        // 使用 CPU 核心数的 3/4（而非 1/2），确保 4K 高分辨率内容有足够解码能力。
-        val cpuCount = Runtime.getRuntime().availableProcessors()
-        val threads = maxOf(2, (cpuCount * 3 + 2) / 4)
-        MPVLib.setOptionString("vd-lavc-threads", threads.toString())
-        // 4K 高分辨率安全选项：
-        // - skiploopfilter=nonref：跳过非参考帧的去块滤波，降低 CPU/GPU 负载
-        // - fastdecode：启用快速解码路径（牺牲质量换取稳定性）
-        MPVLib.setOptionString("vd-lavc-skiploopfilter", "nonref")
+        // 不再覆盖 vd-lavc-threads：交回 mpv 按 CPU 核数自动决定，
+        // 避免在 2 核盒子上线程过多、在 4 核电视上线程过少。
+        //
+        // 仅在“确实会走软解”的低算力分支上开启跳过类优化；硬解时这些选项无效，
+        // 但开启会牺牲画质，因此不做无条件设置。
+        if (effectiveHwdec == "no") {
+            setOptionChecked("vd-lavc-skiploopfilter", "all")
+            setOptionChecked("vd-lavc-skipframe", "nonref")
+        }
 
         // force-window 和 idle 必须在 init() 之前设置！
         // libmpv 的 mpv_set_option_string() 只在 mpv_initialize() 之前有效，
@@ -233,8 +253,8 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
         //   init()（native 句柄已存在且无法被 destroy），导致应用崩溃。
         //   idle=yes 确保核心在任何情况下都不会自动关闭，从根本上避免
         //   需要重建核心的场景。
-        MPVLib.setOptionString("force-window", "no")
-        MPVLib.setOptionString("idle", "yes")
+        setOptionChecked("force-window", "no")
+        setOptionChecked("idle", "yes")
 
         MPVLib.init()
 
@@ -254,6 +274,24 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
      */
     private fun updateLogLevel() = delegate.updateLogLevel()
 
+    /**
+     * 写入 mpv 选项并检查返回值（0 = 成功）。
+     *
+     * libmpv 在 init() 之后调用 mpv_set_option_string() 会返回错误码，
+     * 原实现忽略返回值，导致选项静默失效后无从排查。
+     */
+    private fun setOptionChecked(name: String, value: String) {
+        val rc = try {
+            MPVLib.setOptionString(name, value)
+        } catch (e: Throwable) {
+            Log.e(TAG, "setOption $name=$value FAILED", e)
+            return
+        }
+        if (rc != 0) {
+            Log.e(TAG, "setOption $name=$value rejected by mpv (rc=$rc)")
+        }
+    }
+
     override fun destroy() {
         holder.removeCallback(this)
         if (myGeneration != instanceState.activeGeneration) {
@@ -267,6 +305,7 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
             Log.i(TAG, "destroy: saved playback path=$currentPath")
         }
         // keep-alive：不调用 MPVLib.destroy()，只做状态重置
+        pendingVoUntilSize = false
         if (instanceState.nativeInstanceAlive) {
             try {
                 MPVLib.command(arrayOf("stop"))
@@ -339,9 +378,17 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
             if (s != null && s.isValid) {
                 MPVLib.attachSurface(s)
                 surfaceAttached = true
+                // 与 surfaceCreated 保持一致：尺寸先于 VO 写入
+                val size = surfaceSizeString(holder)
+                if (size != null) {
+                    MPVLib.setPropertyString("android-surface-size", size)
+                }
+                if (vo == "gpu" || vo == "gpu-next") {
+                    MPVLib.setPropertyString("opengl-pbo", "yes")
+                }
                 MPVLib.setPropertyString("force-window", "yes")
                 MPVLib.setPropertyString("vo", vo)
-                Log.i(TAG, "reattachSurfaceWithVo: attached surface with vo=$vo")
+                Log.i(TAG, "reattachSurfaceWithVo: attached surface with vo=$vo, surface=${surfaceSizeString(holder) ?: "unknown"}")
             } else {
                 // Surface 不可用：只设置 vo，等 surfaceCreated 回调时 attach
                 MPVLib.setPropertyString("vo", vo)
@@ -478,33 +525,94 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
         }
         Log.i(TAG, "surfaceCreated: attaching surface (vo=$voInUse)")
         try {
-            MPVLib.setPropertyString("vo", "null")
             MPVLib.attachSurface(holder.surface)
             surfaceAttached = true
-            MPVLib.setPropertyString("force-window", "yes")
-            MPVLib.setPropertyString("vo", voInUse)
-            Log.i(TAG, "surfaceCreated: attachSurface OK, vo=$voInUse (forced VO reinit)")
         } catch (e: Throwable) {
             Log.e(TAG, "surfaceCreated: attachSurface FAILED", e)
         }
 
+        // 关键顺序：android-surface-size 必须先于 VO 建立写入。
+        //
+        // 旧实现是 vo=null → force-window=yes → vo=voInUse，而尺寸要等后面的
+        // surfaceChanged 才写入。VO 因此在“尺寸未知（0x0）”的窗口上完成初始化，
+        // 部分 GPU/驱动此后不会重连 BufferQueue，表现为只有声音没有画面；
+        // 只有再完整重建一次 VO（用户切一次 VO / 旋转）才恢复。
+        //
+        // 现在：有尺寸就“先写尺寸再建 VO”；拿不到尺寸就完全推迟到 surfaceChanged。
+        val size = surfaceSizeString(holder)
+        if (size != null) {
+            MPVLib.setPropertyString("android-surface-size", size)
+            createVoNow(size)
+            loadPendingPathAfterSurface()
+        } else {
+            pendingVoUntilSize = true
+            Log.i(TAG, "surfaceCreated: 尺寸未知，VO 延迟到 surfaceChanged 建立")
+        }
+
+        // 通知 MpvController 取消 pendingEndFileError，防止旋转后误报断流
+        onSurfaceRebuilt?.invoke()
+    }
+
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        if (width <= 0 || height <= 0) {
+            Log.w(TAG, "surfaceChanged: invalid size ${width}x$height, VO state unchanged")
+            return
+        }
+        val size = "${width}x$height"
+        MPVLib.setPropertyString("android-surface-size", size)
+        if (pendingVoUntilSize) {
+            pendingVoUntilSize = false
+            Log.i(TAG, "surfaceChanged: 尺寸就绪($size)，现在建立 VO")
+            createVoNow(size)
+            loadPendingPathAfterSurface()
+        }
+    }
+
+    /** 当前 Surface 的有效尺寸；拿不到返回 null（0x0 视为无效） */
+    private fun surfaceSizeString(holder: SurfaceHolder): String? = try {
+        val frame = holder.surfaceFrame
+        if (frame != null && frame.width() > 0 && frame.height() > 0) {
+            "${frame.width()}x${frame.height()}"
+        } else {
+            null
+        }
+    } catch (_: Throwable) {
+        null
+    }
+
+    /**
+     * 在当前 Surface 上建立 VO（尺寸已先写入）。
+     * 不再使用 vo=null 的写法，避免在尺寸未知时创建 VO。
+     */
+    private fun createVoNow(size: String) {
+        try {
+            if (voInUse == "gpu" || voInUse == "gpu-next") {
+                MPVLib.setPropertyString("opengl-pbo", "yes")
+            }
+            MPVLib.setPropertyString("force-window", "yes")
+            MPVLib.setPropertyString("vo", voInUse)
+            Log.i(TAG, "createVoNow: vo=$voInUse, surface=$size")
+        } catch (e: Throwable) {
+            Log.e(TAG, "createVoNow FAILED vo=$voInUse", e)
+        }
+    }
+
+    /**
+     * VO 就绪后加载待播放路径。
+     *
+     * 文件已在播放时也需要重新 loadfile：重建解码器→VO 管线，
+     * 确保视频帧正确输出到新 Surface（与 MPVTextureView 行为对齐）。
+     */
+    private fun loadPendingPathAfterSurface() {
         if (filePath != null) {
             Log.i(TAG, "surfaceCreated: 播放缓存的 filePath=$filePath")
             MPVLib.command(arrayOf("loadfile", filePath as String))
             MPVLib.setPropertyBoolean("pause", false)
             filePath = null
-        } else {
-            // 文件已在播放时也需要重新 loadfile！
-            //
-            // 根因：vo=null → vo=voInUse 的 VO 重建在部分设备上不会自动恢复渲染（黑屏）。
-            // 重新 loadfile 会触发完整的解码器→VO 管线重建，确保视频帧正确输出到新 Surface。
-            //
-            // END_FILE 误报问题：重新 loadfile 会触发 END_FILE 事件，
-            // 但 MpvController 的 suppressFileErrorFlag（由 LaunchedEffect 设置）
-            // 和 pendingEndFileError（300ms 延迟 + onSurfaceRebuilt 取消）会处理误报。
-            //
-            // 与 MPVTextureView.onSurfaceTextureAvailable 的行为对齐（也重新 loadfile）。
-            val currentPath = try { MPVLib.getPropertyString("path") } catch (_: Exception) { "" }
+            return
+        }
+        try {
+            val currentPath = MPVLib.getPropertyString("path")
             if (!currentPath.isNullOrEmpty()) {
                 Log.i(TAG, "surfaceCreated: re-loading current path=$currentPath to restore render")
                 // pause 是核心属性、跨 loadfile 保持：先读后还原，
@@ -515,14 +623,9 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
             } else {
                 Log.i(TAG, "surfaceCreated: no pending filePath, waiting for external playFile")
             }
+        } catch (e: Throwable) {
+            Log.w(TAG, "loadPendingPathAfterSurface failed: ${e.message}")
         }
-
-        // 通知 MpvController 取消 pendingEndFileError，防止旋转后误报断流
-        onSurfaceRebuilt?.invoke()
-    }
-
-    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-        MPVLib.setPropertyString("android-surface-size", "${width}x$height")
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
@@ -533,6 +636,7 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
         // 通知 MpvController 提前设置 suppressFileErrorFlag，
         // 防止 surfaceCreated 重新 loadfile 触发的 END_FILE 事件误报断流
         onSurfaceAboutToDestroy?.invoke()
+        pendingVoUntilSize = false
         Log.i(TAG, "surfaceDestroyed: detaching surface")
         try {
             if (surfaceAttached) {
@@ -601,6 +705,19 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
         private var sessionHwdecOverride: String? = null
 
         /**
+         * 用户在设置页显式选择硬解：本次进程内允许越过崩溃黑名单，
+         * 给一次“解除黑名单”的机会（若仍崩溃，NativeCrashLogger 会重新写入）。
+         * 注意：arm32 TV / houdini 的设备级强制软解不受此标志影响。
+         */
+        @Volatile
+        private var userForcedHardwareDecode = false
+
+        fun confirmHardwareDecodeByUser() {
+            userForcedHardwareDecode = true
+            Log.w(TAG, "hwdec: user explicitly selected hardware decode, blacklist override enabled for this session")
+        }
+
+        /**
          * 硬解失败后的会话级降级：本次进程内强制软解，避免继续走同一条
          * MediaCodec teardown 路径（历史出问题的车机在设备判定不成立时仍会崩溃）。
          */
@@ -610,20 +727,37 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
             Log.w(TAG, "hwdec: session-level downgrade to software decode ($reason)")
         }
 
+        /** 是否处于会话级软解降级 */
+        fun hasSessionHwdecOverride(): Boolean = sessionHwdecOverride != null
+
+        /**
+         * 解除会话级软解降级，允许重新尝试硬解。
+         *
+         * 由“换台 / 重新打开播放页 / 用户手动修改 hwdec”触发，
+         * 避免一次坏流导致的降级在进程内永久生效（用户看到的症状是
+         * “选回硬解也还是卡”）。
+         */
+        fun clearSessionHwdecOverride(reason: String) {
+            if (sessionHwdecOverride == null) return
+            sessionHwdecOverride = null
+            Log.w(TAG, "hwdec: session-level software downgrade cleared ($reason)")
+        }
+
         /** 返回应生效的 hwdec 值：会话降级 / houdini 转译 / arm32 TV / 崩溃黑名单 强制软解 */
         fun sanitizeHwdec(hwdec: String): String {
+            if (hwdec == "no") return hwdec
             if (sessionHwdecOverride != null) return sessionHwdecOverride!!
             // 设备黑名单：上次会话硬解异常退出（native 崩溃）后本进程强制软解。
             // 覆盖按频道保存的 hwdec（频道设置不走 PlayerSettingsStore），
             // 避免历史出问题的车机因设备判定不成立而再次走到硬解 teardown 崩溃路径。
+            // 用户显式选择硬解时允许越过黑名单（见 confirmHardwareDecodeByUser）。
             val blacklisted = try {
                 UserPrefs.getInstance().isHwdecBlacklisted()
             } catch (e: Exception) {
                 false
             }
             return when {
-                hwdec == "no" -> hwdec
-                blacklisted -> {
+                blacklisted && !userForcedHardwareDecode -> {
                     Log.w(TAG, "hwdec: device in crash blacklist -> force software decode")
                     "no"
                 }

@@ -303,12 +303,28 @@ internal fun AppViewModel.loadChannels() {
             Log.i(AppViewModel.TAG, "Loaded ${loaded.size} channels, ${groupList.size} groups")
             // 残留检测：历史版本删除订阅源时不清理频道缓存，分组列会残留已删源的分组。
             // 频道 source 不属于任何现有源 → 判定为残留，自动重载订阅源（桥端按现有源重建频道缓存）
+            //
+            // 注意：本地缓存保留的频道（历史订阅源残留）本身就带旧 source，重载失败/进行中时
+            // 它们会一直存在，若每轮检测都触发重载就形成「残留→重载→仍残留」的自触发风暴
+            // （实测启动期 10 秒内 5 轮、每轮重下 8MB EPG）。因此自动重载必须
+            // 单飞 + 冷却 + 进程内次数上限。
             if (loaded.any { it.source.isNotEmpty() }) {
                 val knownUrls = withContext(Dispatchers.IO) { repository.getSources() }
                     .getOrNull()?.map { it.url }?.toSet() ?: emptySet()
                 if (knownUrls.isNotEmpty() && loaded.any { it.source !in knownUrls }) {
-                    Log.w(AppViewModel.TAG, "loadChannels: stale channels from removed sources detected, auto reload")
-                    reloadSources()
+                    val now = System.currentTimeMillis()
+                    val throttled = now - lastAutoSourceReloadAt < 60_000L
+                    if (autoSourceReloadCount >= 1 || throttled) {
+                        Log.w(AppViewModel.TAG,
+                            "loadChannels: stale channels detected but auto reload skipped " +
+                                    "(count=$autoSourceReloadCount, sinceLast=${
+                                        (now - lastAutoSourceReloadAt) / 1000}s)")
+                    } else {
+                        lastAutoSourceReloadAt = now
+                        autoSourceReloadCount++
+                        Log.w(AppViewModel.TAG, "loadChannels: stale channels from removed sources detected, auto reload")
+                        reloadSources(auto = true)
+                    }
                 }
             }
             // 收藏/历史/队列按 URL 重锚定（订阅重载后 idx 漂移会错位）
@@ -553,6 +569,9 @@ internal fun AppViewModel.playChannel(idx: Int, silent: Boolean = false) {
         // 换台期间抑制 setVoAndHwdec 对旧 URL 的重载：否则会把旧流重新 loadfile，
         // 与「先 JOIN 新组播、再加载新 URL」的 FCC 时序冲突（L6）。
         (_player.value as? MpvController)?.suppressVoReloadOnSwitch()
+        // 换台时给硬解一次恢复机会：旧实现里会话级软解降级一旦触发就永不恢复，
+        // 用户看到的是“换台后一直卡、改回硬解也没用”。
+        (_player.value as? MpvController)?.retryHardwareDecodeIfDegraded("channel switch")
         applyChannelSettingsIfNeeded(idx)
         mpv.playFile(channel.url)
         (_player.value as? MpvController)?.releaseVoReloadSuppression()
@@ -833,7 +852,7 @@ internal fun AppViewModel.applyChannelSettingsIfNeeded(idx: Int) {
     }
     settings.hwdec?.let { hwdec ->
         val actualHwdec = if (settings.vo == "mediacodec_embed") "mediacodec" else hwdec
-        if (_currentHwdec.value != actualHwdec) setPlayerHwdec(actualHwdec)
+        if (_currentHwdec.value != actualHwdec) setPlayerHwdec(actualHwdec, byUser = false)
     }
 
     // 2. 应用 HDR 模式（只更新状态，由 applyHdrOnFileLoaded 在文件加载后应用）
@@ -1191,6 +1210,8 @@ _showHome.value = true
 
 internal fun AppViewModel.showPlayerScreen() {
     _showHome.value = false
+    // 重新打开播放页时重试一次硬解：清除会话级软解降级，避免一次偶发失败导致本轮永久软解
+    (_player.value as? MpvController)?.retryHardwareDecodeIfDegraded("reopen player")
     // 播放器固定位置后 Surface 不被销毁，通常无需 refreshSurface。
     // 但作为安全网：若文件已加载则刷新 surface，否则重新加载。
     val url = currentPlaybackUrl

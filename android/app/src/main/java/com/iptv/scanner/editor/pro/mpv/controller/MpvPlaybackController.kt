@@ -33,6 +33,15 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
     var lastLoadedUrl: String = ""
         private set
 
+    /**
+     * 换台代次：每次 playFile 自增。
+     * END_FILE 的延迟检查（300ms）与 VO 健康检查都绑定代次，
+     * 代次变化说明已经开始新一次换台，旧检查必须作废。
+     */
+    @Volatile
+    var switchGeneration: Long = 0
+        private set
+
     @Volatile
     var pendingEndFileError: Runnable? = null
 
@@ -44,8 +53,8 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
             host.notifyPlaybackUnavailable()
             return
         }
-        pendingEndFileError?.let { host.getMpvView()?.asView()?.removeCallbacks(it) }
-        pendingEndFileError = null
+        switchGeneration++
+        clearPendingEndFileError()
         loadingUrl = url
         pendingLoadUrl = url
         switchingChannel = true
@@ -78,8 +87,8 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
                 // 向 mpv 核心连发两条 loadfile，可能触发 native 崩溃
                 return@postOnUiThread
             } else if (host.isFileLoaded()) {
-                MPVLib.setPropertyString("demuxer-max-bytes", "16MiB")
-                Log.i(TAG, "playFile: loadfile replace (channel switch)")
+                MPVLib.setPropertyString("demuxer-max-bytes", MpvProtocolConstants.DEMUXER_MAX_BYTES_DEFAULT)
+                Log.i(TAG, "playFile: loadfile replace (channel switch, demuxer-max-bytes=${MpvProtocolConstants.DEMUXER_MAX_BYTES_DEFAULT})")
                 doLoadFile()
                 return@postOnUiThread
             }
@@ -104,6 +113,7 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
     fun stop() {
         // 停止播放时清理切换标志，否则下次换台失败时错误会被永久抑制
         clearSwitchingState()
+        clearPendingLoadUrl()
         host.postOnUiThread {
             host.getMpvView()?.stop()
         }
@@ -244,6 +254,10 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
         lastLoadedUrl = url
         loadingUrl = ""
         switchingChannel = false
+        // 本次换台已落地：待加载 URL 的使命结束，避免残留值被后续 START_FILE 误用
+        pendingLoadUrl = ""
+        // FILE_LOADED 已到：取消 300ms 断流误报检查
+        clearPendingEndFileError()
     }
 
     /** 由 event() 在 START_FILE 事件中调用 */
@@ -257,16 +271,30 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
     }
 
     /**
-     * 清理换台/加载态标志。
+     * 清理换台/加载态标志（不清 pendingLoadUrl）。
      *
      * 换台失败时 END_FILE 不会走到 FILE_LOADED，如果不显式清理，
      * switchingChannel 会永久为 true，导致后续所有错误回调被当作
      * 「换台中」静默吞掉，只能等超时换源。
+     *
+     * 注意：pendingLoadUrl 必须保留到 START_FILE 之后，
+     * 否则 onStartFile 拿不到真实 URL，loadingUrl 永远为空，
+     * END_FILE 归属判断会退化回全局 path。
      */
     fun clearSwitchingState() {
         switchingChannel = false
         loadingUrl = ""
+    }
+
+    /** 显式丢弃待加载 URL（用户 stop / 换台失败确认后调用） */
+    fun clearPendingLoadUrl() {
         pendingLoadUrl = ""
+    }
+
+    /** 取消 300ms 断流误报检查（新换台开始 / FILE_LOADED 到达时调用） */
+    fun clearPendingEndFileError() {
+        pendingEndFileError?.let { host.getMpvView()?.asView()?.removeCallbacks(it) }
+        pendingEndFileError = null
     }
 
     private fun setupProtocolOptions(url: String) {
@@ -333,30 +361,30 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
                     } else {
                         MPVLib.setPropertyString("demuxer-lavf-probesize", "5000000")
                         MPVLib.setPropertyString("demuxer-lavf-analyzeduration", "5")
-                        MPVLib.setPropertyString("demuxer-readahead-secs", "10")
-                        Log.i(TAG, "RTSP-TCP options: probesize=5M, readahead=10s")
+                        MPVLib.setPropertyString("demuxer-readahead-secs", "4")
+                        Log.i(TAG, "RTSP-TCP options: probesize=5M, readahead=4s")
                     }
                 }
                 u.endsWith(".ts") || u.startsWith("udp://") || "/rtp/" in u || u.startsWith("rtp://") -> {
                     MPVLib.setPropertyString("demuxer", "lavf")
                     MPVLib.setPropertyString("demuxer-lavf-format", "mpegts")
                     MPVLib.setPropertyString("demuxer-lavf-buffersize", "128000")
-                    MPVLib.setPropertyString("demuxer-lavf-probesize", "2000000")
-                    MPVLib.setPropertyString("demuxer-lavf-analyzeduration", "1")
+                    MPVLib.setPropertyString("demuxer-lavf-probesize", "1000000")
+                    MPVLib.setPropertyString("demuxer-lavf-analyzeduration", "0.5")
                     // FCC 流缓冲更短，减少换台后首帧等待
-                    MPVLib.setPropertyString("demuxer-readahead-secs", if (isFcc) "10" else "15")
+                    MPVLib.setPropertyString("demuxer-readahead-secs", if (isFcc) "4" else "15")
                     MPVLib.setPropertyString("cache-secs", if (isFcc) "60" else "120")
                     MPVLib.setPropertyString("cache", "yes")
                     MPVLib.setPropertyString("force-seekable", "yes")
                     MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
-                    Log.i(TAG, "TS/UDP/RTP options: probesize=2M, analyzeduration=1s, readahead=${if (isFcc) 10 else 15}s, fcc=$isFcc")
+                    Log.i(TAG, "TS/UDP/RTP options: probesize=1M, analyzeduration=0.5s, readahead=${if (isFcc) 4 else 15}s, fcc=$isFcc")
                 }
                 else -> {
                     MPVLib.setPropertyString("demuxer-lavf-format", "")
                     if (isFcc) {
-                        MPVLib.setPropertyString("demuxer-lavf-probesize", "2000000")
-                        MPVLib.setPropertyString("demuxer-lavf-analyzeduration", "1")
-                        MPVLib.setPropertyString("demuxer-readahead-secs", "10")
+                        MPVLib.setPropertyString("demuxer-lavf-probesize", "1000000")
+                        MPVLib.setPropertyString("demuxer-lavf-analyzeduration", "0.5")
+                        MPVLib.setPropertyString("demuxer-readahead-secs", "4")
                         MPVLib.setPropertyString("cache-secs", "60")
                     } else {
                         MPVLib.setPropertyString("demuxer-lavf-probesize", "5000000")
@@ -366,7 +394,7 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
                     }
                     MPVLib.setPropertyString("cache", "yes")
                     MPVLib.setPropertyString("force-seekable", "yes")
-                    Log.i(TAG, "Generic stream options: probesize=${if (isFcc) "2M" else "5M"}, readahead=${if (isFcc) "10s" else "15s"}, fcc=$isFcc")
+                    Log.i(TAG, "Generic stream options: probesize=${if (isFcc) "1M" else "5M"}, analyzeduration=${if (isFcc) "0.5s" else "5s"}, readahead=${if (isFcc) "10s" else "15s"}, fcc=$isFcc")
                 }
             }
         } catch (e: Throwable) {

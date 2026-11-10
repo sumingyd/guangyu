@@ -213,6 +213,18 @@ exoWrapper = it
 
     internal var statusPollJob: Job? = null
 
+    /** 订阅源重载单飞 Job：并发请求直接合并，避免重载风暴 */
+    internal var sourceReloadJob: Job? = null
+
+    /** 最近一次「自动」订阅源重载时间戳（毫秒）：残留检测自触发重载必须有冷却 */
+    internal var lastAutoSourceReloadAt = 0L
+
+    /** 本次进程内自动重载已执行次数：上限 1 次，防止「残留→重载→仍残留」死循环 */
+    internal var autoSourceReloadCount = 0
+
+    /** EPG 重载单飞 Job：同一时刻只允许一个 reloadEpg 在跑，期间请求合并 */
+    internal var epgReloadJob: Job? = null
+
     // 频道列表
     internal val _channels = MutableStateFlow<List<IptvChannel>>(emptyList())
     val channels: StateFlow<List<IptvChannel>> = _channels.asStateFlow()
@@ -529,6 +541,11 @@ internal var switchPlayJob: Job? = null
 
     internal val _currentHwdec = MutableStateFlow(userPrefs.getHwdec())
     val currentHwdec: StateFlow<String> = _currentHwdec.asStateFlow()
+
+    // mpv 实际生效的硬解（hwdec-current）：可能因黑名单/会话降级/arm32 而不同于用户选择
+    val actualHwdec: StateFlow<String> get() = mpvSingleton.actualHwdec
+    // 当前设备是否处于硬解崩溃黑名单
+    val hwdecBlacklisted: StateFlow<Boolean> get() = mpvSingleton.hwdecBlacklisted
 
     // RTSP 传输协议（tcp/udp），供 UI 显示和切换
     internal val _currentRtspTransport = MutableStateFlow(userPrefs.getRtspTransport())

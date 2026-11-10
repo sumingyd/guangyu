@@ -14,6 +14,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.lifecycleScope
 import com.iptv.scanner.editor.pro.mpv.MpvController
@@ -23,6 +24,8 @@ import com.iptv.scanner.editor.pro.ui.MainPlayerScreen
 import com.iptv.scanner.editor.pro.ui.SplashScreen
 import com.iptv.scanner.editor.pro.ui.UiMode
 import com.iptv.scanner.editor.pro.ui.theme.IptvTheme
+import com.iptv.scanner.editor.pro.ui.theme.PaletteLoader
+import androidx.compose.material3.MaterialTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterIsInstance
@@ -73,9 +76,6 @@ class MainActivityCompose : ComponentActivity() {
         // 底部热区占屏幕高度 20%：0.85 时手机横屏仅约 62dp，比底栏本身还矮，
         // 点击底栏上半部落进中央区被误判为暂停
         private const val BOTTOM_REGION_BOUND = 0.80f
-        // 中央暂停小块：宽/高占屏幕比例（暂停区过大易误触，仅屏幕中心小块触发暂停/播放）
-        private const val PAUSE_ZONE_WIDTH = 0.28f
-        private const val PAUSE_ZONE_HEIGHT = 0.42f
         private const val SIDEBAR_CLOSE_BOUND = 0.82f
         // 触控阈值
         private const val SLIDE_THRESHOLD = 80f
@@ -100,6 +100,13 @@ class MainActivityCompose : ComponentActivity() {
     private var touchDownTime = 0L
     private val touchSlop = TOUCH_SLOP
 
+    /**
+     * 最近一次「单击/按键唤醒 OSD」的时间戳。
+     * 双击的第二下会落在 OSD 已可见的分支上，若无此判断会把刚唤出的 OSD 立刻收起，
+     * 表现为「双击彻底唤不出 OSD」。350ms 内的后续点击只算唤醒，不再执行收起/暂停。
+     */
+    private var lastOsdWakeAt = 0L
+
     /** 横屏模式判断：横屏统一用侧边栏风格布局，支持触控+遥控器 */
     private fun isLandscapeMode(): Boolean {
         return resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -117,6 +124,26 @@ class MainActivityCompose : ComponentActivity() {
         return !viewModel.landscapeSplitMode.value || viewModel.multiViewState.value.active
     }
 
+    /** 按应用内 themeMode 直接指定窗口底色（不依赖 values-night 的系统暗色判定）。 */
+    private fun applyWindowBackground(themeMode: String) {
+        PaletteLoader.ensureLoaded(applicationContext)
+        val dark = when (themeMode) {
+            "light" -> false
+            "system" -> (resources.configuration.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+            else -> true
+        }
+        val palette = if (dark) PaletteLoader.dark() else PaletteLoader.light()
+        window.setBackgroundDrawable(
+            android.graphics.drawable.ColorDrawable(palette.window.toArgb())
+        )
+        androidx.core.view.WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = !dark
+            isAppearanceLightNavigationBars = !dark
+        }
+    }
+
     @Suppress("DEPRECATION")
     private val viewModel: AppViewModel by viewModels {
         AppViewModel.factory(application)
@@ -129,6 +156,11 @@ class MainActivityCompose : ComponentActivity() {
         // 视频播放器全屏沉浸（延伸到状态栏后），控制层/面板通过 systemBarsPadding 避让系统栏。
         enableEdgeToEdge()
         Log.i(TAG, "onCreate")
+
+        // 首帧窗口底色：必须在 setContent 之前按「应用内 themeMode」选定。
+        // values-night/styles.xml 的 windowBackground 只看系统暗色开关，
+        // 系统深色 + 应用浅色时启动阶段会透出 #0A0A14（反之亦然）。
+        applyWindowBackground(viewModel.themeMode.value)
 
         // 处理外部文件打开（intent-filter 文件关联）
         handleIntent(intent)
@@ -154,6 +186,22 @@ class MainActivityCompose : ComponentActivity() {
         setContent {
             val themeMode by viewModel.themeMode.collectAsState()
             IptvTheme(themeMode = themeMode) {
+                // 系统栏图标随主题走：只依赖 enableEdgeToEdge 的 auto 会跟随系统暗色，
+                // 应用内切浅色后状态栏/导航栏仍是白图标，看起来像「主题没切干净」
+                val darkTheme = com.iptv.scanner.editor.pro.ui.theme.isDarkTheme()
+                // 窗口底色必须跟随「应用内主题模式」，不能只靠 values-night/styles.xml：
+                // 那份 windowBackground 由系统暗色开关决定，车机系统是深色时，应用内切浅色
+                // 后窗口底色仍是 #0A0A14，Compose 任何透出的区域（启动屏、边到边、过渡帧）都是黑的。
+                val windowBg = MaterialTheme.colorScheme.background
+                androidx.compose.runtime.SideEffect {
+                    window.setBackgroundDrawable(
+                        android.graphics.drawable.ColorDrawable(windowBg.toArgb())
+                    )
+                    androidx.core.view.WindowCompat.getInsetsController(window, window.decorView).apply {
+                        isAppearanceLightStatusBars = !darkTheme
+                        isAppearanceLightNavigationBars = !darkTheme
+                    }
+                }
                 val initState by viewModel.initState.collectAsState()
                 Box(modifier = Modifier.fillMaxSize()) {
                     when (initState) {
@@ -351,14 +399,18 @@ class MainActivityCompose : ComponentActivity() {
                     if (controlsVisible) {
                         // 底栏控制条打开：点击底栏区域交给 Compose 按钮/滑杆；点击其他区域收起底栏
                         if (y > h * BOTTOM_REGION_BOUND) return super.dispatchTouchEvent(ev)
+                        // 刚被单击唤醒的 350ms 内不再收起：双击的第二下不应把刚唤出的 OSD 又关掉
+                        if (System.currentTimeMillis() - lastOsdWakeAt < 350L) return true
                         viewModel.toggleControls()
                         return true
                     }
                     // 无任何悬浮窗：分区呼出（左右边缘呼出面板，底部呼出控制条）；
-                    // 仅屏幕中央小块触发暂停/恢复，小块之外的过渡区域呼出底栏控制条，
-                    // 确保点击画面任意位置都不会误暂停
+                    // 其余区域（含屏幕中央）单击一律先唤醒底栏 OSD。
+                    // 原实现中央单击直接切换暂停，导致 OSD 自动隐藏后
+                    // “点中心/点底部都唤不出”，左侧频道列表、右侧菜单、底栏全部不可达。
                     if (y > h * BOTTOM_REGION_BOUND) {
-                        viewModel.toggleControls()
+                        lastOsdWakeAt = System.currentTimeMillis()
+                        viewModel.showControlsAutoHide()
                         return true
                     }
                     val isLeftZone = x < w * LEFT_REGION_BOUND
@@ -370,18 +422,11 @@ class MainActivityCompose : ComponentActivity() {
                         viewModel.toggleMenuPanel()
                         return true
                     }
-                    // 中央暂停小块：以屏幕中心为基准（宽 28% × 高 42%）
-                    val inCenterZone = kotlin.math.abs(x - w / 2f) <= w * PAUSE_ZONE_WIDTH / 2f &&
-                        kotlin.math.abs(y - h / 2f) <= h * PAUSE_ZONE_HEIGHT / 2f
-                    if (inCenterZone) {
-                        // 暂停/恢复以观察到的 paused 状态为准显式设置：
-                        // 原 cycle pause 是盲切换，一旦 UI 状态与 mpv 真实状态错位
-                        // （如音频焦点抢占后状态不同步），点击中央会"越点越暂停"
-                        if (viewModel.mpv.paused.value) viewModel.mpv.setPause(false)
-                        else viewModel.mpv.setPause(true)
-                    } else {
-                        viewModel.toggleControls()
-                    }
+                    // 中央/过渡区域：OSD 已隐藏时统一先唤醒底栏 OSD。
+                    // 原来中央小块直接切暂停，是「隐藏后再也唤不出 OSD」的直接原因之一；
+                    // 暂停/恢复改由底栏按钮或可见态另一次点击完成。
+                    lastOsdWakeAt = System.currentTimeMillis()
+                    viewModel.showControlsAutoHide()
                     return true
                 }
             }
@@ -437,6 +482,30 @@ class MainActivityCompose : ComponentActivity() {
             screenSaverKeyCode = -1
             return true
         }
+        // 全屏播放页 OSD 隐藏时：任意方向键/确认键先唤醒 OSD。
+        // 根因：底栏可见时 DPAD/OK 交给 Compose 焦点系统，隐藏后既没有可聚焦节点
+        // （PHONE 模式整组 DPAD 落到空焦点树，表现为完全无响应），
+        // TV 模式又会直接命中 onKeyDown 的「上下切换频道」，OSD 永远回不来。
+        // 因此把「隐藏态下的第一次 DPAD/OK」统一映射为唤醒 OSD，之后再按可见态路由。
+        if (event.action == KeyEvent.ACTION_DOWN &&
+            !viewModel.showHome.value &&
+            !viewModel.anyPanelOpen &&
+            !viewModel.landscapeSidebarVisible.value &&
+            !viewModel.controlsVisible.value &&
+            !viewModel.controlsPinned.value &&
+            viewModel.currentChannel.value != null &&
+            isFullscreenPlayback() &&
+            (event.keyCode == KeyEvent.KEYCODE_DPAD_UP ||
+                event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN ||
+                event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
+                event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT ||
+                event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
+                event.keyCode == KeyEvent.KEYCODE_ENTER)
+        ) {
+            Log.i(TAG, "dispatchKeyEvent: OSD hidden, wake by ${KeyEvent.keyCodeToString(event.keyCode)}")
+            viewModel.showControlsAutoHide()
+            return true
+        }
         if (isTvMode()) {
             val kc = event.keyCode
             val isOk = kc == KeyEvent.KEYCODE_DPAD_CENTER || kc == KeyEvent.KEYCODE_ENTER
@@ -446,8 +515,11 @@ class MainActivityCompose : ComponentActivity() {
                 // 底栏控制条显示时：DPAD/OK 交给 Compose 焦点系统在底栏内移动焦点/触发按钮，
                 // 不再全局拦截为切台/seek（此前底栏内焦点移动只能暂用 TAB 键）。
                 // 侧边栏打开时底栏被互斥隐藏（TvLayout: showOverlays && !sidebarVisible），不适用。
+                // 未选台（停止后 idx=-1）时不转交：底栏 3 个按钮此时点不出任何可恢复的结果，
+                // 会让方向键/OK 看起来全部失效，必须保留全局路由（OK/左键开侧边栏、上下键起播）。
                 if ((isOk || isDpad) && !viewModel.anyPanelOpen &&
                     !viewModel.landscapeSidebarVisible.value &&
+                    viewModel.currentChannel.value != null &&
                     (viewModel.controlsVisible.value || viewModel.controlsPinned.value)) {
                     return super.dispatchKeyEvent(event)
                 }

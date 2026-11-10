@@ -16,7 +16,11 @@ object MpvProtocolConstants {
      */
     const val RW_TIMEOUT_US = 30_000_000
 
-    const val DEMUXER_MAX_BYTES_4K = "128MiB"
-    const val DEMUXER_MAX_BYTES_DEFAULT = "48MiB"
-    const val DEMUXER_MAX_BYTES_HIGH = "16MiB"
+    /**
+     * demuxer 预算：直播场景 16MiB 前向足够，且低内存设备（1-2GB）不会 OOM；
+     * 4K 不再单独抬升（大缓存只会放大坏流破坏面、拖慢换台释放）。
+     */
+    const val DEMUXER_MAX_BYTES_DEFAULT = "16MiB"
+    const val DEMUXER_MAX_BACK_BYTES = "4MiB"
+    const val DEMUXER_READAHEAD_SECS = 4
 }
