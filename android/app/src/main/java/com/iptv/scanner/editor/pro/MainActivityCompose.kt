@@ -527,7 +527,8 @@ class MainActivityCompose : ComponentActivity() {
         // 根因：底栏可见时 DPAD/OK 交给 Compose 焦点系统，隐藏后既没有可聚焦节点
         // （PHONE 模式整组 DPAD 落到空焦点树，表现为完全无响应），
         // TV 模式又会直接命中 onKeyDown 的「上下切换频道」，OSD 永远回不来。
-        // 因此把「隐藏态下的第一次 DPAD/OK」统一映射为唤醒 OSD，之后再按可见态路由。
+        // 唤醒本身不吞按键：TV 模式下继续走后续路由，上/下照旧换台、左右照旧时移、
+        // OK 照旧打开侧栏，避免"换台要点两下 / OK 像没反应"。
         if (event.action == KeyEvent.ACTION_DOWN &&
             !viewModel.showHome.value &&
             !viewModel.anyPanelOpen &&
@@ -543,9 +544,12 @@ class MainActivityCompose : ComponentActivity() {
                 event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
                 event.keyCode == KeyEvent.KEYCODE_ENTER)
         ) {
-            Log.i(TAG, "dispatchKeyEvent: OSD hidden, wake by ${KeyEvent.keyCodeToString(event.keyCode)}")
+            Log.i(TAG, "dispatchKeyEvent: OSD hidden, wake + pass through by ${KeyEvent.keyCodeToString(event.keyCode)}")
             viewModel.showControlsAutoHide()
-            return true
+            // controlsVisible 已在上一步同步置位，同一按键不会再次进入唤醒分支。
+            // 触摸布局（手机/平板横屏）底栏按钮可聚焦，保留"先唤醒、再操作"两步，避免误触按钮；
+            // TV 模式底栏只读，没有可聚焦节点，放行后由 onKeyDown 执行原动作。
+            if (!isTvMode()) return true
         }
         if (isTvMode()) {
             val kc = event.keyCode
@@ -720,14 +724,8 @@ class MainActivityCompose : ComponentActivity() {
             return true
         }
 
-        // 左方向键：侧边栏风格 — TV模式下打开左侧频道列表（仅全屏播放页可呼出）
-        if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && isTvMode() && isFullscreenPlayback()) {
-            // 仅在全屏播放（无任何面板打开）时，左方向键打开频道列表
-            if (!viewModel.landscapeSidebarVisible.value && !viewModel.menuPanelOpen.value && !viewModel.anyPanelOpen) {
-                viewModel.setLandscapeSidebarVisible(true)
-                return true
-            }
-        }
+        // 左方向键：已改为「快退」（见 onKeyDown），不再承担打开频道列表。
+        // 频道列表统一由 OK 键打开，避免同一按键既开列表又退回前几秒。
 
         // 媒体键处理（TV 和 PHONE 模式都工作，不受面板状态影响）
         // 与 PC 端 onRemoteKey 对齐
@@ -868,7 +866,11 @@ class MainActivityCompose : ComponentActivity() {
             }
 
             KeyEvent.KEYCODE_DPAD_LEFT -> {
-                // 左键：快退
+                // 左键：快退。仅当内容真的可 seek 时执行；纯直播只提示，不拉流、不空转、不进入时移。
+                if (!viewModel.canSeekCurrent()) {
+                    viewModel.showOsd("时移", "该频道不支持时移")
+                    return true
+                }
                 // - 回看/本地视频：直接 seek
                 // - 直播/时移：在缓冲区内快退，自动进入时移模式
                 val mode = viewModel.playbackState.value.mode
@@ -880,7 +882,11 @@ class MainActivityCompose : ComponentActivity() {
                 return true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                // 右键：快进
+                // 右键：快进。仅当内容真的可 seek 时执行；纯直播只提示。
+                if (!viewModel.canSeekCurrent()) {
+                    viewModel.showOsd("时移", "该频道不支持时移")
+                    return true
+                }
                 // - 回看/本地视频：直接 seek
                 // - 直播/时移：时移下快进，追赶到前沿自动切回直播；直播前沿提示
                 val mode = viewModel.playbackState.value.mode

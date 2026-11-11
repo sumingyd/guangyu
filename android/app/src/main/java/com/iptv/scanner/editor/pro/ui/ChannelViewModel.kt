@@ -593,6 +593,34 @@ internal fun AppViewModel.continueTimeshift() {
     mpv.playFile(catchupUrl)
 }
 
+/**
+ * 当前内容是否真的可 seek（左右键快退/快进的唯一判据）。
+ *
+ * 判定依据：
+ * 1) 回看 / 时移：播放地址是带时间窗的单播点播流（playseek/starttime/endtime），天然可 seek；
+ * 2) 无频道（本地文件 / 在线点播）：mpv 的 duration 有限且 > 0；
+ * 3) 直播：mpv 配置了 force-seekable=yes，`seekable` 属性恒为 true，不能作为判据；
+ *    只有频道本身支持时移（有 catchup_source）且解复用器已建立缓冲
+ *    （duration 有效或 demuxer-cache-time > 0）时才允许 seek。
+ * 纯直播（不支持回看/时移）一律判定为不可 seek，左右键只弹提示，不拉流、不空转。
+ */
+internal fun AppViewModel.canSeekCurrent(): Boolean {
+    val state = _playbackState.value
+    if (state.mode.isCatchupOrTimeshift) return true
+
+    val duration = mpv.duration.value
+    val hasDuration = duration.isFinite() && duration > 0.0
+
+    val idx = _currentIdx.value
+    if (idx < 0) return hasDuration
+
+    val channel = _channels.value.getOrNull(idx) ?: return false
+    if (!CatchupHelper.isCatchupEnabled(channel)) return false
+
+    val cacheTime = mpv.getPropertyDouble("demuxer-cache-time") ?: 0.0
+    return hasDuration || cacheTime > 0.0
+}
+
 internal fun AppViewModel.seekLiveRelative(seconds: Double) {
     val state = _playbackState.value
     val mpvTimePos = mpv.timePos.value

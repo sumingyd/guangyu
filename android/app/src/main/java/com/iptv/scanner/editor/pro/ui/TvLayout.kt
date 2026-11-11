@@ -67,6 +67,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
@@ -322,14 +323,21 @@ fun TvPlayerLayout(
             }
         }
 
+        // 大屏（车机/电视）视距远、屏幕高：底栏整体再缩 0.9，配合样式内的内边距压缩，
+        // 把底栏高度从约 66dp 降到约 52dp，减少对画面的遮挡。手机横屏高度不足 700dp，不额外缩放。
+        val barDensity = if (configuration.screenHeightDp >= 700) {
+            Density(scaledDensity.density * 0.9f, scaledDensity.fontScale)
+        } else scaledDensity
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .width(820.dp)
                 // 导航栏/手势条出现时底栏整体上移，不被系统栏覆盖
                 .navigationBarsPadding()
-                .padding(vertical = 8.dp)
+                // 外边上边距压到 4dp：底栏贴屏幕底边，去掉上方多余空白
+                .padding(vertical = 4.dp)
         ) {
+            CompositionLocalProvider(LocalDensity provides barDensity) {
             AnimatedVisibility(
                 visible = showOverlays && !sidebarVisible,
                 enter = fadeIn(),
@@ -350,6 +358,7 @@ fun TvPlayerLayout(
                     readOnly = barReadOnly,
                     grabFocus = !barReadOnly && stylePreview == null && !stylePickerOpen && !anyPanelOpen
                 )
+            }
             }
         }
 
@@ -392,7 +401,7 @@ private fun TvTimeGroup(modifier: Modifier = Modifier, channelNumberInput: Strin
         fmt.format(java.util.Date(tick))
     }
     Column(
-        modifier = modifier.padding(top = 15.dp, end = 15.dp),
+        modifier = modifier.padding(top = 8.dp, end = 10.dp),
         horizontalAlignment = Alignment.End
     ) {
         // 侧边栏风格：数字选台时显示大字号频道号
@@ -460,7 +469,7 @@ private fun TvNetSpeed(modifier: Modifier = Modifier, mpv: com.iptv.scanner.edit
         Surface(
             color = TIME_BG,
             shape = RoundedCornerShape(4.dp),
-            modifier = modifier.padding(bottom = 12.dp, end = 15.dp)
+            modifier = modifier.padding(bottom = 8.dp, end = 10.dp)
         ) {
             Text(
                 text = speedText,
@@ -616,13 +625,14 @@ private fun TvBottomBarStyleA(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 10.dp),
+                    // 车机/电视视距更远：上下内边距压到 6dp，整条底栏更矮，少占画面
+                    .padding(horizontal = 20.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // 台标：置于底栏左侧，随三行内容整体垂直居中（不再嵌在第1行上部）
-                // 104dp 宽：适配长条状台标（如 CCTV 组合标），方形标 ContentScale.Fit 自动居中
+                // 96×40dp：适配长条状台标（如 CCTV 组合标），方形标 ContentScale.Fit 自动居中
                 Box(
-                    modifier = Modifier.size(104.dp, 50.dp).clip(RoundedCornerShape(6.dp)).background(ICON_BG),
+                    modifier = Modifier.size(96.dp, 40.dp).clip(RoundedCornerShape(6.dp)).background(ICON_BG),
                     contentAlignment = Alignment.Center
                 ) {
                     if (displayInfo.logo.isNotEmpty()) {
@@ -631,15 +641,15 @@ private fun TvBottomBarStyleA(
                         Text(
                             text = displayInfo.name.take(2).ifEmpty { "·" },
                             color = MaterialTheme.colorScheme.onSurface,
-                            fontSize = 15.sp,
+                            fontSize = 14.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
                 }
-                Spacer(modifier = Modifier.width(14.dp))
+                Spacer(modifier = Modifier.width(10.dp))
                 // 竖分隔条：台标列与右侧信息列分隔
-                Box(modifier = Modifier.width(1.dp).height(50.dp).background(TV_ROW_DIVIDER))
-                Spacer(modifier = Modifier.width(14.dp))
+                Box(modifier = Modifier.width(1.dp).height(40.dp).background(TV_ROW_DIVIDER))
+                Spacer(modifier = Modifier.width(10.dp))
                 // 右侧信息列：三行（频道信息 / 当前节目+进度 / 下一档节目）
                 Column(modifier = Modifier.weight(1f)) {
                 // 第1行：频道号 + 频道名 + spacer + 状态标签 + 技术标签组
@@ -648,7 +658,7 @@ private fun TvBottomBarStyleA(
                         Text(
                             text = String.format("%03d", displayInfo.idx + 1),
                             color = tvPalette.accentText,
-                            fontSize = 14.sp,
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Medium
                         )
                         Spacer(modifier = Modifier.width(5.dp))
@@ -658,35 +668,51 @@ private fun TvBottomBarStyleA(
                     Text(
                         text = displayInfo.name.ifEmpty { "未选择频道" },
                         color = if (displayInfo.idx >= 0) oc.textPrimary else oc.textSecondary,
-                        fontSize = 18.sp, fontWeight = FontWeight.Bold,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis
+                        fontSize = 16.sp, fontWeight = FontWeight.Bold,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        // 频道名让位给右侧固定宽度徽章：名称过长时省略号截断，
+                        // 保证码率/容器徽章宽度恒定、不挤压、不换行
+                        modifier = Modifier.weight(1f)
                     )
-                    Spacer(modifier = Modifier.weight(1f))
+                    Spacer(modifier = Modifier.width(6.dp))
                     if (statusTag != null) {
                         Surface(color = statusTag.second.copy(alpha = 0.25f), shape = RoundedCornerShape(4.dp)) {
-                            Text(text = statusTag.first, color = statusTag.second, fontSize = 11.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                            Text(text = statusTag.first, color = statusTag.second, fontSize = 10.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
                         }
                         Spacer(modifier = Modifier.width(5.dp))
                     }
                     if (paused && fileLoaded) {
                         Surface(color = tvPalette.borderSubtle, shape = RoundedCornerShape(4.dp)) {
-                            Text("暂停", color = MaterialTheme.colorScheme.onSurface, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
+                            Text("暂停", color = MaterialTheme.colorScheme.onSurface, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
                         }
                         Spacer(modifier = Modifier.width(5.dp))
                     }
                     mediaInfoBadges.forEach { info: String ->
                         Surface(color = tvPalette.borderSubtle, shape = RoundedCornerShape(4.dp)) {
-                            Text(text = info, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
+                            Text(
+                                text = info,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = androidx.compose.ui.text.TextStyle(
+                                    fontSize = 10.sp,
+                                    fontFeatureSettings = "tnum"
+                                ),
+                                maxLines = 1,
+                                softWrap = false,
+                                textAlign = tvBadgeFixedWidth(info, 10f)?.let { TextAlign.Center } ?: TextAlign.Start,
+                                modifier = tvBadgeFixedWidth(info, 10f)?.let { w ->
+                                    Modifier.width(w).padding(vertical = 2.dp)
+                                } ?: Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            )
                         }
                         Spacer(modifier = Modifier.width(4.dp))
                     }
                 }
 
                 // 行间分隔条
-                Box(modifier = Modifier.fillMaxWidth().padding(top = 6.dp).height(1.dp).background(TV_ROW_DIVIDER))
+                Box(modifier = Modifier.fillMaxWidth().padding(top = 4.dp).height(1.dp).background(TV_ROW_DIVIDER))
 
                 // 第2行：当前节目时间范围 + 节目名 + 进度条(细线) + 时间戳 + 距结束 + 按钮
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                         if (currentProgram != null && currentProgram.title.isNotEmpty()) {
                             if (currentProgram.stopTs > 0) {
@@ -695,13 +721,13 @@ private fun TvBottomBarStyleA(
                                     val end = timeFmt.format(java.util.Date(currentProgram.stopTs * 1000L))
                                     "$start-$end"
                                 }
-                                Text(text = timeRange, color = tvPalette.textSecondary, fontSize = 13.sp)
+                                Text(text = timeRange, color = tvPalette.textSecondary, fontSize = 12.sp)
                                 Spacer(modifier = Modifier.width(8.dp))
                             }
                             Text(
                                 text = currentProgram.title,
                                 color = oc.textPrimary,
-                                fontSize = 14.sp,
+                                fontSize = 13.sp,
                                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f)
                             )
@@ -709,7 +735,7 @@ private fun TvBottomBarStyleA(
                             Text(
                                 text = "精彩节目",
                                 color = oc.textSecondary.copy(alpha = 0.6f),
-                                fontSize = 14.sp,
+                                fontSize = 13.sp,
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -813,8 +839,8 @@ private fun TvBottomBarStyleA(
                 run {
                     val hasNext = nextProgram != null
                     // 行间分隔条
-                    Box(modifier = Modifier.fillMaxWidth().padding(top = 6.dp).height(1.dp).background(TV_ROW_DIVIDER))
-                    Spacer(modifier = Modifier.height(3.dp))
+                    Box(modifier = Modifier.fillMaxWidth().padding(top = 4.dp).height(1.dp).background(TV_ROW_DIVIDER))
+                    Spacer(modifier = Modifier.height(2.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                             if (hasNext) {
                                 val nextStart = remember(nextProgram) {
@@ -823,12 +849,12 @@ private fun TvBottomBarStyleA(
                                 val nextEnd = remember(nextProgram) {
                                     timeFmt.format(java.util.Date(nextProgram!!.stopTs * 1000L))
                                 }
-                                Text(text = "$nextStart-$nextEnd", color = tvPalette.textSecondary, fontSize = 13.sp)
+                                Text(text = "$nextStart-$nextEnd", color = tvPalette.textSecondary, fontSize = 12.sp)
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = nextProgram!!.title,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontSize = 14.sp,
+                                    fontSize = 13.sp,
                                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f)
                                 )
@@ -837,7 +863,7 @@ private fun TvBottomBarStyleA(
                                 Text(
                                     text = dateText,
                                     color = tvPalette.textSecondary,
-                                    fontSize = 13.sp,
+                                    fontSize = 12.sp,
                                     modifier = Modifier.weight(1f)
                                 )
                             }
@@ -1416,12 +1442,56 @@ private fun TvBarMediaBadges(
     }
 } else emptyList()
 
+/** 容器/协议等固定格式标签：这类文本长度固定，统一给固定宽度避免挤压相邻徽章 */
+private val TV_BADGE_FORMAT_LABELS = setOf(
+    "MPEGTS", "MPEG2TS", "MPEG4", "MATROSKA", "MP2T", "TS", "MKV", "MP4", "FLV",
+    "HLS", "HTTP", "HTTPS", "RTSP", "UDP", "RTP", "LOCAL"
+)
+
+/**
+ * 变化值徽章的固定宽度（dp）：码率 / 帧率 / 分辨率 / 声道 / 容器格式。
+ * 这些值会随码率位数、容器格式变化，若不固定宽度，整组徽章会左右重排，
+ * 严重时把容器标签挤成两行（车机 `MPEGTS` 换行问题的根因）。
+ * 编码名（H264/HEVC…）只在换台时变化，按内容宽度排布即可。
+ */
+private fun tvBadgeFixedWidth(text: String, fontSize: Float): Dp? {
+    val base = when {
+        text.endsWith("FPS") -> 52.dp
+        text == "4K" -> 44.dp
+        text.endsWith("P") && text.dropLast(1).toIntOrNull() != null -> 56.dp
+        text.matches(Regex("^\\d+(\\.\\d+)?[KMG]B?$")) -> 56.dp
+        text.endsWith("ch") || text == "立体声" || text == "单声道" -> 58.dp
+        text in TV_BADGE_FORMAT_LABELS -> 62.dp
+        else -> return null
+    }
+    // 按字号缩放：9sp 的小样式用更窄的固定宽度，避免 8 个徽章在小卡片里溢出
+    val scale = (fontSize / 11f).coerceIn(0.78f, 1.1f)
+    return (base.value * scale).dp
+}
+
 /** 共享：徽章文本（白底微透胶囊，与样式 A 一致） */
 @Composable
 private fun TvBarBadgeTexts(badges: List<String>, sp: TextUnit = 11.sp) {
     badges.forEach { info: String ->
+        val fixedWidth = tvBadgeFixedWidth(info, sp.value)
         Surface(color = tvPalette.borderSubtle, shape = RoundedCornerShape(4.dp)) {
-            Text(text = info, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = sp, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
+            Text(
+                text = info,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                // 等宽数字：码率/帧率位数变化时单字宽度一致，整组不左右跳动
+                style = androidx.compose.ui.text.TextStyle(
+                    fontSize = sp,
+                    fontFeatureSettings = "tnum"
+                ),
+                maxLines = 1,
+                softWrap = false,
+                textAlign = if (fixedWidth != null) TextAlign.Center else TextAlign.Start,
+                modifier = if (fixedWidth != null) {
+                    Modifier.width(fixedWidth).padding(vertical = 2.dp)
+                } else {
+                    Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                }
+            )
         }
         Spacer(modifier = Modifier.width(4.dp))
     }
