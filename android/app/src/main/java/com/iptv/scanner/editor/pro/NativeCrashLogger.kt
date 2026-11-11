@@ -188,6 +188,10 @@ object NativeCrashLogger {
             crashFile.writeText(report)
             Log.i(TAG, "Crash report saved: ${crashFile.absolutePath}")
 
+            // 镜像一份到外部私有目录：设备无 root 时 getFilesDir() 读不到，
+            // 外部目录可以直接 `adb pull /sdcard/Android/data/<包名>/files/crash-reports/`
+            mirrorToExternal(context, crashFile.name, report)
+
             // 清理临时日志文件
             tempLogcat.delete()
 
@@ -195,6 +199,28 @@ object NativeCrashLogger {
             cleanupOldCrashReports(crashDir)
         } catch (e: Exception) {
             Log.e(TAG, "saveCrashReport failed", e)
+        }
+    }
+
+    /** 外部私有目录（无需 root 即可 adb pull），不可用时返回 null */
+    private fun externalCrashDir(context: Context): File? {
+        return try {
+            val base = context.getExternalFilesDir(null) ?: return null
+            File(base, CRASH_DIR).apply { mkdirs() }
+        } catch (e: Exception) {
+            Log.w(TAG, "external crash dir unavailable: ${e.message}")
+            null
+        }
+    }
+
+    private fun mirrorToExternal(context: Context, name: String, content: String) {
+        val dir = externalCrashDir(context) ?: return
+        try {
+            File(dir, name).writeText(content)
+            Log.i(TAG, "Crash report mirrored: ${File(dir, name).absolutePath}")
+            cleanupOldCrashReports(dir)
+        } catch (e: Exception) {
+            Log.w(TAG, "mirror crash report failed: ${e.message}")
         }
     }
 
