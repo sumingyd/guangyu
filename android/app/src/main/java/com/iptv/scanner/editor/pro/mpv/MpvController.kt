@@ -550,6 +550,13 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                     Log.i(TAG, "vo health check: ok (vo=$currentVo, video-format=$videoFormat)")
                     return@Runnable
                 }
+                // VO 没接管时，先排除“探测预算太小导致编码没识别出来”：
+                // 用 5MB/5s 重载一次，比直接切 vo 更轻，也不会误伤正常流。
+                val activeUrl = playbackController.lastLoadedUrl.ifEmpty { playbackController.loadingUrl }
+                if (playbackController.retryWithFullProbeBudget(activeUrl)) {
+                    Log.w(TAG, "vo health check: no vo-configured, retry '$activeUrl' with full probe budget")
+                    return@Runnable
+                }
                 // 默认 mediacodec_embed（arm64 TV）起播失败：自动回退 gpu + auto-copy 一次
                 if (configured == false && maybeFallbackFromMediacodecEmbed("vo-configured=false, video-format=$videoFormat")) {
                     return@Runnable
@@ -591,6 +598,12 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 val videoFormat = MPVLib.getPropertyString("video-format") ?: ""
                 val frames = try { MPVLib.getPropertyInt("estimated-frame-number") ?: 0 } catch (_: Throwable) { 0 }
                 if (videoFormat.isEmpty() || frames <= 0) {
+                    // 也可能只是 1MB/0.5s 没探到编码：先按完整预算重载一次，再判定 VO 故障
+                    val activeUrl = playbackController.lastLoadedUrl.ifEmpty { playbackController.loadingUrl }
+                    if (playbackController.retryWithFullProbeBudget(activeUrl)) {
+                        Log.w(TAG, "vo weak check: no frames, retry '$activeUrl' with full probe budget")
+                        return@Runnable
+                    }
                     Log.w(TAG, "vo weak check failed: video-format='$videoFormat', frames=$frames, vo-configured=$configured")
                     maybeFallbackFromMediacodecEmbed(
                         "no frames after ${(VO_HEALTH_CHECK_DELAY_MS + VO_WEAK_CHECK_DELAY_MS) / 1000}s " +
@@ -1138,8 +1151,13 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                     // 换台失败：必须清理切换标志，否则后续错误回调全部被当成「换台中」跳过
                     playbackController.clearSwitchingState()
                     playbackController.clearPendingLoadUrl()
-                    degradeHwdecOnLoadFailure()
-                    postOnUiThread { onFileError?.invoke() }
+                    // 探测预算回退：1MB/0.5s 探测失败时用 5MB/5s 重载一次，成功则不再报错
+                    if (playbackController.retryWithFullProbeBudget(endedUrl)) {
+                        Log.w(TAG, "probe budget fallback: reload '$endedUrl' with full 5M/5s")
+                    } else {
+                        degradeHwdecOnLoadFailure()
+                        postOnUiThread { onFileError?.invoke() }
+                    }
                 } else if (wasPlaying && !_eofReached.value) {
                     Log.i(TAG, "MPV_EVENT_END_FILE: stream '$endedUrl' ended mid-stream (wasLoaded=$wasLoaded), delayed error check 300ms (gen=$gen)")
                     val runnable = Runnable {

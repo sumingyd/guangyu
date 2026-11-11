@@ -135,7 +135,11 @@ android {
      *
      * versionCode 按 ABI 区分（确保各 ABI 的 versionCode 唯一）：
      * arm64-v8a: versionCode 不变（主版本）
-     * armeabi-v7a: versionCode + 1（避免与 arm64 冲突） */
+     * armeabi-v7a: versionCode + 1（避免与 arm64 冲突）
+     *
+     * 测试包需要覆盖同版本号的旧安装时可传 -PversionCodeOffset=1：
+     * 两个 ABI 的 versionCode 各自再加偏移（arm64 +1、arm32 +2），versionName 不变。 */
+    def versionCodeOffset = (project.findProperty('versionCodeOffset') ?: '0').toInteger()
     applicationVariants.all { variant ->
         variant.outputs.each { output ->
             def targetAbi = project.findProperty('targetAbi')
@@ -143,10 +147,11 @@ android {
             if (targetAbi != null) {
                 if (targetAbi == 'arm64-v8a') {
                     abiSuffix = '-arm64'
+                    output.versionCodeOverride = variant.versionCode + versionCodeOffset
                 } else if (targetAbi == 'armeabi-v7a') {
                     abiSuffix = '-arm32'
                     // 32 位 versionCode 加 1 偏移，确保两个 APK 的 versionCode 不同
-                    output.versionCodeOverride = variant.versionCode + 1
+                    output.versionCodeOverride = variant.versionCode + versionCodeOffset + 1
                 }
             } else {
                 abiSuffix = '-universal'

@@ -4,6 +4,7 @@ import android.util.Log
 import `is`.xyz.mpv.MPVLib
 import com.iptv.scanner.editor.pro.data.UserPrefs
 import com.iptv.scanner.editor.pro.mpv.MpvProtocolConstants
+import com.iptv.scanner.editor.pro.mpv.SwitchPerf
 import com.iptv.scanner.editor.pro.player.FccHelper
 
 /**
@@ -297,6 +298,40 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
         pendingEndFileError = null
     }
 
+    /**
+     * 已经用完整探测预算重试过的 URL（同一 URL 只回退一次）。
+     * setupProtocolOptions 按 URL 比对，避免换台时把回退预算误用到别的频道。
+     */
+    @Volatile
+    private var fullProbeBudgetUrl = ""
+
+    /**
+     * 直播探测预算回退：1MB / 0.5s 探测失败或识别不出编码时，
+     * 用原来的 5MB / 5s 重新加载一次。同一 URL 只回退一次，避免死循环。
+     *
+     * @return true 表示已经发起重载，调用方不要再走错误/降级流程
+     */
+    fun retryWithFullProbeBudget(url: String): Boolean {
+        if (url.isEmpty()) return false
+        if (!isLiveProbeBudgetUrl(url)) return false
+        if (fullProbeBudgetUrl == url) return false
+        fullProbeBudgetUrl = url
+        Log.w(TAG, "probe budget: retry with full 5M/5s url=$url")
+        SwitchPerf.markAbort("probe-fallback-reload")
+        playFile(url)
+        return true
+    }
+
+    /** 是否是使用 1MB/0.5s 探测预算的直播流（TS / RTSP / RTP / FCC），排除 VOD/HLS */
+    private fun isLiveProbeBudgetUrl(url: String): Boolean {
+        val u = url.lowercase()
+        if (".m3u8" in u || "format=hls" in u) return false
+        if (isVodLikeUrl(u)) return false
+        val path = u.substringBefore('?')
+        return u.startsWith("rtsp://") || u.startsWith("rtp://") || u.startsWith("udp://") ||
+            path.endsWith(".ts") || "/rtp/" in u
+    }
+
     private fun setupProtocolOptions(url: String) {
         if (url.isEmpty()) return
         val u = url.lowercase()
@@ -320,6 +355,8 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
             Log.i(TAG, "setupProtocolOptions: VOD/catchup 流，跳过 FCC 调优 url=$url")
         }
         try {
+            // 直播探测预算：常规 1MB/0.5s；该 URL 探测失败后的回退轮使用 5MB/5s
+            val fullProbe = url == fullProbeBudgetUrl
             if (!u.startsWith("rtsp://")) {
                 MPVLib.setPropertyString("user-agent", MpvProtocolConstants.USER_AGENT)
             }
@@ -353,31 +390,34 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
                     MPVLib.setPropertyString("demuxer-lavf-format", "")
                     MPVLib.setPropertyString("cache-secs", "60")
                     if (transport == "udp") {
-                        MPVLib.setPropertyString("demuxer-lavf-probesize", "500000")
-                        MPVLib.setPropertyString("demuxer-lavf-analyzeduration", "1")
+                        MPVLib.setPropertyString("demuxer-lavf-probesize", if (fullProbe) "5000000" else "1000000")
+                        MPVLib.setPropertyString("demuxer-lavf-analyzeduration", if (fullProbe) "5" else "0.5")
                         MPVLib.setPropertyString("demuxer-readahead-secs", "5")
                         MPVLib.setPropertyString("force-seekable", "no")
-                        Log.i(TAG, "RTSP-UDP options: probesize=500K, readahead=5s")
+                        Log.i(TAG, "RTSP-UDP options: probesize=${if (fullProbe) "5M" else "1M"}, " +
+                            "analyzeduration=${if (fullProbe) "5s" else "0.5s"}, readahead=5s")
                     } else {
-                        MPVLib.setPropertyString("demuxer-lavf-probesize", "5000000")
-                        MPVLib.setPropertyString("demuxer-lavf-analyzeduration", "5")
+                        MPVLib.setPropertyString("demuxer-lavf-probesize", if (fullProbe) "5000000" else "1000000")
+                        MPVLib.setPropertyString("demuxer-lavf-analyzeduration", if (fullProbe) "5" else "0.5")
                         MPVLib.setPropertyString("demuxer-readahead-secs", "4")
-                        Log.i(TAG, "RTSP-TCP options: probesize=5M, readahead=4s")
+                        Log.i(TAG, "RTSP-TCP options: probesize=${if (fullProbe) "5M" else "1M"}, " +
+                            "analyzeduration=${if (fullProbe) "5s" else "0.5s"}, readahead=4s")
                     }
                 }
                 u.endsWith(".ts") || u.startsWith("udp://") || "/rtp/" in u || u.startsWith("rtp://") -> {
                     MPVLib.setPropertyString("demuxer", "lavf")
                     MPVLib.setPropertyString("demuxer-lavf-format", "mpegts")
                     MPVLib.setPropertyString("demuxer-lavf-buffersize", "128000")
-                    MPVLib.setPropertyString("demuxer-lavf-probesize", "1000000")
-                    MPVLib.setPropertyString("demuxer-lavf-analyzeduration", "0.5")
+                    MPVLib.setPropertyString("demuxer-lavf-probesize", if (fullProbe) "5000000" else "1000000")
+                    MPVLib.setPropertyString("demuxer-lavf-analyzeduration", if (fullProbe) "5" else "0.5")
                     // FCC 流缓冲更短，减少换台后首帧等待
                     MPVLib.setPropertyString("demuxer-readahead-secs", if (isFcc) "4" else "15")
                     MPVLib.setPropertyString("cache-secs", if (isFcc) "60" else "120")
                     MPVLib.setPropertyString("cache", "yes")
                     MPVLib.setPropertyString("force-seekable", "yes")
                     MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
-                    Log.i(TAG, "TS/UDP/RTP options: probesize=1M, analyzeduration=0.5s, readahead=${if (isFcc) 4 else 15}s, fcc=$isFcc")
+                    Log.i(TAG, "TS/UDP/RTP options: probesize=${if (fullProbe) "5M" else "1M"}, " +
+                        "analyzeduration=${if (fullProbe) "5s" else "0.5s"}, readahead=${if (isFcc) 4 else 15}s, fcc=$isFcc")
                 }
                 else -> {
                     MPVLib.setPropertyString("demuxer-lavf-format", "")
