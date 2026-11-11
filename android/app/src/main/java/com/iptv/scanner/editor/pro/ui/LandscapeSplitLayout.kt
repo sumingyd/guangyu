@@ -111,6 +111,12 @@ internal fun TvSplitLayout(
     val liquidGlass by viewModel.liquidGlass.collectAsState()
     val focusManager = LocalFocusManager.current
     val displayInfo by viewModel.channelDisplayInfo.collectAsState()
+    // 分屏顶部标题同样按同名多路流加分辨率后缀，与频道列表/底栏口径一致
+    val splitChannels by viewModel.channels.collectAsState()
+    val splitDuplicateNames = remember(splitChannels) { duplicateChannelNames(splitChannels) }
+    val splitDisplayName = splitChannels.getOrNull(displayInfo.idx)
+        ?.let { channelDisplayName(it, splitDuplicateNames) }
+        ?: displayInfo.name
     val favorites by viewModel.favorites.collectAsState()
     val currentIdx by viewModel.currentIdx.collectAsState()
     val paused by viewModel.mpv.paused.collectAsState()
@@ -276,7 +282,7 @@ internal fun TvSplitLayout(
                     Spacer(modifier = Modifier.width(8.dp))
                 }
                 Text(
-                    text = displayInfo.name.ifEmpty { "未选择频道" },
+                    text = splitDisplayName.ifEmpty { "未选择频道" },
                     color = oc.textPrimary,
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,

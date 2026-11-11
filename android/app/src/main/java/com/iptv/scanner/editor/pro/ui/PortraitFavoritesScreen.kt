@@ -61,6 +61,8 @@ internal fun PortraitFavoritesScreen(
         if (searchQuery.isBlank()) favChannels
         else favChannels.filter { it.name.contains(searchQuery, ignoreCase = true) }
     }
+    // 同名多路流追加分辨率后缀，与频道列表保持一致
+    val duplicateNames = remember(channels) { duplicateChannelNames(channels) }
 
     Column(
         modifier = Modifier
@@ -186,6 +188,7 @@ internal fun PortraitFavoritesScreen(
                 PortraitAptvChannelCard(
                     viewModel = viewModel,
                     channel = channel,
+                    displayName = channelDisplayName(channel, duplicateNames),
                     idx = idx,
                     isCurrent = fileLoaded && idx == currentIdx,
                     thumbnailPaths = thumbnailPaths,
@@ -205,6 +208,7 @@ internal fun PortraitFavoritesScreen(
 internal fun PortraitAptvChannelCard(
     viewModel: AppViewModel,
     channel: com.iptv.scanner.editor.pro.data.IptvChannel,
+    displayName: String = channel.name,
     idx: Int,
     isCurrent: Boolean,
     thumbnailPaths: Map<String, String>,
@@ -307,7 +311,7 @@ internal fun PortraitAptvChannelCard(
                     .padding(horizontal = 6.dp, vertical = 6.dp)
             ) {
                 Text(
-                    text = channel.name,
+                    text = displayName,
                     color = MaterialTheme.colorScheme.onSurface,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,

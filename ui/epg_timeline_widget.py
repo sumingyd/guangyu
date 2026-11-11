@@ -378,6 +378,7 @@ class EpgChannelHeaderWidget(QWidget):
         self.LOGO_WIDTH = max(28, int(round(34 * metrics['row_height'] / 44)))
         self.LOGO_HEIGHT = max(20, int(round(26 * metrics['row_height'] / 44)))
         self._channels: List[Dict[str, Any]] = []
+        self._display_names: List[str] = []
         self._current_channel = None
         self._logo_service = None
         self._logo_pixmaps: Dict[str, Any] = {}
@@ -394,10 +395,34 @@ class EpgChannelHeaderWidget(QWidget):
 
     def set_data(self, channels: List[Dict[str, Any]]):
         self._channels = channels
+        self._display_names = self._build_display_names(channels)
         n = len(self._channels)
         h = n * self.ROW_HEIGHT + 10
         self.setFixedHeight(max(200, h))
         self.update()
+
+    @staticmethod
+    def _build_display_names(channels: List[Dict[str, Any]]) -> List[str]:
+        """行显示名：同名多路流（同一频道的不同码流）追加分辨率后缀。
+
+        复用频道列表的同名后缀规则（同名才加，无分辨率退回频道号），
+        避免两处规则漂移；只影响显示文本，不改频道数据。
+        """
+        name_counts: Dict[str, int] = {}
+        for ch in channels:
+            name = (ch.get('name') or '').strip()
+            name_counts[name] = name_counts.get(name, 0) + 1
+        from controllers.channel_controller import ChannelController
+        names: List[str] = []
+        for ch in channels:
+            # 行数据里 'channel' 是原始频道对象，分辨率/频道号要从它取
+            src = ch.get('channel')
+            if not isinstance(src, dict):
+                src = ch
+            names.append(
+                ChannelController._channel_list_display_name(src, ch.get('name', ''), name_counts)
+            )
+        return names
 
     def set_current_channel(self, channel):
         """channel 可以是原始频道 dict（按对象身份匹配），也兼容传频道名。"""
@@ -493,7 +518,8 @@ class EpgChannelHeaderWidget(QWidget):
         for i in range(first_row, last_row):
             y = i * self.ROW_HEIGHT
             ch_data = self._channels[i]
-            ch_name = ch_data.get('name', '')
+            ch_name = (self._display_names[i] if i < len(self._display_names)
+                       else ch_data.get('name', ''))
             is_current = self._is_current(ch_data)
             if is_current:
                 painter.fillRect(0, y, w, self.ROW_HEIGHT, QColor(accent.red(), accent.green(), accent.blue(), 40))

@@ -308,7 +308,7 @@ private fun ChannelListContent(
         // 同名多路流（同一频道的高清/标清等不同码流）在名称后追加分辨率后缀，
         // 否则两条同名频道看起来完全一样，像少了一条
         val duplicateNames = remember(filteredChannels) {
-            filteredChannels.groupingBy { it.first.name }.eachCount().filterValues { it > 1 }.keys
+            duplicateChannelNames(filteredChannels.map { it.first })
         }
 
         LazyColumn(

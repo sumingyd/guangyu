@@ -971,7 +971,7 @@ private fun TimelineChannelColumn(
                     }
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = row.channelName,
+                        text = row.displayName.ifEmpty { row.channelName },
                         color = if (isCurrent) accentTextColor else onSurfaceVariantColor,
                         fontSize = if (isLandscape) 13.sp else 10.sp,
                         // 允许 2 行：列宽放不下的长台名换成第二行显示，而不是直接省略成「CCTV-…」

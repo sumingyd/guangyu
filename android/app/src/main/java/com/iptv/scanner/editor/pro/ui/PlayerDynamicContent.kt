@@ -365,6 +365,8 @@ internal fun PortraitLocalFileInfo(
             .filter { it.source.isEmpty() }
             .take(10)
     }
+    // 同名多路流追加分辨率后缀，避免两条同名频道看起来完全一样
+    val duplicateNames = remember(channels) { duplicateChannelNames(channels) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -538,7 +540,7 @@ internal fun PortraitLocalFileInfo(
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = channel.name,
+                            text = channelDisplayName(channel, duplicateNames),
                             color = MaterialTheme.colorScheme.onSurface,
                             fontSize = 13.sp,
                             maxLines = 1,
@@ -1012,6 +1014,8 @@ internal fun PortraitRecentLocalFiles(viewModel: AppViewModel) {
             .filter { it.source.isEmpty() || ProgressHelper.isLocalFile(it.url) }
             .take(20)
     }
+    // 同名多路流追加分辨率后缀，避免两条同名频道看起来完全一样
+    val duplicateNames = remember(channels) { duplicateChannelNames(channels) }
 
     if (recentLocal.isEmpty()) {
         Box(
@@ -1041,7 +1045,7 @@ internal fun PortraitRecentLocalFiles(viewModel: AppViewModel) {
                     Spacer(modifier = Modifier.width(8.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = channel.name,
+                            text = channelDisplayName(channel, duplicateNames),
                             color = MaterialTheme.colorScheme.onSurface,
                             fontSize = 14.sp,
                             maxLines = 1,

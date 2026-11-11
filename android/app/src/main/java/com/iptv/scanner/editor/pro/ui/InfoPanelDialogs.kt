@@ -377,6 +377,7 @@ internal fun ReminderPopup(
 @Composable
 internal fun ChannelInfoDialog(viewModel: AppViewModel) {
     val currentChannel by viewModel.currentChannel.collectAsState()
+    val displayInfo by viewModel.channelDisplayInfo.collectAsState()
     val mpv = viewModel.mpv
     val videoWidth by mpv.videoWidth.collectAsState()
     val videoHeight by mpv.videoHeight.collectAsState()
@@ -514,7 +515,8 @@ internal fun ChannelInfoDialog(viewModel: AppViewModel) {
                 Spacer(modifier = Modifier.width(8.dp))
             }
             Text(
-                text = currentChannel?.name ?: "频道信息",
+                // 标题用带分辨率后缀的显示名：同名多路流在弹窗标题也能区分
+                text = displayInfo.name.ifEmpty { currentChannel?.name ?: "频道信息" },
                 color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Medium

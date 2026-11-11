@@ -223,7 +223,8 @@ internal fun LandscapeHomeScreen(
                         Box(modifier = Modifier.align(Alignment.TopCenter)) {
                             MiniPlayerBar(
                                 viewModel = viewModel,
-                                channelName = currentCh?.name ?: displayInfo.name,
+                                // displayInfo.name 已带同名多路流的分辨率后缀，优先用它
+                                channelName = displayInfo.name.ifEmpty { currentCh?.name ?: "" },
                                 channelLogo = currentCh?.logo ?: "",
                                 groupName = currentCh?.group ?: "",
                                 isPaused = paused2,
@@ -701,6 +702,8 @@ private fun LandscapeSystemOverviewPanel(viewModel: AppViewModel) {
     val groupCount = remember(channels) {
         channels.map { it.group.ifEmpty { "未分组" } }.distinct().size
     }
+    // 同名多路流补分辨率后缀，与频道列表口径一致
+    val overviewDupNames = remember(channels) { duplicateChannelNames(channels) }
 
     // ==================== 运行日志（app.log 尾部，5 秒自动刷新） ====================
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -784,7 +787,8 @@ private fun LandscapeSystemOverviewPanel(viewModel: AppViewModel) {
                         fontSize = 11.sp
                     )
                     Text(
-                        text = currentCh?.name ?: "未在播放",
+                        text = currentCh?.let { channelDisplayName(it, overviewDupNames) }
+                            ?: "未在播放",
                         color = MaterialTheme.colorScheme.onSurface,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Medium,

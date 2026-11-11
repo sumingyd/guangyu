@@ -364,6 +364,9 @@ internal fun PortraitBottomTabBar(
 @Composable
 internal fun PortraitInfoBarV2(viewModel: AppViewModel) {
     val currentChannel by viewModel.currentChannel.collectAsState()
+    // 两路同名频道（如 CCTV-1 1080P / 576P）在底栏也要能区分，规则与频道列表一致
+    val bottomBarChannels by viewModel.channels.collectAsState()
+    val bottomBarDuplicateNames = remember(bottomBarChannels) { duplicateChannelNames(bottomBarChannels) }
     val favorites by viewModel.favorites.collectAsState()
     val currentIdx by viewModel.currentIdx.collectAsState()
     val dlnaConnected by viewModel.dlnaConnected.collectAsState()
@@ -419,7 +422,7 @@ internal fun PortraitInfoBarV2(viewModel: AppViewModel) {
                 }
                 // 频道名
                 Text(
-                    text = currentChannel?.name ?: "未选择频道",
+                    text = currentChannel?.let { channelDisplayName(it, bottomBarDuplicateNames) } ?: "未选择频道",
                     color = oc.textPrimary,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Medium,

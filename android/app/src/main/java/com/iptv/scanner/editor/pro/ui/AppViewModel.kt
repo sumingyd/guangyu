@@ -127,6 +127,8 @@ enum class EpgTimelineRange { ALL, FAVORITES, CURRENT_GROUP }
 data class EpgTimelineRow(
     val channelIdx: Int,
     val channelName: String,
+    /** 显示名：同名多路流追加分辨率后缀（channelName 仍是身份兜底用的原始名称） */
+    val displayName: String = "",
     val programs: List<IptvEpgProgram>,
     /** 节目数据是否已加载（懒加载骨架行=false，可见窗口内由 ensureEpgTimelineRowsLoaded 填充） */
     val programsLoaded: Boolean = true

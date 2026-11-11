@@ -687,6 +687,8 @@ internal fun PortraitListScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(modifier = Modifier.height(8.dp))
+                    // 最近播放列表同样按同名多路流加分辨率后缀，避免两条 CCTV-1 分不清
+                    val historyDuplicateNames = remember(channels) { duplicateChannelNames(channels) }
                     localHistory.forEach { channel ->
                         val idx = channels.indexOfFirst { it.url == channel.url }
                         Surface(
@@ -704,7 +706,7 @@ internal fun PortraitListScreen(
                                 Icon(Icons.Default.PlayArrow, contentDescription = null, tint = AptvAccent, modifier = Modifier.size(24.dp))
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Text(
-                                    text = channel.name,
+                                    text = channelDisplayName(channel, historyDuplicateNames),
                                     color = MaterialTheme.colorScheme.onSurface,
                                     fontSize = 14.sp,
                                     maxLines = 1,
@@ -807,9 +809,7 @@ private fun ChannelListPanel(
 ) {
     // 同名多路流（同一频道的高清/标清等不同码流）在名称后追加分辨率后缀，
     // 否则两条同名频道在列表里完全一样，看起来像少了一条
-    val duplicateNames = remember(displayChannels) {
-        displayChannels.groupingBy { it.name }.eachCount().filterValues { it > 1 }.keys
-    }
+    val duplicateNames = remember(displayChannels) { duplicateChannelNames(displayChannels) }
     val listState = rememberLazyListState()
     LaunchedEffect(displayChannels, currentIdx) {
         if (currentIdx >= 0) {
@@ -1008,9 +1008,7 @@ internal fun ChannelThumbnailPanel(
 ) {
     val epgCacheVersion by viewModel.epgCacheVersion.collectAsState()
     // 同名多路流（同一频道的不同分辨率/码流）在名称后追加分辨率后缀，便于区分
-    val duplicateNames = remember(displayChannels) {
-        displayChannels.groupingBy { it.name }.eachCount().filterValues { it > 1 }.keys
-    }
+    val duplicateNames = remember(displayChannels) { duplicateChannelNames(displayChannels) }
 
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
@@ -1229,6 +1227,9 @@ internal fun PortraitChannelListItem(
     onPlay: () -> Unit,
     onEpg: () -> Unit
 ) {
+    // 同名多路流补分辨率后缀，与频道列表口径一致
+    val sidebarChannels by viewModel.channels.collectAsState()
+    val dupNames = remember(sidebarChannels) { duplicateChannelNames(sidebarChannels) }
     // 获取缓存的当前节目
     var currentProgram by remember { mutableStateOf<com.iptv.scanner.editor.pro.data.IptvEpgProgram?>(null) }
     LaunchedEffect(channelIdx, epgCacheVersion) {
@@ -1287,7 +1288,7 @@ internal fun PortraitChannelListItem(
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = channel.name,
+                    text = channelDisplayName(channel, dupNames),
                     color = if (isPlaying) tvPalette.accentText else MaterialTheme.colorScheme.onSurface,
                     fontSize = 15.sp,
                     fontWeight = if (isPlaying) FontWeight.Medium else FontWeight.Normal,
@@ -1517,6 +1518,14 @@ internal fun channelResolutionLabel(resolution: String): String {
         else -> "${height}P"
     }
 }
+
+/**
+ * 出现次数 >1 的频道名集合：同名多路流（同一频道的不同分辨率/码流）才需要追加后缀区分。
+ *
+ * 只统计原始频道名，不参与搜索/匹配/EPG 请求。
+ */
+internal fun duplicateChannelNames(channels: List<IptvChannel>): Set<String> =
+    channels.groupBy { it.name }.filterValues { it.size > 1 }.keys
 
 /**
  * 列表显示名：同名多路流（同一频道的不同分辨率/码流）在名称后追加分辨率后缀，

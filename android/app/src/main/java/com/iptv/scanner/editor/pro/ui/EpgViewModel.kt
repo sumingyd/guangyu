@@ -515,10 +515,14 @@ internal fun AppViewModel.loadEpgTimeline() {
     epgTimelineGeneration++
     epgTimelinePendingRows.clear()
     _epgTimelineLoading.value = false
+    // 同名多路流（同一频道的高清/标清等不同码流）行名追加分辨率后缀，
+    // 但 channelName 保持原始名称：ensureEpgTimelineRowsLoaded 用它做身份兜底匹配
+    val duplicateNames = duplicateChannelNames(selectedChannels)
     _epgTimelineRows.value = selectedChannels.map { channel ->
         EpgTimelineRow(
             channelIdx = channels.indexOf(channel),
             channelName = channel.name,
+            displayName = channelDisplayName(channel, duplicateNames),
             programs = emptyList(),
             programsLoaded = false
         )

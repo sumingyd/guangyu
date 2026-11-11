@@ -839,7 +839,8 @@ viewModel.mpv.setMute(savedMute)
                                 ) {
                                     MiniPlayerBar(
                                         viewModel = viewModel,
-                                        channelName = currentCh?.name ?: displayInfo.name,
+                                        // displayInfo.name 已带同名多路流的分辨率后缀，优先用它
+                                        channelName = displayInfo.name.ifEmpty { currentCh?.name ?: "" },
                                         channelLogo = currentCh?.logo ?: "",
                                         groupName = currentCh?.group ?: "",
                                         isPaused = paused2,

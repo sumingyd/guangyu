@@ -810,6 +810,11 @@ private fun ChannelsColumn(
     // 列表 key：以频道 URL 作为稳定身份，频道增删/分组过滤后组合状态与焦点不会错位
     val channelItemKeys = remember(filteredChannels) { buildChannelItemKeys(filteredChannels) }
 
+    // 同名多路流（同一频道的高清/标清等不同码流）在名称后追加分辨率后缀，否则完全看不出区别
+    val duplicateNames = remember(filteredChannels) {
+        duplicateChannelNames(filteredChannels.map { it.first })
+    }
+
     // 滚动状态：用于面板打开时自动滚动到当前频道
     val listState = rememberLazyListState()
     // 当前频道项的焦点请求器（面板打开时将 DPAD 焦点移到当前播放频道）
@@ -869,6 +874,7 @@ private fun ChannelsColumn(
                         }
                         TvChannelItem(
                             channel = channel,
+                            displayName = channelDisplayName(channel, duplicateNames),
                             channelIdx = idx,
                             isPlaying = idx == currentIdx,
                             isFavorite = !disableFavorite && favorites.contains(idx),
@@ -954,6 +960,7 @@ private fun TvGroupChip(
 @Composable
 private fun TvChannelItem(
     channel: IptvChannel,
+    displayName: String,
     channelIdx: Int,
     isPlaying: Boolean,
     isFavorite: Boolean,
@@ -1021,7 +1028,7 @@ private fun TvChannelItem(
         // 频道名 + 当前节目 + 分组
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = channel.name,
+                text = displayName,
                 color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 17.sp,
                 fontWeight = if (isPlaying) FontWeight.Medium else FontWeight.Normal,
