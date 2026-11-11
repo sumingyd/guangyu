@@ -353,6 +353,8 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
             } catch (_: Throwable) {
             }
         }
+        // 目标组合与当前一致：什么都不做，避免无谓重建（重建在 arm32 电视上也可能崩）
+        if (vo == _actualVo.value && hwdec == _hwdecCache) return null
         val hasFile = _fileLoaded.value
         // 显式设置 vo（用户切换 / 重置）视为重新选择：允许再次尝试 mediacodec_embed
         voFallbackDone = false
