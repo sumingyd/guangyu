@@ -34,8 +34,9 @@ class PlayerSettingsStore(
     private fun requestedVo(): String {
         val saved = prefs.getString(KEY_VO, null)?.takeIf { it.isNotEmpty() }
         if (saved != null) {
-            // 电视/盒子硬解只允许 MediaCodec 直写 Surface：gpu + mediacodec（AImageReader）
-            // 在 arm32 OMX 设备上会起播失败，这里统一换成 mediacodec_embed。
+            // arm32 电视上用户显式选了硬解（hwdec=mediacodec）时，gpu + mediacodec 的
+            // AImageReader 路径会起播即崩，只能换成 mediacodec_embed 直写 Surface。
+            // 默认 soft 不需要走这里；embed 本身仍由用户显式选择（设置页标注实验性）。
             if (isArm32Tv() && saved == DEFAULT_VO_VALUE && resolveRequestedHwdec() == HWDEC_MEDIACODEC) {
                 return VO_MEDIACODEC_EMBED
             }
@@ -461,7 +462,7 @@ class PlayerSettingsStore(
     /** 是否为 arm32 TV 设备（UI 用它隐藏 copy-back 选项） */
     fun isArm32TvDevice(): Boolean = isArm32Tv()
 
-    /** 电视/盒子硬解必须走 mediacodec_embed（AImageReader/copy-back 在 OMX 设备上必崩） */
+    /** arm32 电视的硬解路径只能是 mediacodec_embed（gpu + mediacodec 的 AImageReader 起播必崩） */
     fun isTvEmbedRequired(): Boolean = isArm32Tv()
 
     /** 用户切换硬/软解时的目标 vo */
@@ -511,14 +512,17 @@ class PlayerSettingsStore(
     }
 
     private fun defaultVo(): String = when {
-        isArm32Tv() || isArm64Tv() -> VO_MEDIACODEC_EMBED
+        // arm32 电视/盒子：默认 gpu + 软解。mediacodec_embed 起播在部分设备上会随机
+        // 静默退出，改为设置页可选（标注实验性、重启后生效），不再作默认值。
+        isArm32Tv() -> DEFAULT_VO_VALUE
+        isArm64Tv() -> VO_MEDIACODEC_EMBED
         isArm64Handheld() -> VO_GPU_NEXT
         else -> DEFAULT_VO_VALUE
     }
 
     private fun defaultHwdec(): String = when {
-        // arm32 TV：硬解统一走 mediacodec 直写 Surface（不提供 copy-back）
-        isArm32Tv() -> HWDEC_MEDIACODEC
+        // arm32 TV：默认软解，硬解由用户显式开启（届时 vo 切到 mediacodec_embed）
+        isArm32Tv() -> HWDEC_SOFTWARE
         // 默认 vo 是 mediacodec_embed 时，hwdec 必须配对 mediacodec（零拷贝直渲）
         hasExplicitVo().not() && defaultVo() == VO_MEDIACODEC_EMBED -> HWDEC_MEDIACODEC
         // 手机：MediaCodec 直通 GPU，避免 copy-back 回读 CPU

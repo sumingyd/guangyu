@@ -297,7 +297,7 @@ private fun PlayerSettingsLeftColumn(viewModel: AppViewModel) {
     if (currentPlayerType == PlayerType.MPV) {
         SectionTitle("视频输出（VO）")
         Spacer(modifier = Modifier.height(4.dp))
-        SectionDesc("决定画面如何渲染到屏幕。电视/盒子请用 MediaCodec（直写 Surface）；黑屏有声音时也可切换它")
+        SectionDesc("决定画面如何渲染到屏幕。默认走 GPU；黑屏有声音时可尝试 MediaCodec 直写 Surface（实验性，重启播放器后生效）")
         Spacer(modifier = Modifier.height(8.dp))
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
@@ -306,13 +306,13 @@ private fun PlayerSettingsLeftColumn(viewModel: AppViewModel) {
         ) {
             FilterChip(selected = currentVo == "gpu", onClick = { viewModel.setPlayerVo("gpu") }, label = { Text("GPU（EGL）") }, modifier = Modifier.tvFocusBorder())
             FilterChip(selected = currentVo == "gpu-next", onClick = { viewModel.setPlayerVo("gpu-next") }, label = { Text("GPU-Next（EGL）") }, modifier = Modifier.tvFocusBorder())
-            FilterChip(selected = currentVo == "mediacodec_embed", onClick = { viewModel.setPlayerVo("mediacodec_embed") }, label = { Text("MediaCodec") }, modifier = Modifier.tvFocusBorder())
+            FilterChip(selected = currentVo == "mediacodec_embed", onClick = { viewModel.setPlayerVo("mediacodec_embed") }, label = { Text("MediaCodec（实验）") }, modifier = Modifier.tvFocusBorder())
         }
         Spacer(modifier = Modifier.height(6.dp))
         val voDesc = when (currentVo) {
             "gpu" -> "GPU 渲染：经典 EGL 后端，支持 HDR/OSD/shader，兼容大多数 GPU。部分 GPU（如 Mali-G76）可能黑屏"
             "gpu-next" -> "GPU-Next 渲染：新一代 EGL 后端（render API），渲染路径与 GPU 不同。支持 HDR/OSD/shader，GPU 黑屏时可尝试此选项"
-            "mediacodec_embed" -> "MediaCodec 直接写 Surface（零拷贝，不占 GPU 滤镜）。App 侧弹窗与 OSD 正常；mpv 画面层不可用：字幕不显示、截图失败、翻转/裁剪等视频滤镜无效。"
+            "mediacodec_embed" -> "实验性：MediaCodec 直接写 Surface（零拷贝，不占 GPU 滤镜），需重启播放器后生效。部分电视冷启动会随机退出，遇到时重启并切回 GPU。App 侧弹窗与 OSD 正常；mpv 画面层不可用：字幕不显示、截图失败、翻转/裁剪等视频滤镜无效。"
             else -> "未知 vo: $currentVo"
         }
         Text(text = voDesc, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp))
@@ -376,7 +376,7 @@ private fun PlayerSettingsLeftColumn(viewModel: AppViewModel) {
         val hwdecDesc = when (currentHwdec) {
             "auto-copy" -> "自动选择硬件解码器，解码后拷贝到 CPU 内存再上传 GPU。兼容性好，支持视频滤镜（翻转/裁剪/360°）。4K HDR 可能卡顿"
             "auto" -> "自动选择最佳硬解，优先直接输出（零拷贝）。4K HDR 流畅，但视频翻转/裁剪/360° 滤镜可能不可用"
-            "mediacodec" -> "MediaCodec 硬件解码：与 vo=mediacodec_embed 配合时解码器直接写 Surface（电视默认路径）；vo=gpu/gpu-next 时经 AImageReader 直通（手机默认路径）"
+            "mediacodec" -> "MediaCodec 硬件解码：与 vo=mediacodec_embed 配合时解码器直接写 Surface（电视可选直写路径）；vo=gpu/gpu-next 时经 AImageReader 直通（手机默认路径）"
             "no" -> "纯软件解码。兼容性最好但耗电，CPU 解码可能慢"
             else -> "未知 hwdec: $currentHwdec"
         }
@@ -782,7 +782,7 @@ private fun PlayerSettingsPanelAptv(viewModel: AppViewModel) {
                         options = listOf(
                             "gpu" to "GPU（EGL）",
                             "gpu-next" to "GPU-Next（EGL）",
-                            "mediacodec_embed" to "MediaCodec"
+                            "mediacodec_embed" to "MediaCodec（实验）"
                         ),
                         selectedKey = currentVo,
                         onSelect = { viewModel.setPlayerVo(it) }
@@ -791,7 +791,7 @@ private fun PlayerSettingsPanelAptv(viewModel: AppViewModel) {
                     val voDesc = when (currentVo) {
                         "gpu" -> "GPU 渲染：经典 EGL 后端，支持 HDR/OSD/shader，兼容大多数 GPU。部分 GPU（如 Mali-G76）可能黑屏"
                         "gpu-next" -> "GPU-Next 渲染：新一代 EGL 后端（render API），渲染路径与 GPU 不同。支持 HDR/OSD/shader，GPU 黑屏时可尝试此选项"
-                        "mediacodec_embed" -> "MediaCodec 直接写 Surface（零拷贝，不占 GPU 滤镜）。App 侧弹窗与 OSD 正常；mpv 画面层不可用：字幕不显示、截图失败、翻转/裁剪等视频滤镜无效。"
+                        "mediacodec_embed" -> "实验性：MediaCodec 直接写 Surface（零拷贝，不占 GPU 滤镜），需重启播放器后生效。部分电视冷启动会随机退出，遇到时重启并切回 GPU。App 侧弹窗与 OSD 正常；mpv 画面层不可用：字幕不显示、截图失败、翻转/裁剪等视频滤镜无效。"
                         else -> "未知 vo: $currentVo"
                     }
                     Text(
@@ -839,7 +839,7 @@ private fun PlayerSettingsPanelAptv(viewModel: AppViewModel) {
                     val hwdecDesc = when (currentHwdec) {
                         "auto-copy" -> "自动选择硬件解码器，解码后拷贝到 CPU 内存再上传 GPU。兼容性好，支持视频滤镜（翻转/裁剪/360°）。4K HDR 可能卡顿"
                         "auto" -> "自动选择最佳硬解，优先直接输出（零拷贝）。4K HDR 流畅，但视频翻转/裁剪/360° 滤镜可能不可用"
-                        "mediacodec" -> "MediaCodec 硬件解码：vo=mediacodec_embed 时直接写 Surface；vo=gpu/gpu-next 时经 AImageReader 直通，不回落 CPU"
+                        "mediacodec" -> "MediaCodec 硬件解码：vo=mediacodec_embed 时直接写 Surface（实验性，重启生效）；vo=gpu/gpu-next 时经 AImageReader 直通，不回落 CPU"
                         "no" -> "纯软件解码。兼容性最好但耗电，CPU 解码可能慢"
                         else -> "未知 hwdec: $currentHwdec"
                     }
@@ -1046,7 +1046,7 @@ private fun PlayerSettingsPanelAptv(viewModel: AppViewModel) {
 private fun voActualText(actual: String, selected: String, autoFallback: Boolean): String {
     val actualPart = if (actual.isBlank()) "实际生效：未知（尚未开始播放）" else "实际生效：$actual"
     return when {
-        autoFallback -> "$actualPart · 默认 mediacodec_embed 起播失败，已自动回退到 GPU（重新选择即可重试）"
+        autoFallback -> "$actualPart · 直写 Surface 起播失败，已自动回退到 GPU（重新选择即可重试）"
         actual.isNotBlank() && actual != selected -> "$actualPart（设置值：$selected）"
         else -> actualPart
     }
