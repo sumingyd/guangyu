@@ -295,3 +295,10 @@ ku9_extracted/
 .arts/
 screen_check.png
 android/.kotlin/
+
+# 按日期归档的测试产物与临时报告（报告、截图、dump、临时脚本、测试包）
+20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]/
+# 设备界面 dump 与审计笔记、旧的测试报告
+_ui_*.xml
+*_theme_audit.md
+测试报告-*.md
