@@ -1183,8 +1183,13 @@ class SubscriptionManager(Singleton):
                 if isinstance(data, dict) and 'epg_data' in data:
                     self._epg_data = data['epg_data']
                     self._epg_channel_names = data.get('channel_names', {})
-                    # 旧缓存没有来源信息，按空处理（UI 会显示"未知源"）
-                    self._epg_channel_sources = data.get('channel_sources', {}) or {}
+                    # 旧缓存（升级前写入）没有来源信息。只在"恰好 1 个 EPG 源"时回填：
+                    # 此时所有节目必然来自它，归属是确定的；多源时无法判断某个频道来自
+                    # 哪个源，留空让 UI 显示"未知源"，不做猜测。
+                    sources = data.get('channel_sources', {}) or {}
+                    if not sources:
+                        sources = self._single_source_attribution(data.get('epg_data') or {})
+                    self._epg_channel_sources = sources
                 else:
                     self._epg_data = data
                     self._epg_channel_names = {}
@@ -1201,6 +1206,32 @@ class SubscriptionManager(Singleton):
             import traceback
             traceback.print_exc()
             return False
+
+    def _single_source_attribution(self, epg_data: dict) -> dict:
+        """旧缓存缺少来源信息时，按"唯一 EPG 源"回填归属。
+
+        只有一个 EPG 源时，缓存里的节目只可能来自它，回填是确定的事实而不是猜测；
+        配置了多个源时无法判断某频道来自哪个源，返回空 dict，让 UI 如实显示"未知源"。
+
+        Args:
+            epg_data: 缓存中的 {epg_id: [节目]} 映射
+
+        Returns:
+            {epg_id: {'name': 源名, 'url': 源地址}}，无法确定时为空 dict
+        """
+        try:
+            configured = self.get_epg_sources() or []
+        except Exception:
+            configured = []
+        valid = [s for s in configured if isinstance(s, dict) and s.get('url')]
+        if len(valid) != 1:
+            return {}
+        source = valid[0]
+        info = {
+            'name': source.get('name', '') or source.get('url', ''),
+            'url': source.get('url', ''),
+        }
+        return {str(channel_id): dict(info) for channel_id in (epg_data or {})}
     
     @staticmethod
     def _to_int(value, default: int) -> int:

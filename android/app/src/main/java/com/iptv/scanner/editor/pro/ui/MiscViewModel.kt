@@ -351,6 +351,15 @@ internal fun AppViewModel.refreshEpgSourcesAndReloadIfChanged() {
         result.onSuccess { list ->
             _epgSources.value = list
             val after = list.map { it.url }.filter { it.isNotEmpty() }.toSet()
+            // 冷启动首个快照：EPG 可能已从旧缓存加载完，但那一刻还不知道源信息，
+            // 期间算出的"匹配到频道、却没有来源"的元数据会一直显示"未知源"。
+            // 源列表就绪后丢掉这批元数据并重算当前频道。
+            if (before.isEmpty() && after.isNotEmpty() &&
+                epgMetaCache.values.any { it.matched && it.sourceName.isEmpty() && it.sourceUrl.isEmpty() }
+            ) {
+                epgMetaCache.clear()
+                fetchEpgForCurrent()
+            }
             // before 为空表示尚未知（冷启动首刷）：此时不触发重载，
             // 启动期 EPG 已由 Python 侧按缓存有效性决定是否加载
             if (before.isNotEmpty() && after != before) {
