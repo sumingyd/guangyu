@@ -22,6 +22,9 @@ jobs:
   validate-version:
     name: Validate release tag
     runs-on: ubuntu-latest
+    outputs:
+      # 发布说明文件的仓库内相对路径，供各平台上传作业写入 release 正文
+      notes_path: ${{ steps.release-notes.outputs.notes_path }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -48,6 +51,31 @@ jobs:
           echo "CURRENT_VERSION=${CURRENT_VERSION}"
           if [ "${TAG_VERSION}" != "${CURRENT_VERSION}" ]; then
             echo "::error::发布 tag(${TAG_VERSION}) 与 core/version.py 的 CURRENT_VERSION(${CURRENT_VERSION}) 不一致，请先同步版本号"
+            exit 1
+          fi
+
+      - name: Check release notes exist
+        # 发布说明是发版的硬性前置条件：缺文件或只有空壳就在这里失败，
+        # 避免像 50.0.6.6 那样发出没有正文的 release。
+        id: release-notes
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          TAG_VERSION="${RELEASE_TAG#[vV]}"
+          NOTES_PATH="release-notes/${TAG_VERSION}.md"
+          echo "notes_path=${NOTES_PATH}" >> "$GITHUB_OUTPUT"
+          echo "发布说明文件: ${NOTES_PATH}"
+
+          if [ ! -f "${NOTES_PATH}" ]; then
+            echo "::error::缺少发布说明 ${NOTES_PATH}。请在打 tag 前新建该文件，格式见 .trae/rules/release-notes.md"
+            exit 1
+          fi
+
+          # 去掉空行、标题行、列表符号与空白后再计数，防止只有几个小标题的空壳文件
+          CHARS=$(tr -d '[:space:]' < "${NOTES_PATH}" | tr -d '#' | wc -m)
+          echo "发布说明有效字符数: ${CHARS}"
+          if [ "${CHARS}" -lt 200 ]; then
+            echo "::error::${NOTES_PATH} 内容过少（${CHARS} 个有效字符），发布说明不能为空壳，格式见 .trae/rules/release-notes.md"
             exit 1
           fi
 
@@ -145,6 +173,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
+          # 正文统一取自 release-notes/<版本>.md（validate-version 已校验存在且非空壳）。
+          # 各平台作业写入的是同一份内容，并发更新结果一致。
+          body_path: ${{ needs.validate-version.outputs.notes_path }}
           files: |
             dist/GuangYu-Windows-x86_64.exe
             dist/GuangYu-Windows-x86_64.exe.sha256
@@ -243,6 +274,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
+          body_path: ${{ needs.validate-version.outputs.notes_path }}
           files: |
             dist/GuangYu-macOS-ARM64.zip
             dist/GuangYu-macOS-ARM64.zip.sha256
@@ -333,6 +365,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
+          body_path: ${{ needs.validate-version.outputs.notes_path }}
           files: |
             dist/GuangYu-Linux-x86_64.tar.gz
             dist/GuangYu-Linux-x86_64.tar.gz.sha256
@@ -441,6 +474,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
+          body_path: ${{ needs.validate-version.outputs.notes_path }}
           files: |
             dist/GuangYu-Linux-ARM64.tar.gz
             dist/GuangYu-Linux-ARM64.tar.gz.sha256
@@ -621,6 +655,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
+          body_path: ${{ needs.validate-version.outputs.notes_path }}
           files: ${{ steps.apk.outputs.apk_glob }}
           fail_on_unmatched_files: true
           overwrite_files: true
