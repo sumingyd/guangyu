@@ -1,8 +1,6 @@
 package com.iptv.scanner.editor.pro.mpv
 
 import android.content.Context
-import android.app.UiModeManager
-import android.content.res.Configuration
 import android.graphics.PixelFormat
 import android.util.AttributeSet
 import android.util.Log
@@ -37,11 +35,6 @@ class MPVView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : SurfaceView(context, attrs), SurfaceHolder.Callback, MPVViewLike {
-
-    init {
-        // 首个实例构造时检测 arm32 TV（sanitizeHwdec 依赖该标记强制软解）
-        if (arm32TvDetected == null) arm32TvDetected = computeArm32Tv(context.applicationContext)
-    }
 
     /** mpv 实例状态（共享单例，所有 MPVView/MPVTextureView 引用同一份） */
     val instanceState = sharedState
@@ -109,7 +102,7 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
         savedConfigDir = configDir
         savedCacheDir = cacheDir
         // houdini 转译层（x86 模拟器）强制软解：硬解码器 teardown 会 SIGSEGV
-        val effectiveHwdec = sanitizeHwdec(hwdec)
+        val effectiveHwdec = sanitizeHwdec(hwdec, vo)
         savedHwdec = effectiveHwdec
         myGeneration = ++instanceState.activeGeneration
         Log.i(TAG, "initialize: generation=$myGeneration, vo=$vo, hwdec=$hwdec")
@@ -176,7 +169,7 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
         }
         // 记录本次会话实际生效的 hwdec：进程若因硬解 teardown native 崩溃，
         // 下次启动据此把该设备加入硬解黑名单
-        NativeCrashLogger.setActiveHwdec(context, effectiveHwdec)
+        NativeCrashLogger.setActiveDecode(context, vo, effectiveHwdec)
         // keep-open=always：stop 期间也保留最后一帧，避免换台黑屏闪烁。
         // 与 PC 端不同，Android 端在 loadfile 前会发送 stop（对齐 PC 端 play_file 的逻辑），
         // 用 always 确保 stop → loadfile 之间画面不消失。
@@ -669,24 +662,6 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
         @Volatile
         private var houdiniDetected: Boolean? = null
 
-        /** arm32 TV 检测结果缓存（首个 MPVView 实例初始化时计算） */
-        @Volatile
-        private var arm32TvDetected: Boolean? = null
-
-        /**
-         * 是否为 arm32 TV 设备（TV 模式 + armeabi-v7a 主 ABI 且无 arm64）。
-         * 由首个 MPVView 实例构造时计算（UiModeManager 需要 Context）。
-         */
-        private fun computeArm32Tv(context: Context): Boolean = try {
-            val uiMode = (context.getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager)
-                ?.currentModeType
-            val isTv = uiMode == Configuration.UI_MODE_TYPE_TELEVISION
-            val abis = android.os.Build.SUPPORTED_ABIS
-            isTv && abis.any { it.startsWith("armeabi") } && abis.none { it == "arm64-v8a" }
-        } catch (_: Throwable) {
-            false
-        }
-
         /**
          * 是否运行在 houdini ARM 转译层上（x86 模拟器执行 arm64 libmpv）。
          * 转译层下 MediaCodec 硬解码器的销毁（切台 stop / loadfile replace /
@@ -752,39 +727,40 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
             Log.w(TAG, "hwdec: session-level software downgrade cleared ($reason)")
         }
 
-        /** 返回应生效的 hwdec 值：会话降级 / houdini 转译 / arm32 TV / 崩溃黑名单 强制软解 */
-        fun sanitizeHwdec(hwdec: String): String {
+        /**
+         * 返回应生效的 hwdec 值：会话降级 / houdini 转译 / 崩溃黑名单（按 vo+hwdec 组合）强制软解。
+         *
+         * @param vo 本次要应用的视频输出。崩溃黑名单只针对上次真正崩溃的那一组 vo+hwdec，
+         *           旧 auto-copy 崩溃不会继续挡住新的 mediacodec_embed 直写路径。
+         */
+        fun sanitizeHwdec(hwdec: String, vo: String? = null): String {
             if (hwdec == "no") return hwdec
             if (sessionHwdecOverride != null) return sessionHwdecOverride!!
-            // 设备黑名单：上次会话硬解异常退出（native 崩溃）后本进程强制软解。
+            // arm32 TV：copy-back 类 hwdec（含按频道保存的旧值）统一纠正为 mediacodec 直写
+            val requested = try {
+                UserPrefs.getInstance().normalizeHwdecForDevice(hwdec)
+            } catch (_: Throwable) {
+                hwdec
+            }
+            // 设备黑名单：上次会话该 vo+hwdec 组合异常退出（native 崩溃）后本进程强制软解。
             // 覆盖按频道保存的 hwdec（频道设置不走 PlayerSettingsStore），
             // 避免历史出问题的车机因设备判定不成立而再次走到硬解 teardown 崩溃路径。
             // 用户显式选择硬解时允许越过黑名单（见 confirmHardwareDecodeByUser）。
             val blacklisted = try {
-                UserPrefs.getInstance().isHwdecBlacklisted()
+                UserPrefs.getInstance().isHwdecComboBlacklisted(vo ?: "", requested)
             } catch (e: Exception) {
                 false
             }
             return when {
                 blacklisted && !userForcedHardwareDecode -> {
-                    Log.w(TAG, "hwdec: device in crash blacklist -> force software decode")
+                    Log.w(TAG, "hwdec: combo ${vo ?: "?"}+$requested in crash blacklist -> force software decode")
                     "no"
                 }
                 isHoudiniTranslation() -> {
                     Log.w(TAG, "hwdec: houdini=true -> force software decode (translation layer SIGSEGV)")
                     "no"
                 }
-                // arm32 TV：只对已知会崩的厂商（MediaTek / Sony BRAVIA）强制软解；
-                // Amlogic 等未出现 teardown 崩溃的设备放开，由崩溃黑名单兜底。
-                arm32TvDetected == true && (try {
-                    UserPrefs.getInstance().isHardwareDecodeUnsafeVendor()
-                } catch (_: Throwable) {
-                    true
-                }) -> {
-                    Log.w(TAG, "hwdec: arm32 TV on known-bad vendor -> force software decode")
-                    "no"
-                }
-                else -> hwdec
+                else -> requested
             }
         }
     }

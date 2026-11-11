@@ -72,6 +72,13 @@ class IptvApplication : PyApplication(), ImageLoaderFactory {
             Log.e(TAG, "NativeCrashLogger initialization failed", e)
         }
 
+        // 原生信号 handler：崩溃瞬间把 backtrace 直接写到 crash-reports（不依赖 logcat）
+        try {
+            NativeSignalHandler.install(this)
+        } catch (e: Exception) {
+            Log.e(TAG, "NativeSignalHandler initialization failed", e)
+        }
+
         // 检查上次崩溃报告
         checkLastCrashReport()
     }

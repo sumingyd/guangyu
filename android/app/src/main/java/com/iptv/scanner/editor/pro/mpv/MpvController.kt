@@ -1,5 +1,6 @@
 package com.iptv.scanner.editor.pro.mpv
 
+import android.os.Looper
 import android.util.Log
 import `is`.xyz.mpv.MPVLib
 import com.iptv.scanner.editor.pro.NativeCrashLogger
@@ -96,6 +97,20 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     /** 是否发生过 mediacodec_embed → gpu 的自动回退 */
     private val _voAutoFallback = MutableStateFlow(false)
     val voAutoFallback: StateFlow<Boolean> = _voAutoFallback.asStateFlow()
+
+    /**
+     * 自适应渲染路径原因：
+     * - "subtitle"：当前内容带字幕轨，已切 GPU 路径（mpv 才能渲染字幕）
+     * - "filter"：用户启用了去色带/反交错/超分等 GPU 侧滤镜，已切 GPU 路径
+     * - "fallback"：默认直写路径起播失败，自动回退
+     * - null：默认直写路径或用户手动选择
+     */
+    private val _renderPathReason = MutableStateFlow<String?>(null)
+    val renderPathReason: StateFlow<String?> = _renderPathReason.asStateFlow()
+
+    /** 本次是否因字幕/滤镜临时切到了 GPU 路径（换台时据此切回直写） */
+    @Volatile
+    private var adaptiveGpuPath = false
 
     /** 自动回退回调（UI 线程）：参数为回退后的 vo，用于同步界面与提示 */
     @Volatile
@@ -324,8 +339,11 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
         val hasFile = _fileLoaded.value
         // 显式设置 vo（用户切换 / 重置）视为重新选择：允许再次尝试 mediacodec_embed
         voFallbackDone = false
+        // 用户显式选择路径后，清掉自适应（字幕/滤镜）临时切换标记
+        adaptiveGpuPath = false
+        _renderPathReason.value = null
         // houdini 转译层（x86 模拟器）强制软解：硬解码器 teardown 会 SIGSEGV
-        val effectiveHwdec = MPVView.sanitizeHwdec(hwdec)
+        val effectiveHwdec = MPVView.sanitizeHwdec(hwdec, vo)
         postOnUiThread {
             try {
                 MPVLib.setPropertyString("hwdec", effectiveHwdec)
@@ -334,7 +352,7 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 // SIGSEGV，等到 file-loaded 再写就来不及，下次启动会误判成「软解崩的」，
                 // 于是又用崩溃值启动一次、多崩一轮才进黑名单。
                 mpvView?.asView()?.context?.let {
-                    NativeCrashLogger.setActiveHwdec(it, effectiveHwdec)
+                    NativeCrashLogger.setActiveDecode(it, vo, effectiveHwdec)
                 }
                 mpvView?.reattachSurfaceWithVo(vo)
                 _voCache = vo
@@ -379,7 +397,7 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
         hwdecRetryCount++
         MPVView.clearSessionHwdecOverride(trigger)
         val desired = try { UserPrefs.getInstance().getHwdec() } catch (_: Throwable) { MPVView.DEFAULT_HWDEC }
-        val effective = MPVView.sanitizeHwdec(desired)
+        val effective = MPVView.sanitizeHwdec(desired, _voCache)
         _hwdecCache = effective
         Log.w(TAG, "retryHardwareDecode: trigger=$trigger, retry=$hwdecRetryCount, desired=$desired, effective=$effective")
         if (effective == "no") return
@@ -398,22 +416,13 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     }
 
     override fun setHardwareDecode(enabled: Boolean): Boolean {
-        val currentVo = try { _voCache } catch (e: Throwable) { "gpu" }
-
-        if (!enabled && currentVo == "mediacodec_embed") {
-            Log.w(TAG, "setHardwareDecode: vo=mediacodec_embed 不支持软解")
-            return false
-        }
-
-        val currentHwdec = _hwdecCache
-        val hwdec = when {
-            !enabled -> "no"
-            currentVo == "mediacodec_embed" -> "mediacodec"
-            currentHwdec == "auto" -> "auto"
-            else -> "auto-copy"
-        }
-        setVoAndHwdec(currentVo, hwdec)
-        Log.i(TAG, "setHardwareDecode: enabled=$enabled, vo=$currentVo, hwdec=$hwdec")
+        val prefs = try { UserPrefs.getInstance() } catch (_: Throwable) { return false }
+        // 电视/盒子：硬解固定 mediacodec_embed + mediacodec（不碰 AImageReader/copy-back）；
+        // 手机：gpu-next + mediacodec 直通。软解时 mediacodec_embed 无解码器直渲，退回 gpu。
+        val vo = prefs.voForHardwareDecode(enabled, _voCache)
+        val hwdec = prefs.hwdecForHardwareDecode(enabled, _hwdecCache)
+        setVoAndHwdec(vo, hwdec)
+        Log.i(TAG, "setHardwareDecode: enabled=$enabled, vo=$vo, hwdec=$hwdec")
         return true
     }
 
@@ -557,8 +566,8 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                     Log.w(TAG, "vo health check: no vo-configured, retry '$activeUrl' with full probe budget")
                     return@Runnable
                 }
-                // 默认 mediacodec_embed（arm64 TV）起播失败：自动回退 gpu + auto-copy 一次
-                if (configured == false && maybeFallbackFromMediacodecEmbed("vo-configured=false, video-format=$videoFormat")) {
+                // 设备默认渲染路径（TV 直写 Surface / 手机 gpu-next 直通）起播失败：自动回退一次
+                if (configured == false && maybeFallbackFromDefaultPath("vo-configured=false, video-format=$videoFormat")) {
                     return@Runnable
                 }
                 if (videoFormat.isEmpty()) {
@@ -605,7 +614,7 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                         return@Runnable
                     }
                     Log.w(TAG, "vo weak check failed: video-format='$videoFormat', frames=$frames, vo-configured=$configured")
-                    maybeFallbackFromMediacodecEmbed(
+                    maybeFallbackFromDefaultPath(
                         "no frames after ${(VO_HEALTH_CHECK_DELAY_MS + VO_WEAK_CHECK_DELAY_MS) / 1000}s " +
                             "(video-format='$videoFormat', frames=$frames, vo-configured=$configured)"
                     )
@@ -619,31 +628,39 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     }
 
     /**
-     * 默认 vo=mediacodec_embed 起播失败时自动回退到 gpu + auto-copy，并写盘记住。
+     * ABI 默认渲染路径起播失败时自动回退，并写盘记住。
+     *
+     * 覆盖两类默认路径：
+     * - 电视/盒子默认 mediacodec_embed + mediacodec（直写 Surface）
+     * - 手机默认 gpu-next + mediacodec（MediaCodec 直通）
+     * 回退目标：手机/平板回 gpu + auto-copy；arm32 TV 回 gpu + 软解
+     * （该机型不允许 AImageReader/copy-back）。
      *
      * 只对「用户没有显式选过 vo」的 ABI 默认值生效：手选的 vo 永不被自动回退覆盖。
      * 每个进程只回退一次，避免在坏流上反复切 vo 抖动。
      *
      * @return true 表示本次已执行回退
      */
-    private fun maybeFallbackFromMediacodecEmbed(reason: String): Boolean {
-        if (_voCache != "mediacodec_embed") return false
+    private fun maybeFallbackFromDefaultPath(reason: String): Boolean {
         if (voFallbackDone) return false
         val prefs = try { UserPrefs.getInstance() } catch (_: Throwable) { return false }
         if (prefs.hasExplicitVo()) {
             Log.i(TAG, "vo auto-fallback skipped: user explicitly selected vo=${prefs.getVo()}")
             return false
         }
+        // 只在当前实际跑的正是设备默认路径时回退（已回退过/手选过都不再动）
+        if (_voCache == "gpu" || _voCache != prefs.getVo()) return false
         voFallbackDone = true
         prefs.setVoAutoFallback(true)
         _voAutoFallback.value = true
-        // 回退到 gpu 后 hwdec=mediacodec（直渲专用）不再适用，按设备默认重新取
-        val fallbackHwdec = try { prefs.getHwdec() } catch (_: Throwable) { "auto-copy" }
-            .let { if (it == "mediacodec") "auto-copy" else it }
+        _renderPathReason.value = "fallback"
+        // 直写/直通专用的 hwdec=mediacodec 在 gpu 上不再适用，按设备安全值回退
+        val fallbackHwdec = if (prefs.isTvEmbedRequired()) "no" else "auto-copy"
+        try { prefs.setHwdec(fallbackHwdec) } catch (_: Throwable) {}
         _voCache = "gpu"
         _hwdecCache = fallbackHwdec
         _actualVo.value = "gpu"
-        Log.w(TAG, "vo auto-fallback: mediacodec_embed -> gpu (hwdec=$fallbackHwdec), reason=$reason")
+        Log.w(TAG, "vo auto-fallback: ${reason}, vo=gpu, hwdec=$fallbackHwdec")
         suppressFileError()
         postOnUiThread {
             try {
@@ -666,6 +683,98 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
         voHealthCheckRunnable = null
         voWeakCheckRunnable?.let { mpvView?.asView()?.removeCallbacks(it) }
         voWeakCheckRunnable = null
+    }
+
+    // -----------------------------------------------------------------
+    // 自适应渲染路径：直写 Surface 无法渲染字幕/滤镜，需要时自动切 GPU
+    // -----------------------------------------------------------------
+
+    /**
+     * 当前内容/设置需要 mpv 画面层（GPU）时，自动从 mediacodec_embed 切到 GPU 路径。
+     * 由字幕/滤镜入口调用（用户显式操作，允许立即切换）。
+     */
+    fun ensureGpuPathForFeatures(reason: String) {
+        val prefs = try { UserPrefs.getInstance() } catch (_: Throwable) { return }
+        if (_voCache != "mediacodec_embed") {
+            _renderPathReason.value = reason
+            return
+        }
+        adaptiveGpuPath = true
+        _renderPathReason.value = reason
+        val hwdec = gpuPathHwdec(prefs)
+        Log.i(TAG, "adaptive render path -> gpu, reason=$reason, hwdec=$hwdec")
+        postOnUiThread { applyVoSwitch("gpu", hwdec) }
+    }
+
+    /** GPU 路径下安全可用的 hwdec（arm32 TV 不允许 copy-back，手机走 AImageReader 直通） */
+    private fun gpuPathHwdec(prefs: UserPrefs): String = when {
+        prefs.isTvEmbedRequired() -> "no"
+        prefs.isHandheldDevice() -> "mediacodec"
+        else -> "auto-copy"
+    }
+
+    /** 立即切换 vo/hwdec（调用方保证在 UI 线程） */
+    private fun applyVoSwitch(vo: String, hwdec: String) {
+        try {
+            if (hwdec != _hwdecCache) {
+                MPVLib.setPropertyString("hwdec", hwdec)
+                _hwdecCache = hwdec
+            }
+            if (_voCache != vo) {
+                _voCache = vo
+                _actualVo.value = vo
+                mpvView?.asView()?.context?.let { NativeCrashLogger.setActiveDecode(it, vo, hwdec) }
+                mpvView?.reattachSurfaceWithVo(vo)
+            }
+            Log.i(TAG, "applyVoSwitch: vo=$vo, hwdec=$hwdec")
+        } catch (e: Throwable) {
+            Log.w(TAG, "applyVoSwitch failed: ${e.message}")
+        }
+    }
+
+    /** 起播前判定：有滤镜 → GPU；上一台因字幕/滤镜切过 GPU，本台无需求则切回直写 */
+    private fun adaptivePreSwitchPlan(): Pair<String, String>? {
+        val prefs = try { UserPrefs.getInstance() } catch (_: Throwable) { return null }
+        if (prefs.hasExplicitVo()) return null
+        val filterReason = gpuOnlyFilterReason()
+        if (filterReason != null) {
+            _renderPathReason.value = filterReason
+            if (_voCache == "gpu" || _voCache == "gpu-next") return null
+            adaptiveGpuPath = true
+            return "gpu" to gpuPathHwdec(prefs)
+        }
+        if (adaptiveGpuPath) {
+            adaptiveGpuPath = false
+            _renderPathReason.value = null
+            if (prefs.getVo() == "mediacodec_embed" && _voCache != "mediacodec_embed") {
+                return "mediacodec_embed" to "mediacodec"
+            }
+        }
+        return null
+    }
+
+    /** 当前是否启用了只能在 GPU 画面层生效的滤镜（去色带/反交错/超分等） */
+    private fun gpuOnlyFilterReason(): String? = try {
+        when {
+            UserPrefs.getInstance().getDeinterlace() != "no" -> "filter"
+            MPVLib.getPropertyString("deband") == "yes" -> "filter"
+            !MPVLib.getPropertyString("glsl-shaders").isNullOrBlank() -> "filter"
+            !MPVLib.getPropertyString("vf").isNullOrBlank() -> "filter"
+            else -> null
+        }
+    } catch (_: Throwable) {
+        null
+    }
+
+    /** 当前文件是否带可用字幕轨（直写 Surface 无法显示） */
+    private fun hasSubtitleTrack(): Boolean = try {
+        val count = MPVLib.getPropertyInt("track-list/count") ?: 0
+        (0 until count).any { i ->
+            MPVLib.getPropertyString("track-list/$i/type") == "sub" &&
+                MPVLib.getPropertyString("track-list/$i/albumart") != "yes"
+        }
+    } catch (_: Throwable) {
+        false
     }
 
     /**
@@ -732,7 +841,22 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
             NativeCrashLogger.setPlaybackActive(it, true)
         }
         ensureAudioFocus()?.onUserResume()
-        playbackController.playFile(url)
+        // 起播前判定自适应渲染路径（有滤镜/上一台因字幕切过 GPU）：在 loadfile 之前切换，避免起播闪断
+        val plan = adaptivePreSwitchPlan()
+        if (plan != null && mpvView != null) {
+            val (targetVo, targetHwdec) = plan
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                applyVoSwitch(targetVo, targetHwdec)
+                playbackController.playFile(url)
+            } else {
+                postOnUiThread {
+                    applyVoSwitch(targetVo, targetHwdec)
+                    playbackController.playFile(url)
+                }
+            }
+        } else {
+            playbackController.playFile(url)
+        }
     }
 
     /** mpv 核心是否已终止（进程内不可恢复） */
@@ -812,7 +936,11 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     override fun cycleSub() = playbackController.cycleSub()
     override fun setAudioTrack(id: Int) = playbackController.setAudioTrack(id)
     override fun setSubTrack(id: Int) = playbackController.setSubTrack(id)
-    override fun addSubtitleFile(path: String): Boolean = playbackController.addSubtitleFile(path)
+    override fun addSubtitleFile(path: String): Boolean {
+        // 字幕只能由 mpv 画面层渲染：直写 Surface 时先切回 GPU 路径
+        ensureGpuPathForFeatures("subtitle")
+        return playbackController.addSubtitleFile(path)
+    }
     override fun setChapter(idx: Int): Boolean = playbackController.setChapter(idx)
     override fun chapterNext(): Boolean = playbackController.chapterNext()
     override fun chapterPrev(): Boolean = playbackController.chapterPrev()
@@ -828,7 +956,10 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     // -----------------------------------------------------------------
     // 视频均衡（委托 MpvVideoEqController）
     // -----------------------------------------------------------------
-    fun setDeinterlace(value: String) = videoEqController.setDeinterlace(value)
+    fun setDeinterlace(value: String) {
+        if (value != "no") ensureGpuPathForFeatures("filter")
+        videoEqController.setDeinterlace(value)
+    }
     override fun setBrightness(v: Int): Boolean = videoEqController.setBrightness(v)
     override fun setContrast(v: Int): Boolean = videoEqController.setContrast(v)
     override fun setSaturation(v: Int): Boolean = videoEqController.setSaturation(v)
@@ -874,13 +1005,25 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     // 滤镜（委托 MpvFilterController）
     // -----------------------------------------------------------------
     override fun clearAllVideoFilters() = filterController.clearAllVideoFilters()
-    override fun set360View(yaw: Double, pitch: Double, roll: Double, projection: String): Boolean = filterController.set360View(yaw, pitch, roll, projection)
+    override fun set360View(yaw: Double, pitch: Double, roll: Double, projection: String): Boolean {
+        ensureGpuPathForFeatures("filter")
+        return filterController.set360View(yaw, pitch, roll, projection)
+    }
     override fun clear360Filter() = filterController.clear360Filter()
-    override fun setMotionCompensation(strength: String, targetFps: Int): Boolean = filterController.setMotionCompensation(strength, targetFps)
+    override fun setMotionCompensation(strength: String, targetFps: Int): Boolean {
+        ensureGpuPathForFeatures("filter")
+        return filterController.setMotionCompensation(strength, targetFps)
+    }
     override fun clearMotionCompensation() = filterController.clearMotionCompensation()
-    override fun setSuperResolution(scaleAlgo: String, detailEnhance: Int): Boolean = filterController.setSuperResolution(scaleAlgo, detailEnhance)
+    override fun setSuperResolution(scaleAlgo: String, detailEnhance: Int): Boolean {
+        ensureGpuPathForFeatures("filter")
+        return filterController.setSuperResolution(scaleAlgo, detailEnhance)
+    }
     override fun clearSuperResolution() = filterController.clearSuperResolution()
-    override fun setUserShader(preset: String): Boolean = filterController.setUserShader(preset)
+    override fun setUserShader(preset: String): Boolean {
+        ensureGpuPathForFeatures("filter")
+        return filterController.setUserShader(preset)
+    }
     override fun clearUserShader() = filterController.clearUserShader()
 
     // -----------------------------------------------------------------
@@ -1082,6 +1225,20 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                     if (voNow.isNotEmpty()) _actualVo.value = voNow
                     Log.i(TAG, "vo-current=$voNow")
                 } catch (_: Throwable) {
+                }
+
+                // 自适应：当前内容带字幕轨时，直写 Surface 无法显示字幕 → 起播阶段切回 GPU 路径
+                try {
+                    val prefs = UserPrefs.getInstance()
+                    if (_voCache == "mediacodec_embed" && !prefs.hasExplicitVo() && hasSubtitleTrack()) {
+                        adaptiveGpuPath = true
+                        _renderPathReason.value = "subtitle"
+                        val hwdec = gpuPathHwdec(prefs)
+                        Log.i(TAG, "adaptive render path -> gpu (subtitle track), hwdec=$hwdec")
+                        postOnUiThread { applyVoSwitch("gpu", hwdec) }
+                    }
+                } catch (e: Throwable) {
+                    Log.w(TAG, "adaptive render path check failed: ${e.message}")
                 }
 
                 scheduleVoHealthCheck()

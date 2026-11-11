@@ -102,6 +102,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.foundation.focusGroup
@@ -687,6 +688,10 @@ private data class ToolEntry(
     val title: String,
     val desc: String,
     val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    /** 当前渲染路径不支持时置灰（入口仍然可见，不隐藏） */
+    val enabled: Boolean = true,
+    /** 置灰原因，显示在描述位置 */
+    val disabledReason: String = "",
     val onClick: () -> Unit
 )
 
@@ -697,7 +702,8 @@ private fun ToolEntryRow(tool: ToolEntry, compact: Boolean = false) {
             .fillMaxWidth()
             // tvFocusBorder 在 clickable 之前（外层）才能收到焦点事件
             .tvFocusBorder()
-            .clickable { tool.onClick() }
+            .alpha(if (tool.enabled) 1f else 0.38f)
+            .clickable(enabled = tool.enabled) { tool.onClick() }
             // 横屏两列时行距收一点，9 个工具刚好一屏放下、不会卡半行
             .padding(vertical = if (compact) 8.dp else 12.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -711,7 +717,11 @@ private fun ToolEntryRow(tool: ToolEntry, compact: Boolean = false) {
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(text = tool.title, color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-            Text(text = tool.desc, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+            Text(
+                text = if (!tool.enabled && tool.disabledReason.isNotEmpty()) tool.disabledReason else tool.desc,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp
+            )
         }
     }
 }
@@ -727,6 +737,8 @@ fun PlayerToolsPanel(viewModel: AppViewModel) {
     // TV 全屏底栏改为只读后，播放/停止/分屏/频道信息的入口集中到这里
     val paused by viewModel.mpv.paused.collectAsState()
     val playbackState by viewModel.playbackState.collectAsState()
+    val actualVo by viewModel.actualVo.collectAsState()
+    val surfaceDirect = actualVo == "mediacodec_embed"
     PanelScaffold(
         title = "播放工具",
         subtitle = "播放控制 / 截图 / 切片 / EPG时间线 / 搜索 / 提醒 / 续播 / 书签",
@@ -760,7 +772,13 @@ fun PlayerToolsPanel(viewModel: AppViewModel) {
             }
         }
         val tools = controlTools + listOf(
-            ToolEntry("截图", "截取当前画面", Icons.Default.CameraAlt) {
+            ToolEntry(
+                "截图",
+                if (surfaceDirect) "直写 Surface 播放中不可用，切回 GPU 后恢复" else "截取当前画面",
+                Icons.Default.CameraAlt,
+                enabled = !surfaceDirect,
+                disabledReason = "直写 Surface 播放中不可用，切回 GPU 后恢复"
+            ) {
                 routeOrToggle(viewModel.screenshotPanelOpen, { ScreenshotPanel(viewModel) }) { viewModel.toggleScreenshotPanel() }
             },
             ToolEntry("切片导出", "截取视频片段", Icons.Default.Movie) {

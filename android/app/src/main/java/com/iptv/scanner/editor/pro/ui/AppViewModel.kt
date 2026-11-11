@@ -590,6 +590,12 @@ internal var switchPlayJob: Job? = null
     internal val _currentVo = MutableStateFlow(userPrefs.getVo())
     val currentVo: StateFlow<String> = _currentVo.asStateFlow()
 
+    /** arm32 电视/盒子：设置页隐藏 copy-back（auto-copy/auto）选项 */
+    val isArm32TvDevice: Boolean = userPrefs.isArm32TvDevice()
+
+    /** 自适应渲染路径原因：subtitle / filter / fallback，null=默认或手动选择 */
+    val renderPathReason: StateFlow<String?> get() = mpvSingleton.renderPathReason
+
     internal val _currentHwdec = MutableStateFlow(userPrefs.getHwdec())
     val currentHwdec: StateFlow<String> = _currentHwdec.asStateFlow()
 
@@ -622,10 +628,10 @@ val logLevel: StateFlow<String> = _logLevel.asStateFlow()
     internal val _hardwareDecode = MutableStateFlow(userPrefs.getHwdec() != "no")
 
     init {
-// 默认 vo（arm64 TV 的 mediacodec_embed）起播失败自动回退时，同步界面状态并提示用户
+// 默认渲染路径（TV 的 mediacodec_embed / 手机的 gpu-next 直通）起播失败自动回退时，同步界面状态并提示用户
 mpvSingleton.onVoAutoFallback = { vo ->
     _currentVo.value = vo
-    showOsd("画面输出已切换", "当前渲染方式：$vo（原 mediacodec_embed 不可用）")
+    showOsd("画面输出已切换", "当前渲染方式：$vo（原默认渲染路径不可用）")
 }
 // 注册文件加载错误回调：当 mpv 报告文件加载失败时换源，
 // 添加短暂延迟避免坏流导致 mpv 核心状态未清理就加载下一个流。

@@ -251,6 +251,7 @@ android/.idea/
 android/build_log*.txt
 android/local.properties
 android/app/build/
+android/app/.cxx/
 android/apk-output/
 # 由 extract_mpv_native.py / CI 下载解压生成的 native 库
 android/app/src/main/jniLibs/

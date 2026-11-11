@@ -733,6 +733,11 @@ internal fun AppViewModel.loadSubtitleFile(uri: Uri) {
 }
 
 internal fun AppViewModel.takeScreenshot(mode: String = "video") {
+    // mediacodec_embed 让解码器直接写 Surface，mpv 画面层（screenshot 命令）拿不到帧
+    if (_currentVo.value == "mediacodec_embed") {
+        showOsd("截图不可用", "当前为 MediaCodec 直写渲染，请先在播放器设置切回 GPU 渲染")
+        return
+    }
     viewModelScope.launch {
         val now = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val filename = "screenshot_$now.png"
@@ -869,7 +874,12 @@ internal fun AppViewModel.setPlayerVo(vo: String) {
     _currentVo.value = vo
     // 用户显式重选 vo：清掉本进程「已自动回退」记忆，允许再次尝试默认 mediacodec_embed 路径
     mpvSingleton.resetVoFallbackForUser()
-    val hwdec = if (vo == "mediacodec_embed") "mediacodec" else userPrefs.getHwdec()
+    val hwdec = when {
+        vo == "mediacodec_embed" -> "mediacodec"
+        // arm32 电视/盒子：gpu/gpu-next 只允许软解（AImageReader 直通与 copy-back 都会崩）
+        userPrefs.isTvEmbedRequired() && _currentHwdec.value != "no" -> "no"
+        else -> userPrefs.getHwdec()
+    }
     if (vo == "mediacodec_embed") {
         // 切换到 mediacodec_embed 时，hwdec 也应为 mediacodec
         userPrefs.setHwdec(hwdec)
@@ -879,24 +889,38 @@ internal fun AppViewModel.setPlayerVo(vo: String) {
     } else if (vo == "gpu" || vo == "gpu-next") {
         // 切换到 gpu / gpu-next 时，清除 fallback 标记，重新启用黑屏检测
         userPrefs.setVoFallbackConfirmed(false)
+        if (hwdec != _currentHwdec.value) {
+            userPrefs.setHwdec(hwdec)
+            _currentHwdec.value = hwdec
+        }
     }
     // vo 切换只在 MPV 模式下有意义（其他播放器无 vo 概念）
     val hasFile = (_player.value as? MpvController)?.setVoAndHwdec(vo, hwdec)
-    showOsd(
-        "播放器设置",
-        "vo=$vo" + if (hasFile != null) "，已重新加载" else "（重启后生效）"
-    )
+    val suffix = (if (hasFile != null) "，已重新加载" else "（重启后生效）") +
+        if (vo == "mediacodec_embed") "；此模式不支持字幕/截图" else ""
+    showOsd("播放器设置", "vo=$vo$suffix")
 }
 
 internal fun AppViewModel.setPlayerHwdec(hwdec: String, byUser: Boolean = true) {
+    // arm32 电视/盒子：硬解只允许 mediacodec 直写 Surface；用户点「重试硬件解码」时
+    // 必须带上 mediacodec_embed，不能停在 gpu + mediacodec（AImageReader 路径）。
+    var vo = _currentVo.value
+    if (hwdec != "no" && userPrefs.isTvEmbedRequired() && vo != "mediacodec_embed") {
+        vo = "mediacodec_embed"
+    }
+    if (vo != _currentVo.value) {
+        userPrefs.setVo(vo)
+        _currentVo.value = vo
+        mpvSingleton.resetVoFallbackForUser()
+    }
     userPrefs.setHwdec(hwdec)
     _currentHwdec.value = hwdec
     // 用户显式选择硬解：解除崩溃黑名单 + 清会话降级，给一次干净的重试机会
     if (byUser) {
         (_player.value as? MpvController)?.confirmHardwareDecodeSelection(hwdec)
     }
-    (_player.value as? MpvController)?.setVoAndHwdec(_currentVo.value, hwdec)
-    showOsd("播放器设置", "hwdec=$hwdec")
+    (_player.value as? MpvController)?.setVoAndHwdec(vo, hwdec)
+    showOsd("播放器设置", "vo=$vo，hwdec=$hwdec")
 }
 
 internal fun AppViewModel.setRtspTransport(transport: String) {
@@ -921,16 +945,16 @@ internal fun AppViewModel.setHardwareDecode(enabled: Boolean) {
         false
     }
     if (success) {
-        // MPV 模式下同步更新 _currentHwdec 状态（UI 显示用）
+        // MPV 模式下同步更新 vo/hwdec 状态（UI 显示用）
         if (player is MpvController) {
-            val newHwdec = if (enabled) {
-                when {
-                    _currentVo.value == "mediacodec_embed" -> "mediacodec"
-                    // 保留用户之前的选择：auto（4K HDR 直接输出）或 auto-copy
-                    _currentHwdec.value == "auto" -> "auto"
-                    else -> "auto-copy"
-                }
-            } else "no"
+            // 电视/盒子硬解固定 mediacodec_embed + mediacodec；手机 gpu-next + mediacodec 直通；
+            // 软解时 mediacodec_embed 没有解码器直渲，vo 退回 gpu。
+            val newVo = userPrefs.voForHardwareDecode(enabled, _currentVo.value)
+            val newHwdec = userPrefs.hwdecForHardwareDecode(enabled, _currentHwdec.value)
+            if (newVo != _currentVo.value) {
+                userPrefs.setVo(newVo)
+                _currentVo.value = newVo
+            }
             userPrefs.setHwdec(newHwdec)
             _currentHwdec.value = newHwdec
         }

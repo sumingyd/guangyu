@@ -133,6 +133,7 @@ fun SubtitleSettingsPanel(viewModel: AppViewModel) {
     val mpv = viewModel.mpv
     val fileLoaded by mpv.fileLoaded.collectAsState()
     val trackListJson by mpv.trackListJson.collectAsState()
+    val currentVo by viewModel.currentVo.collectAsState()
 
     // 字幕轨列表
     val subTracks = remember(trackListJson) { parseTracks(trackListJson, "sub") }
@@ -201,6 +202,14 @@ fun SubtitleSettingsPanel(viewModel: AppViewModel) {
             ) { Text("重置", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
         }
     ) {
+        if (currentVo == "mediacodec_embed") {
+            Text(
+                "当前为 MediaCodec 直写渲染，mpv 字幕不会显示；切回 GPU 渲染后可正常显示",
+                color = MaterialTheme.colorScheme.error,
+                fontSize = 12.sp
+            )
+            androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp))
+        }
         if (!fileLoaded) {
             Text("未在播放", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
         }

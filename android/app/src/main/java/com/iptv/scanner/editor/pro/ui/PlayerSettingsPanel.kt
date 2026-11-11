@@ -60,9 +60,9 @@ import com.iptv.scanner.editor.pro.ui.theme.tvFocusLayoutScale
  * 兜底方案：当黑屏检测不可靠时（如 estimated-vfps 仍有值但渲染黑屏），
  * 用户可手动切换 vo（gpu / gpu-next / mediacodec_embed），立即生效并持久化。
  *
- * - vo：video output，gpu / gpu-next（EGL 渲染）或 mediacodec_embed（MediaCodec 直接渲染）
+ * - vo：video output，gpu / gpu-next（EGL 渲染）或 mediacodec_embed（MediaCodec 直写 Surface）
  * - hwdec：硬件解码，auto-copy / mediacodec / no（必须与 vo 匹配）
- * - 重置：恢复默认值（vo=gpu + hwdec=auto-copy）
+ *   电视/盒子（arm32）硬解固定 mediacodec_embed + mediacodec，不再提供 copy-back 选项
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -161,6 +161,7 @@ private fun PlayerSettingsLeftColumn(viewModel: AppViewModel) {
     val actualHwdec by viewModel.actualHwdec.collectAsState()
     val hwdecBlacklisted by viewModel.hwdecBlacklisted.collectAsState()
     val actualVo by viewModel.actualVo.collectAsState()
+    val renderPathReason by viewModel.renderPathReason.collectAsState()
     val voAutoFallback by viewModel.voAutoFallback.collectAsState()
     val colorCompatMode by viewModel.colorCompatMode.collectAsState()
     val hardwareDecode by viewModel.hardwareDecode.collectAsState()
@@ -296,7 +297,7 @@ private fun PlayerSettingsLeftColumn(viewModel: AppViewModel) {
     if (currentPlayerType == PlayerType.MPV) {
         SectionTitle("视频输出（VO）")
         Spacer(modifier = Modifier.height(4.dp))
-        SectionDesc("决定画面如何渲染到屏幕。黑屏有声音时切换到 mediacodec_embed")
+        SectionDesc("决定画面如何渲染到屏幕。电视/盒子请用 MediaCodec（直写 Surface）；黑屏有声音时也可切换它")
         Spacer(modifier = Modifier.height(8.dp))
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
@@ -311,7 +312,7 @@ private fun PlayerSettingsLeftColumn(viewModel: AppViewModel) {
         val voDesc = when (currentVo) {
             "gpu" -> "GPU 渲染：经典 EGL 后端，支持 HDR/OSD/shader，兼容大多数 GPU。部分 GPU（如 Mali-G76）可能黑屏"
             "gpu-next" -> "GPU-Next 渲染：新一代 EGL 后端（render API），渲染路径与 GPU 不同。支持 HDR/OSD/shader，GPU 黑屏时可尝试此选项"
-            "mediacodec_embed" -> "MediaCodec 直接渲染到 Surface，绕过 EGL。GPU EGL 兼容性问题时的 fallback，不支持 OSD/HDR"
+            "mediacodec_embed" -> "MediaCodec 直接写 Surface（零拷贝，不占 GPU 滤镜）。App 侧弹窗与 OSD 正常；mpv 画面层不可用：字幕不显示、截图失败、翻转/裁剪等视频滤镜无效。"
             else -> "未知 vo: $currentVo"
         }
         Text(text = voDesc, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp))
@@ -323,6 +324,15 @@ private fun PlayerSettingsLeftColumn(viewModel: AppViewModel) {
             fontSize = 12.sp,
             modifier = Modifier.padding(horizontal = 4.dp)
         )
+        renderPathText(actualVo, renderPathReason)?.let { pathText ->
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = pathText,
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            )
+        }
         Spacer(modifier = Modifier.height(20.dp))
 
         SectionTitle("硬件解码（HWDEC）")
@@ -336,9 +346,13 @@ private fun PlayerSettingsLeftColumn(viewModel: AppViewModel) {
         ) {
             when (currentVo) {
                 "gpu", "gpu-next" -> {
-                    FilterChip(selected = currentHwdec == "mediacodec", onClick = { viewModel.setPlayerHwdec("mediacodec") }, label = { Text("mediacodec（硬解）") }, modifier = Modifier.tvFocusBorder())
-                    FilterChip(selected = currentHwdec == "auto-copy", onClick = { viewModel.setPlayerHwdec("auto-copy") }, label = { Text("auto-copy（兼容）") }, modifier = Modifier.tvFocusBorder())
-                    FilterChip(selected = currentHwdec == "auto", onClick = { viewModel.setPlayerHwdec("auto") }, label = { Text("auto（4K HDR）") }, modifier = Modifier.tvFocusBorder())
+                    // 电视/盒子：AImageReader 直通与 auto-copy 都会崩，只保留软解；
+                    // 需要硬解时切到 MediaCodec（mediacodec_embed 直写 Surface）
+                    if (!viewModel.isArm32TvDevice) {
+                        FilterChip(selected = currentHwdec == "mediacodec", onClick = { viewModel.setPlayerHwdec("mediacodec") }, label = { Text("mediacodec（硬解）") }, modifier = Modifier.tvFocusBorder())
+                        FilterChip(selected = currentHwdec == "auto-copy", onClick = { viewModel.setPlayerHwdec("auto-copy") }, label = { Text("auto-copy（兼容）") }, modifier = Modifier.tvFocusBorder())
+                        FilterChip(selected = currentHwdec == "auto", onClick = { viewModel.setPlayerHwdec("auto") }, label = { Text("auto（4K HDR）") }, modifier = Modifier.tvFocusBorder())
+                    }
                     FilterChip(selected = currentHwdec == "no", onClick = { viewModel.setPlayerHwdec("no") }, label = { Text("no（软解）") }, modifier = Modifier.tvFocusBorder())
                 }
                 "mediacodec_embed" -> {
@@ -362,7 +376,7 @@ private fun PlayerSettingsLeftColumn(viewModel: AppViewModel) {
         val hwdecDesc = when (currentHwdec) {
             "auto-copy" -> "自动选择硬件解码器，解码后拷贝到 CPU 内存再上传 GPU。兼容性好，支持视频滤镜（翻转/裁剪/360°）。4K HDR 可能卡顿"
             "auto" -> "自动选择最佳硬解，优先直接输出（零拷贝）。4K HDR 流畅，但视频翻转/裁剪/360° 滤镜可能不可用"
-            "mediacodec" -> "MediaCodec 硬件解码：vo=gpu 时经 AImageReader 直通 GPU（不落 CPU 内存），vo=mediacodec_embed 时解码器直接写 Surface"
+            "mediacodec" -> "MediaCodec 硬件解码：与 vo=mediacodec_embed 配合时解码器直接写 Surface（电视默认路径）；vo=gpu/gpu-next 时经 AImageReader 直通（手机默认路径）"
             "no" -> "纯软件解码。兼容性最好但耗电，CPU 解码可能慢"
             else -> "未知 hwdec: $currentHwdec"
         }
@@ -447,9 +461,25 @@ private fun PlayerSettingsRightColumn(viewModel: AppViewModel) {
     Spacer(modifier = Modifier.height(4.dp))
     SectionDesc("消除隔行扫描视频（如 1080i TV 流）的横线梳齿。自动模式由 mpv 检测隔行内容")
     Spacer(modifier = Modifier.height(8.dp))
+    val surfaceDirect = actualVo == "mediacodec_embed"
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         FilterChip(selected = currentDeinterlace == "no", onClick = { viewModel.setDeinterlace("no") }, label = { Text("关闭") }, modifier = Modifier.tvFocusBorder())
-        FilterChip(selected = currentDeinterlace == "auto", onClick = { viewModel.setDeinterlace("auto") }, label = { Text("自动") }, modifier = Modifier.tvFocusBorder())
+        FilterChip(
+            selected = currentDeinterlace == "auto",
+            onClick = { if (!surfaceDirect) viewModel.setDeinterlace("auto") },
+            enabled = !surfaceDirect,
+            label = { Text("自动") },
+            modifier = Modifier.tvFocusBorder()
+        )
+    }
+    if (surfaceDirect) {
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "当前为直写 Surface 播放，反交错不可用；下次换台会自动切到 GPU 路径并恢复",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(horizontal = 4.dp)
+        )
     }
     Spacer(modifier = Modifier.height(6.dp))
     val deinterlaceDesc = when (currentDeinterlace) {
@@ -650,6 +680,8 @@ private fun PlayerSettingsPanelAptv(viewModel: AppViewModel) {
     val timeoutSwitch by viewModel.timeoutSwitchSource.collectAsState()
     val reconnectIdx by viewModel.reconnectIndex.collectAsState()
     val screenLocked by viewModel.screenLock.collectAsState()
+    val actualVo by viewModel.actualVo.collectAsState()
+    val renderPathReason by viewModel.renderPathReason.collectAsState()
 
     val exoSurfaceView by viewModel.exoSurfaceView.collectAsState()
     val epgTz by viewModel.epgTimezoneOffset.collectAsState()
@@ -759,7 +791,7 @@ private fun PlayerSettingsPanelAptv(viewModel: AppViewModel) {
                     val voDesc = when (currentVo) {
                         "gpu" -> "GPU 渲染：经典 EGL 后端，支持 HDR/OSD/shader，兼容大多数 GPU。部分 GPU（如 Mali-G76）可能黑屏"
                         "gpu-next" -> "GPU-Next 渲染：新一代 EGL 后端（render API），渲染路径与 GPU 不同。支持 HDR/OSD/shader，GPU 黑屏时可尝试此选项"
-                        "mediacodec_embed" -> "MediaCodec 直接渲染到 Surface，绕过 EGL。GPU EGL 兼容性问题时的 fallback，不支持 OSD/HDR"
+                        "mediacodec_embed" -> "MediaCodec 直接写 Surface（零拷贝，不占 GPU 滤镜）。App 侧弹窗与 OSD 正常；mpv 画面层不可用：字幕不显示、截图失败、翻转/裁剪等视频滤镜无效。"
                         else -> "未知 vo: $currentVo"
                     }
                     Text(
@@ -768,12 +800,23 @@ private fun PlayerSettingsPanelAptv(viewModel: AppViewModel) {
                         fontSize = 12.sp,
                         modifier = Modifier.padding(vertical = 8.dp)
                     )
+                    renderPathText(actualVo, renderPathReason)?.let { pathText ->
+                        Text(
+                            text = pathText,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                    }
                 }
 
                 SettingsGroup("硬件解码") {
                     val hwdecOptions = when (currentVo) {
                         "mediacodec_embed" -> listOf("mediacodec" to "mediacodec（固定）")
-                        else -> listOf(
+                        // 电视/盒子：copy-back 与 AImageReader 直通都会崩，只保留软解
+                        else -> if (viewModel.isArm32TvDevice) {
+                            listOf("no" to "no（软解）")
+                        } else listOf(
                             "auto-copy" to "auto-copy（推荐）",
                             "auto" to "auto（4K HDR）",
                             "no" to "no（软解）"
@@ -999,6 +1042,18 @@ private fun voActualText(actual: String, selected: String, autoFallback: Boolean
         autoFallback -> "$actualPart · 默认 mediacodec_embed 起播失败，已自动回退到 GPU（重新选择即可重试）"
         actual.isNotBlank() && actual != selected -> "$actualPart（设置值：$selected）"
         else -> actualPart
+    }
+}
+
+/** 「当前为什么走这条渲染路径」：自适应切 GPU 时给出原因，直写时提示不可用的能力 */
+private fun renderPathText(actualVo: String, reason: String?): String? = when (reason) {
+    "subtitle" -> "当前路径：GPU 路径（当前内容有字幕轨，需要 mpv 渲染字幕）"
+    "filter" -> "当前路径：GPU 路径（已启用去色带/反交错/超分等滤镜）"
+    "fallback" -> "当前路径：GPU 路径（直写 Surface 起播失败，已自动回退）"
+    else -> when (actualVo) {
+        "mediacodec_embed" -> "当前路径：直写 Surface（无字幕/无滤镜；字幕、滤镜、截图暂不可用）"
+        "gpu", "gpu-next" -> "当前路径：GPU 路径（手动选择）"
+        else -> null
     }
 }
 

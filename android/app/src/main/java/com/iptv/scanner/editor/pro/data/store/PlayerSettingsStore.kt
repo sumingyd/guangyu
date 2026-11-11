@@ -24,14 +24,26 @@ class PlayerSettingsStore(
 
     /** 获取持久化的 video output，未持久化时按设备类型给默认值 */
     fun getVo(): String {
+        val vo = requestedVo()
+        // 软解（含崩溃黑名单）时 mediacodec_embed 没有解码器直渲，必须退回 gpu
+        if (vo == VO_MEDIACODEC_EMBED && getHwdec() == HWDEC_SOFTWARE) return DEFAULT_VO_VALUE
+        return vo
+    }
+
+    /** 未经软解兜底的 vo：只反映用户选择 / 设备默认 / 自动回退 */
+    private fun requestedVo(): String {
         val saved = prefs.getString(KEY_VO, null)?.takeIf { it.isNotEmpty() }
-        if (saved != null) return saved
+        if (saved != null) {
+            // 电视/盒子硬解只允许 MediaCodec 直写 Surface：gpu + mediacodec（AImageReader）
+            // 在 arm32 OMX 设备上会起播失败，这里统一换成 mediacodec_embed。
+            if (isArm32Tv() && saved == DEFAULT_VO_VALUE && resolveRequestedHwdec() == HWDEC_MEDIACODEC) {
+                return VO_MEDIACODEC_EMBED
+            }
+            return saved
+        }
         // 自动回退过：本次（以及后续启动）固定 gpu，直到用户在设置页重新选择
         if (isVoAutoFallback()) return DEFAULT_VO_VALUE
-        val vo = defaultVo()
-        // 硬解黑名单/机型强制软解（hwdec=no）时 mediacodec_embed 没有解码器直渲，必须退回 gpu
-        if (vo == VO_MEDIACODEC_EMBED && getHwdec() == "no") return DEFAULT_VO_VALUE
-        return vo
+        return defaultVo()
     }
 
     fun setVo(vo: String) {
@@ -52,13 +64,32 @@ class PlayerSettingsStore(
         prefs.edit().putBoolean(KEY_VO_AUTO_FALLBACK, fallback).apply()
     }
 
-    /** 获取持久化的 hwdec 模式，未持久化时按设备类型给默认值 */
+    /**
+     * 获取持久化的 hwdec 模式，未持久化时按设备类型给默认值。
+     *
+     * 崩溃黑名单按 vo+hwdec 组合判定：只有上次真正崩溃的那一组组合才会被强制软解，
+     * 旧的 gpu+auto-copy 崩溃不会继续挡住 mediacodec_embed+mediacodec 直写路径。
+     */
     fun getHwdec(): String {
-        // 设备黑名单：上次会话开启硬解时进程异常退出（native 崩溃），
-        // 本次会话强制软解，避免再次走到同一条 MediaCodec teardown 崩溃路径。
-        if (isHwdecBlacklisted()) return HWDEC_SOFTWARE
-        return prefs.getString(KEY_HWDEC, null)?.takeIf { it.isNotEmpty() } ?: defaultHwdec()
+        val requested = resolveRequestedHwdec()
+        if (isHwdecComboBlacklisted(requestedVo(), requested)) return HWDEC_SOFTWARE
+        return requested
     }
+
+    /** 用户请求的 hwdec（不含黑名单/软解兜底） */
+    private fun resolveRequestedHwdec(): String {
+        val saved = prefs.getString(KEY_HWDEC, null)?.takeIf { it.isNotEmpty() }
+        if (saved == null) return defaultHwdec()
+        return normalizeHwdecForDevice(saved)
+    }
+
+    /**
+     * 按设备纠正 hwdec：arm32 电视/盒子不再提供 copy-back（auto-copy / auto 会落到
+     * AImageReader/copy-back，实测起播即 SIGSEGV），统一改成直写 Surface 的 mediacodec。
+     * 频道级设置绕过持久化偏好，也需要走这里纠正。
+     */
+    fun normalizeHwdecForDevice(hwdec: String): String =
+        if (isArm32Tv() && (hwdec == "auto-copy" || hwdec == "auto")) HWDEC_MEDIACODEC else hwdec
 
     fun setHwdec(hwdec: String) {
         // 用户显式选择硬解即视为认可该设置，解除崩溃黑名单
@@ -70,8 +101,33 @@ class PlayerSettingsStore(
     fun isHwdecBlacklisted(): Boolean = prefs.getBoolean(KEY_HWDEC_CRASH_BLACKLIST, false)
 
     fun setHwdecBlacklisted(blacklisted: Boolean) {
-        prefs.edit().putBoolean(KEY_HWDEC_CRASH_BLACKLIST, blacklisted).apply()
+        prefs.edit().apply {
+            putBoolean(KEY_HWDEC_CRASH_BLACKLIST, blacklisted)
+            if (!blacklisted) remove(KEY_HWDEC_CRASH_COMBO)
+        }.apply()
     }
+
+    /**
+     * 该 vo+hwdec 组合是否被崩溃黑名单挡住。
+     *
+     * 黑名单只记录上次真正崩溃的那一组组合；旧版本遗留（没有组合记录）只挡
+     * gpu + auto-copy/auto，避免历史 auto-copy 崩溃一直挡住新的直写 Surface 方案。
+     */
+    fun isHwdecComboBlacklisted(vo: String, hwdec: String): Boolean {
+        if (!isHwdecBlacklisted()) return false
+        val combo = prefs.getString(KEY_HWDEC_CRASH_COMBO, null)
+        if (combo != null) return combo == "$vo|$hwdec"
+        return vo == DEFAULT_VO_VALUE && (hwdec == "auto-copy" || hwdec == "auto")
+    }
+
+    /** 记录导致崩溃的 vo+hwdec 组合（由 NativeCrashLogger 在下次启动时写入） */
+    fun setHwdecCrashCombo(combo: String?) {
+        prefs.edit().apply {
+            if (combo == null) remove(KEY_HWDEC_CRASH_COMBO) else putString(KEY_HWDEC_CRASH_COMBO, combo)
+        }.apply()
+    }
+
+    fun getHwdecCrashCombo(): String? = prefs.getString(KEY_HWDEC_CRASH_COMBO, null)
 
     /** 是否已确认该设备需要 vo fallback（黑屏检测曾触发过） */
     fun isVoFallbackConfirmed(): Boolean = prefs.getBoolean(KEY_VO_FALLBACK, false)
@@ -272,6 +328,7 @@ class PlayerSettingsStore(
             .remove(KEY_HWDEC)
             .remove(KEY_VO_FALLBACK)
             .remove(KEY_VO_AUTO_FALLBACK)
+            .remove(KEY_HWDEC_CRASH_COMBO)
             .remove(KEY_PLAYER_TYPE)
             .remove(KEY_HDR_MODE)
             .remove(KEY_RTSP_TRANSPORT)
@@ -284,7 +341,7 @@ class PlayerSettingsStore(
     }
 
     companion object {
-        private const val KEY_VO = "player_vo"
+        internal const val KEY_VO = "player_vo"
         private const val KEY_VO_FALLBACK = "player_vo_fallback_confirmed"
 
         /** 默认 vo（arm64 TV 的 mediacodec_embed）因起播失败已自动回退到 gpu */
@@ -327,25 +384,15 @@ class PlayerSettingsStore(
         private const val DEFAULT_VO_VALUE = "gpu"
         private const val DEFAULT_HWDEC_VALUE = "auto-copy"
 
-        /** arm64 电视/盒子默认零拷贝直渲路径（MediaCodec 直接写 Surface） */
+        /** 电视/盒子默认零拷贝直渲路径（MediaCodec 直接写 Surface，不碰 AImageReader/copy-back） */
         private const val VO_MEDIACODEC_EMBED = "mediacodec_embed"
         private const val HWDEC_MEDIACODEC = "mediacodec"
 
-        /**
-         * arm32（armeabi-v7a）TV 设备默认尝试 MediaCodec 硬解。
-         *
-         * 历史崩溃只发生在 Sony BRAVIA VH21（MediaTek / OMX.MTK）单机型：
-         * copy 起播路径 fault addr 0x18、embed teardown 路径 fault addr 0x24。
-         * 没有 Amlogic/S905 等设备的崩溃证据，且同 SoC 上 EXO 硬解流畅，
-         * 因此默认放开，由崩溃黑名单兜底；已知会崩的厂商仍走软解（见下方判断）。
-         */
-        private const val TV_ARM32_HWDEC_VALUE = "mediacodec"
+        /** 手机（arm64 手持设备）默认渲染：gpu-next 配 mediacodec 直通，少一次 CPU 回读 */
+        private const val VO_GPU_NEXT = "gpu-next"
 
-        /** 已知会导致 MediaCodec teardown SIGSEGV 的 arm32 设备走软解 */
-        private const val TV_ARM32_UNSAFE_HWDEC_VALUE = "no"
-
-        /** MediaTek 平台标识：mt5895 / mt5891 / mt8695 等 */
-        private val MTK_PLATFORM_PATTERN = Regex("(^|[-_])mt\\d{3,5}")
+        /** 崩溃黑名单记录的具体 vo+hwdec 组合（"vo|hwdec"），空=旧版本遗留 */
+        internal const val KEY_HWDEC_CRASH_COMBO = "player_hwdec_crash_combo"
     }
 
     /** 是否为 arm32 TV 设备（仅 armeabi-v7a 主 ABI 的电视/盒子） */
@@ -358,45 +405,34 @@ class PlayerSettingsStore(
             android.os.Build.SUPPORTED_ABIS.none { it == "arm64-v8a" }
     }
 
-    /**
-     * 是否为已知会导致 MediaCodec teardown SIGSEGV 的厂商/平台。
-     *
-     * 目前只有 Sony BRAVIA VH21（MediaTek / OMX.MTK）有实测崩溃证据：
-     * - `vo=gpu + hwdec=auto-copy` 起播数秒内 SIGSEGV（fault addr 0x18）；
-     * - `vo=mediacodec_embed + hwdec=mediacodec` 换台/切 vo 解码器销毁时 SIGSEGV（0x24）。
-     * 因此 MediaTek 平台和 Sony BRAVIA 一律保留软解，其他 arm32 设备才放开。
-     */
-    fun isHardwareDecodeUnsafeVendor(): Boolean {
-        return try {
-            val manufacturer = android.os.Build.MANUFACTURER.orEmpty().lowercase()
-            val brand = android.os.Build.BRAND.orEmpty().lowercase()
-            val model = android.os.Build.MODEL.orEmpty().lowercase()
-            val hardware = android.os.Build.HARDWARE.orEmpty().lowercase()
-            val board = android.os.Build.BOARD.orEmpty().lowercase()
-            manufacturer.contains("sony") ||
-                brand.contains("sony") ||
-                model.contains("bravia") ||
-                MTK_PLATFORM_PATTERN.containsMatchIn(hardware) ||
-                MTK_PLATFORM_PATTERN.containsMatchIn(board) ||
-                hardware.contains("mtk") ||
-                board.contains("mtk")
-        } catch (_: Throwable) {
-            // 判断失败时保守：不放开硬解
-            true
-        }
+    /** 是否为 arm32 TV 设备（UI 用它隐藏 copy-back 选项） */
+    fun isArm32TvDevice(): Boolean = isArm32Tv()
+
+    /** 电视/盒子硬解必须走 mediacodec_embed（AImageReader/copy-back 在 OMX 设备上必崩） */
+    fun isTvEmbedRequired(): Boolean = isArm32Tv()
+
+    /** 用户切换硬/软解时的目标 vo */
+    fun voForHardwareDecode(enabled: Boolean, currentVo: String): String = when {
+        !enabled -> if (currentVo == VO_MEDIACODEC_EMBED) DEFAULT_VO_VALUE else currentVo
+        isTvEmbedRequired() -> VO_MEDIACODEC_EMBED
+        else -> currentVo
     }
 
-    /** 供 mpv 层判断：arm32 TV 是否允许默认硬解（排除已知会崩的厂商） */
-    fun isArm32TvHardwareDecodeAllowed(): Boolean =
-        isArm32Tv() && !isHardwareDecodeUnsafeVendor()
+    /** 用户切换硬/软解时的目标 hwdec */
+    fun hwdecForHardwareDecode(enabled: Boolean, currentHwdec: String): String = when {
+        !enabled -> HWDEC_SOFTWARE
+        isTvEmbedRequired() -> HWDEC_MEDIACODEC
+        isArm64Handheld() -> HWDEC_MEDIACODEC
+        currentHwdec == "auto" -> "auto"
+        else -> DEFAULT_HWDEC_VALUE
+    }
 
     /**
      * 是否为 arm64 电视/盒子。
      *
      * 这类设备默认走 vo=mediacodec_embed + hwdec=mediacodec（解码器直接写 Surface，
      * 零拷贝、少一次 GPU 上传）。出错时由 MpvController 自动回退 gpu + auto-copy 一次。
-     * 手机/平板/车机（非 TV 模式）不放开，避免非电视设备走未验证路径；
-     * arm32 TV 由 [isArm32TvHardwareDecodeAllowed] 判定（MTK/Sony 仍走软解）。
+     * 手机/平板/车机（非 TV 模式）不放开，避免非电视设备走未验证路径。
      */
     private fun isArm64Tv(): Boolean {
         val ctx = appContext ?: return false
@@ -406,17 +442,34 @@ class PlayerSettingsStore(
         return android.os.Build.SUPPORTED_ABIS.any { it == "arm64-v8a" }
     }
 
-    private fun defaultVo(): String =
-        if (isArm64Tv()) VO_MEDIACODEC_EMBED else DEFAULT_VO_VALUE
+    /** 是否为 arm64 手机（有触屏、最短边 < 600dp） */
+    fun isHandheldDevice(): Boolean = isArm64Handheld()
+
+    /**
+     * 是否为 arm64 手机（有触屏、最短边 < 600dp）。
+     * 车机/平板屏幕最短边 ≥ 600dp 或没有触屏，不在此列，保持 gpu + auto-copy。
+     */
+    private fun isArm64Handheld(): Boolean {
+        val ctx = appContext ?: return false
+        if (android.os.Build.SUPPORTED_ABIS.none { it == "arm64-v8a" }) return false
+        if (!ctx.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_TOUCHSCREEN)) return false
+        val config = ctx.resources.configuration
+        return minOf(config.screenWidthDp, config.screenHeightDp) < 600
+    }
+
+    private fun defaultVo(): String = when {
+        isArm32Tv() || isArm64Tv() -> VO_MEDIACODEC_EMBED
+        isArm64Handheld() -> VO_GPU_NEXT
+        else -> DEFAULT_VO_VALUE
+    }
 
     private fun defaultHwdec(): String = when {
-        // arm32 TV：Amlogic 等非 MTK 设备默认尝试 mediacodec（vo=gpu + AImageReader 直通），
-        // MTK/Sony 等已知崩溃厂商仍保持软解。
-        isArm32Tv() ->
-            if (isArm32TvHardwareDecodeAllowed()) TV_ARM32_HWDEC_VALUE
-            else TV_ARM32_UNSAFE_HWDEC_VALUE
+        // arm32 TV：硬解统一走 mediacodec 直写 Surface（不提供 copy-back）
+        isArm32Tv() -> HWDEC_MEDIACODEC
         // 默认 vo 是 mediacodec_embed 时，hwdec 必须配对 mediacodec（零拷贝直渲）
         hasExplicitVo().not() && defaultVo() == VO_MEDIACODEC_EMBED -> HWDEC_MEDIACODEC
+        // 手机：MediaCodec 直通 GPU，避免 copy-back 回读 CPU
+        isArm64Handheld() -> HWDEC_MEDIACODEC
         else -> DEFAULT_HWDEC_VALUE
     }
 }

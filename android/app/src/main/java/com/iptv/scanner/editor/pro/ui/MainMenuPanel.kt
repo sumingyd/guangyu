@@ -78,6 +78,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 
 import androidx.compose.foundation.focusable
@@ -143,6 +144,9 @@ fun MainMenuPanel(viewModel: AppViewModel) {
     val themeMode by viewModel.themeMode.collectAsState()
     // 界面模式：TV 端唯一可切换手机/平板/TV 形态的入口（电视没有竖屏设置页）
     val uiModePref by viewModel.uiModePref.collectAsState()
+    // 当前渲染路径：直写 Surface 时 mpv 字幕/滤镜/截图入口置灰（仍可见）
+    val actualVo by viewModel.actualVo.collectAsState()
+    val surfaceDirect = actualVo == "mediacodec_embed"
 
     val isFavorite = currentIdx >= 0 && favorites.contains(currentIdx)
 
@@ -168,8 +172,9 @@ fun MainMenuPanel(viewModel: AppViewModel) {
         if (uri != null) viewModel.playLocalVideo(uri.toString())
     }
 
-    val sections = remember(currentIdx, isFavorite, osdShowTime, osdShowNetSpeed, osdHideChannelNum, osdDisableEpg, osdDisableFavorite, osdShowListIcon, osdShowBottomIcon, liquidGlass, sources, selectedSource, multiViewState, themeMode, uiModePref) {
+    val sections = remember(currentIdx, isFavorite, osdShowTime, osdShowNetSpeed, osdHideChannelNum, osdDisableEpg, osdDisableFavorite, osdShowListIcon, osdShowBottomIcon, liquidGlass, sources, selectedSource, multiViewState, themeMode, uiModePref, surfaceDirect) {
         buildMenuSections(
+            surfaceDirect = surfaceDirect,
             themeMode = themeMode,
             uiModeLabel = uiModePref.label,
             onCycleUiMode = {
@@ -440,7 +445,8 @@ fun MainMenuPanel(viewModel: AppViewModel) {
                             // 在 KeyUp 统一触发点击：整个按键序列在预览层完整消费，
                             // 不会泄漏到新打开面板中自动获得焦点的控件（如关闭按钮）。
                             if (activeColumn == 1 && currentSection != null && currentSection.entries.isNotEmpty()) {
-                                currentSection.entries.getOrNull(safeLeftIdx)?.onClick()
+                                currentSection.entries.getOrNull(safeLeftIdx)
+                                    ?.takeIf { it.enabled }?.onClick()
                                 true
                             } else false
                         }
@@ -489,7 +495,8 @@ fun MainMenuPanel(viewModel: AppViewModel) {
                                                 else -> Modifier
                                             }
                                         )
-                                        .clickable {
+                                        .alpha(if (entry.enabled) 1f else 0.38f)
+                                        .clickable(enabled = entry.enabled) {
                                             activeColumn = 1
                                             leftSelectedIdx = idx
                                             entry.onClick()
@@ -505,7 +512,15 @@ fun MainMenuPanel(viewModel: AppViewModel) {
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f)
                                     )
-                                    if (entry.isToggle) {
+                                    if (!entry.enabled && entry.disabledReason.isNotEmpty()) {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "不可用",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 10.sp,
+                                            maxLines = 1
+                                        )
+                                    } else if (entry.isToggle) {
                                         Spacer(modifier = Modifier.width(4.dp))
                                         Box(
                                             modifier = Modifier
@@ -722,9 +737,10 @@ private fun MenuGridItem(
         color = if (entry.highlight) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant,
         shape = RoundedCornerShape(8.dp),
         modifier = modifier
-            .height(72.dp)
+            .height(if (entry.enabled) 72.dp else 84.dp)
             .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
+            .alpha(if (entry.enabled) 1f else 0.42f)
+            .clickable(enabled = entry.enabled, onClick = onClick)
     ) {
         Column(
             modifier = Modifier
@@ -762,6 +778,17 @@ private fun MenuGridItem(
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center
             )
+            // 置灰原因（入口保留，只提示当前不可用）
+            if (!entry.enabled && entry.disabledReason.isNotEmpty()) {
+                Text(
+                    text = "直写 Surface 下不可用",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 9.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center
+                )
+            }
         }
     }
 }
@@ -777,7 +804,11 @@ private data class MenuEntry(
     val onClick: () -> Unit,
     val highlight: Boolean = false,
     val isToggle: Boolean = false,
-    val toggleValue: Boolean = false
+    val toggleValue: Boolean = false,
+    /** 当前渲染路径不支持时置灰（入口仍然可见，不隐藏） */
+    val enabled: Boolean = true,
+    /** 置灰原因，显示在副标题位置 */
+    val disabledReason: String = ""
 )
 
 private data class MenuSection(
@@ -846,8 +877,11 @@ private fun buildMenuSections(
     multiViewActive: Boolean = false,
     currentMultiViewLayout: MultiViewLayout? = null,
     onEnterMultiView: (MultiViewLayout) -> Unit = {},
-    onExitMultiView: () -> Unit = {}
+    onExitMultiView: () -> Unit = {},
+    /** 当前是否直写 Surface（该路径下 mpv 字幕/滤镜/截图不可用，入口置灰但不隐藏） */
+    surfaceDirect: Boolean = false
 ): List<MenuSection> {
+    val surfaceReason = "直写 Surface 播放中不可用，切回 GPU 后恢复"
 
     // 侧边栏风格分组：订阅源 = 订阅源列表 + 管理入口
     val sourceEntries = mutableListOf<MenuEntry>()
@@ -884,8 +918,16 @@ private fun buildMenuSections(
         title = "播放设置",
         entries = listOf(
             MenuEntry(Icons.Default.Settings, "播放器设置", "内核 / VO / HWDEC / HDR", onSettings),
-            MenuEntry(Icons.Default.ClosedCaption, "字幕", "轨 / 显示 / 延迟 / 缩放", onSubtitle),
-            MenuEntry(Icons.Default.VideoSettings, "视频", "图像调整 / 旋转 / 翻转", onVideo),
+            MenuEntry(
+                Icons.Default.ClosedCaption, "字幕",
+                if (surfaceDirect) surfaceReason else "轨 / 显示 / 延迟 / 缩放",
+                onSubtitle, enabled = !surfaceDirect, disabledReason = if (surfaceDirect) surfaceReason else ""
+            ),
+            MenuEntry(
+                Icons.Default.VideoSettings, "视频",
+                if (surfaceDirect) surfaceReason else "图像调整 / 旋转 / 翻转",
+                onVideo, enabled = !surfaceDirect, disabledReason = if (surfaceDirect) surfaceReason else ""
+            ),
             MenuEntry(Icons.Default.Equalizer, "音频", "音轨 / 延迟 / EQ / 音调", onAudio),
             MenuEntry(Icons.Default.PlayCircle, "播放", "速度 / 循环 / 随机 / AB", onPlayback)
         )
@@ -947,7 +989,11 @@ private fun buildMenuSections(
         title = "工具设置",
         entries = listOf(
             MenuEntry(Icons.Default.Tune, "工具", "搜索 / 提醒 / 续播 / 书签", onTools),
-            MenuEntry(Icons.Default.ScreenshotMonitor, "截图", "单张 / 连拍 / 含字幕", onScreenshot),
+            MenuEntry(
+                Icons.Default.ScreenshotMonitor, "截图",
+                if (surfaceDirect) surfaceReason else "单张 / 连拍 / 含字幕",
+                onScreenshot, enabled = !surfaceDirect, disabledReason = if (surfaceDirect) surfaceReason else ""
+            ),
             MenuEntry(Icons.Default.GraphicEq, "A/V 同步", "实时数值 / 波形", onAvsync),
             MenuEntry(Icons.Default.Public, "网络增强", "Referer / Proxy / Headers", onNetwork),
             MenuEntry(Icons.Default.ContentCut, "切片导出", "裁剪视频片段 / GIF", onClipExport),
@@ -1000,7 +1046,8 @@ private fun MenuEntryItem(
         modifier = Modifier
             .fillMaxWidth()
             .tvFocusBorder()
-            .clickable(onClick = onClick)
+            .alpha(if (entry.enabled) 1f else 0.38f)
+            .clickable(enabled = entry.enabled, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

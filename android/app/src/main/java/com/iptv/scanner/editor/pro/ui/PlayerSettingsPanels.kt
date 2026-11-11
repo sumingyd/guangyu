@@ -179,6 +179,13 @@ fun VideoSettingsPanel(viewModel: AppViewModel) {
         if (!fileLoaded) {
             Text("未在播放，调整将在播放后生效", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
         }
+        if (viewModel.actualVo.collectAsState().value == "mediacodec_embed") {
+            Text(
+                "当前为直写 Surface 播放：图像调整 / 旋转 / 超分 / 着色器不可用，切回 GPU 后恢复",
+                color = MaterialTheme.colorScheme.error,
+                fontSize = 12.sp
+            )
+        }
 
         SettingsGroup("图像调整") {
             LabeledSlider(

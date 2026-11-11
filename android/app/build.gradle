@@ -51,6 +51,16 @@ android {
     namespace 'com.iptv.scanner.editor.pro'
     compileSdk 35
 
+    // 原生 SIGSEGV 崩溃取证（src/main/cpp/native_crash_handler.c）
+    ndkVersion "27.2.12479018"
+
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.22.1"
+        }
+    }
+
     defaultConfig {
         applicationId "com.iptv.scanner.editor.pro"
         minSdk 28
@@ -70,6 +80,15 @@ android {
                 abiFilters targetAbi.split(',')
             } else {
                 abiFilters 'arm64-v8a', 'armeabi-v7a'
+            }
+        }
+
+        externalNativeBuild {
+            cmake {
+                // 崩溃取证库是纯 C，不依赖 STL；必须用 none，
+                // 否则 AGP 会把 NDK 自带的 libc++_shared.so 打进包，
+                // 覆盖 jniLibs 里 mpv/ffmpeg 配套的那一份，导致 libmpv 加载失败。
+                arguments "-DANDROID_STL=none"
             }
         }
     }
@@ -195,6 +214,10 @@ android {
     packaging {
         jniLibs {
             pickFirsts += ['lib/*/libc++_shared.so']
+            /* mpv / ffmpeg 是预编译产物，release 下 AGP 会用 NDK 的 strip 处理它们；
+             * 实测 strip 后 libmpv 在设备上加载失败（libavcodec.so verneed 解析不到），
+             * 而正式测试包（未 strip）正常，因此这里保留这些 so 的符号表。 */
+            keepDebugSymbols += ['**/*.so']
         }
     }
 }

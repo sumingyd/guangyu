@@ -127,16 +127,32 @@ class UserPrefs private constructor() {
     fun getHwdec(): String = playerSettingsStore.getHwdec()
     fun setHwdec(hwdec: String) = playerSettingsStore.setHwdec(hwdec)
 
-    /** arm32 TV 是否允许默认硬解（MTK/Sony 等已知崩溃厂商仍返回 false） */
-    fun isArm32TvHardwareDecodeAllowed(): Boolean =
-        playerSettingsStore.isArm32TvHardwareDecodeAllowed()
+    /** 是否为 arm32 TV 设备（硬解只走 mediacodec_embed） */
+    fun isArm32TvDevice(): Boolean = playerSettingsStore.isArm32TvDevice()
 
-    /** 是否为已知会导致 MediaCodec teardown 崩溃的厂商/平台 */
-    fun isHardwareDecodeUnsafeVendor(): Boolean =
-        playerSettingsStore.isHardwareDecodeUnsafeVendor()
+    /** 电视/盒子硬解是否必须走 mediacodec_embed（禁用 AImageReader/copy-back） */
+    fun isTvEmbedRequired(): Boolean = playerSettingsStore.isTvEmbedRequired()
+
+    /** 切换硬/软解时的目标 vo / hwdec */
+    fun voForHardwareDecode(enabled: Boolean, currentVo: String): String =
+        playerSettingsStore.voForHardwareDecode(enabled, currentVo)
+
+    fun hwdecForHardwareDecode(enabled: Boolean, currentHwdec: String): String =
+        playerSettingsStore.hwdecForHardwareDecode(enabled, currentHwdec)
 
     /** 是否处于「硬解导致崩溃」的设备黑名单（强制软解） */
     fun isHwdecBlacklisted(): Boolean = playerSettingsStore.isHwdecBlacklisted()
+
+    /** 指定 vo+hwdec 组合是否命中崩溃黑名单 */
+    fun isHwdecComboBlacklisted(vo: String, hwdec: String): Boolean =
+        playerSettingsStore.isHwdecComboBlacklisted(vo, hwdec)
+
+    /** 按设备纠正 hwdec（arm32 TV 的 copy-back 统一改为 mediacodec 直写） */
+    fun normalizeHwdecForDevice(hwdec: String): String =
+        playerSettingsStore.normalizeHwdecForDevice(hwdec)
+
+    /** 是否为手机（arm64 手持设备，GPU 路径走 AImageReader 直通） */
+    fun isHandheldDevice(): Boolean = playerSettingsStore.isHandheldDevice()
 
     fun setHwdecBlacklisted(blacklisted: Boolean) = playerSettingsStore.setHwdecBlacklisted(blacklisted)
     fun isVoFallbackConfirmed(): Boolean = playerSettingsStore.isVoFallbackConfirmed()
