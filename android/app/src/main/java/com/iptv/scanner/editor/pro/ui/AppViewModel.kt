@@ -182,6 +182,13 @@ PlayerType.MPV -> mpvSingleton
 PlayerType.EXO -> {
 ExoPlayerWrapper(getApplication()).also {
 exoWrapper = it
+// 4K 首帧看门狗：SurfaceView 不吐首帧时切 TextureView（仅同一次进程请求一次）
+it.onRequestTextureViewFallback = {
+    if (exoSurfaceView.value) {
+        showOsd("画面输出已切换", "4K 首帧超时，已改用 TextureView 输出")
+        setExoSurfaceView(false)
+    }
+}
 }
 }
 }
@@ -546,6 +553,10 @@ internal var switchPlayJob: Job? = null
     val actualHwdec: StateFlow<String> get() = mpvSingleton.actualHwdec
     // 当前设备是否处于硬解崩溃黑名单
     val hwdecBlacklisted: StateFlow<Boolean> get() = mpvSingleton.hwdecBlacklisted
+    // mpv 实际生效的 vo（arm64 TV 默认 mediacodec_embed，起播失败会自动回退 gpu）
+    val actualVo: StateFlow<String> get() = mpvSingleton.actualVo
+    // 是否发生过 mediacodec_embed → gpu 的自动回退
+    val voAutoFallback: StateFlow<Boolean> get() = mpvSingleton.voAutoFallback
 
     // RTSP 传输协议（tcp/udp），供 UI 显示和切换
     internal val _currentRtspTransport = MutableStateFlow(userPrefs.getRtspTransport())
@@ -567,6 +578,11 @@ val logLevel: StateFlow<String> = _logLevel.asStateFlow()
     internal val _hardwareDecode = MutableStateFlow(userPrefs.getHwdec() != "no")
 
     init {
+// 默认 vo（arm64 TV 的 mediacodec_embed）起播失败自动回退时，同步界面状态并提示用户
+mpvSingleton.onVoAutoFallback = { vo ->
+    _currentVo.value = vo
+    showOsd("画面输出已切换", "当前渲染方式：$vo（原 mediacodec_embed 不可用）")
+}
 // 注册文件加载错误回调：当 mpv 报告文件加载失败时换源，
 // 添加短暂延迟避免坏流导致 mpv 核心状态未清理就加载下一个流。
 mpvSingleton.onFileError = {
@@ -1324,6 +1340,12 @@ internal var currentIsLocalFile: Boolean
         runCatching { HdrMode.valueOf(userPrefs.getHdrMode().uppercase()) }.getOrDefault(HdrMode.DISABLE)
     )
     val hdrMode: StateFlow<HdrMode> = _hdrMode.asStateFlow()
+
+    /** 色彩兼容模式（默认关闭；开启后强制保守 SDR 参数，仅 gpu/gpu-next 生效） */
+    internal val _colorCompatMode = MutableStateFlow(
+        runCatching { userPrefs.isColorCompatMode() }.getOrDefault(false)
+    )
+    val colorCompatMode: StateFlow<Boolean> = _colorCompatMode.asStateFlow()
 
     // 初始化流程
 

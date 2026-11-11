@@ -190,15 +190,24 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
         // EGL 初始化成功但 FBO 创建失败 → 黑屏（无画面）。
         // 默认用 rgba8（8-bit，全设备兼容），仅在 HDR 模式非 disable 时使用 rgba16hf。
         val hdrMode = UserPrefs.getInstance().getHdrMode()
-        val fboFormat = if (hdrMode == "disable") "rgba8" else "rgba16hf"
+        // 色彩兼容模式：强制 8-bit FBO，避免 16F 帧缓冲在个别电视盒子上过曝/偏色
+        val colorCompat = try { UserPrefs.getInstance().isColorCompatMode() } catch (_: Throwable) { false }
+        val fboFormat = if (hdrMode == "disable" || colorCompat) "rgba8" else "rgba16hf"
         setOptionChecked("fbo-format", fboFormat)
+        // 颜色管线保守默认（init 阶段只设安全值，SDR/HDR 分档在文件加载后按内容应用）：
+        // - video-output-levels=auto：交给 VO 决定，不强行 limited/full
+        // - tone-mapping=auto：gpu 用 spline、gpu-next 用 spline/bt.2390，保持现有画面不变
+        // - hdr-compute-peak=no：避免动态峰值计算带来亮度跳变（HDR 直通时由 applyTonemapConfig 再覆盖）
+        setOptionChecked("video-output-levels", "auto")
+        setOptionChecked("tone-mapping", if (colorCompat) "clip" else "auto")
+        setOptionChecked("hdr-compute-peak", "no")
         // 4K 安全选项：降低 GPU 渲染负担
         // - dither-depth：限制抖动深度为 8-bit，避免 4K 时 GPU 过载
         // - gpu-texture-resolution：限制 GPU 纹理分辨率（0=自动, 1=最高, 2=高, 3=中）
         setOptionChecked("dither-depth", "8")
         // target-colorspace-hint：仅 HDR 模式启用。
         // 部分设备显示控制器无法处理 colorspace 切换信号，会导致黑屏。
-        if (hdrMode != "disable") {
+        if (hdrMode != "disable" && !colorCompat) {
             setOptionChecked("target-colorspace-hint", "yes")
         }
 

@@ -304,6 +304,12 @@ class MainActivityCompose : ComponentActivity() {
                     val menuOpen = viewModel.menuPanelOpen.value
                     val anyPanelOpen = sidebarOpen || menuOpen
 
+                    // 底栏样式弹窗是居中的全屏覆盖层（不在右侧主菜单条范围内）。
+                    // 若继续走下面「点击菜单外 = 关菜单」的判定，手指一点就会把菜单和弹窗一起关掉，
+                    // 表现为「只有遥控器能用、触控直接关闭窗口」。
+                    // 弹窗打开期间触控全部交给 Compose：点卡片内部生效，点遮罩由 overlay 自己 dismiss。
+                    if (viewModel.stylePickerOpen.value) return super.dispatchTouchEvent(ev)
+
                     if (multiActive) {
                         // ---- 多画面模式 ----
                         // 面板打开时触控交给 Compose（列表滚动等）

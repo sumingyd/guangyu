@@ -226,6 +226,18 @@ internal fun AppViewModel.setHdrMode(mode: HdrMode) {
     Log.i(AppViewModel.TAG, "HDR 模式切换：$mode")
 }
 
+internal fun AppViewModel.setColorCompatMode(enabled: Boolean) {
+    if (_colorCompatMode.value == enabled) return
+    userPrefs.setColorCompatMode(enabled)
+    _colorCompatMode.value = enabled
+    // 立即应用到当前已加载的视频（仅 gpu/gpu-next 生效；mediacodec_embed 没有色调映射属性）
+    if (mpv.fileLoaded.value) {
+        applyHdrOnFileLoaded()
+    }
+    showOsd("色彩兼容模式：${if (enabled) "开启" else "关闭"}")
+    Log.i(AppViewModel.TAG, "色彩兼容模式切换：$enabled")
+}
+
 internal fun AppViewModel.applyHdrOnFileLoaded() {
     val mode = _hdrMode.value
     val mpv = this.mpv
@@ -234,6 +246,13 @@ internal fun AppViewModel.applyHdrOnFileLoaded() {
     val currentVo = try { mpv.getPropertyString("vo") ?: "" } catch (_: Throwable) { "" }
     if (currentVo == "mediacodec_embed") {
         Log.i(AppViewModel.TAG, "HDR 配置：跳过，vo=mediacodec_embed 不支持 GPU 色调映射属性")
+        return
+    }
+
+    // 色彩兼容模式：强制保守的 SDR 参数（默认关闭，不影响现有正常用户画面）
+    if (_colorCompatMode.value) {
+        applyColorCompatConfig(mpv)
+        Log.i(AppViewModel.TAG, "HDR 配置：色彩兼容模式 → 保守 SDR 参数（不做 HDR 直通）")
         return
     }
 
@@ -343,6 +362,25 @@ internal fun AppViewModel.resetHdrParams(mpv: Player) {
     safeSetProperty(mpv, "target-trc", "bt.1886")
     safeSetProperty(mpv, "target-colorspace-hint", "no")
     safeSetProperty(mpv, "gamut-mapping-mode", "auto")
+}
+
+/**
+ * 色彩兼容模式：强制最保守的 SDR 输出参数。
+ *
+ * 只对 gpu/gpu-next 生效（mediacodec_embed 没有这些属性）。
+ * 默认不启用；启用后 HDR 内容统一按 clip 映射到 bt.709，牺牲观感换取稳定，
+ * 用于个别设备过曝/发灰时的排障（用户本机无过曝，因此不作为默认值）。
+ */
+internal fun AppViewModel.applyColorCompatConfig(mpv: Player) {
+    safeSetProperty(mpv, "tone-mapping", "clip")
+    safeSetProperty(mpv, "tone-mapping-mode", "auto")
+    safeSetProperty(mpv, "hdr-compute-peak", "no")
+    safeSetProperty(mpv, "hdr10-opt", "no")
+    safeSetProperty(mpv, "video-output-levels", "auto")
+    safeSetProperty(mpv, "target-prim", "bt.709")
+    safeSetProperty(mpv, "target-trc", "bt.1886")
+    safeSetProperty(mpv, "target-colorspace-hint", "no")
+    safeSetProperty(mpv, "gamut-mapping-mode", "clip")
 }
 
 internal fun AppViewModel.applyWcgConfig(mpv: Player) {
@@ -829,6 +867,8 @@ internal fun AppViewModel.togglePlayerSettings() {
 internal fun AppViewModel.setPlayerVo(vo: String) {
     userPrefs.setVo(vo)
     _currentVo.value = vo
+    // 用户显式重选 vo：清掉本进程「已自动回退」记忆，允许再次尝试默认 mediacodec_embed 路径
+    mpvSingleton.resetVoFallbackForUser()
     val hwdec = if (vo == "mediacodec_embed") "mediacodec" else userPrefs.getHwdec()
     if (vo == "mediacodec_embed") {
         // 切换到 mediacodec_embed 时，hwdec 也应为 mediacodec

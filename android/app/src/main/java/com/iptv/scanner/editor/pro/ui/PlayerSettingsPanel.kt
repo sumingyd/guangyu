@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.iptv.scanner.editor.pro.player.PlayerType
 import com.iptv.scanner.editor.pro.ui.theme.tvFocusBorder
+import com.iptv.scanner.editor.pro.ui.theme.tvFocusLayoutScale
 
 /**
  * 播放器设置面板（全屏覆盖）。
@@ -159,17 +160,34 @@ private fun PlayerSettingsLeftColumn(viewModel: AppViewModel) {
     val currentHwdec by viewModel.currentHwdec.collectAsState()
     val actualHwdec by viewModel.actualHwdec.collectAsState()
     val hwdecBlacklisted by viewModel.hwdecBlacklisted.collectAsState()
+    val actualVo by viewModel.actualVo.collectAsState()
+    val voAutoFallback by viewModel.voAutoFallback.collectAsState()
+    val colorCompatMode by viewModel.colorCompatMode.collectAsState()
     val hardwareDecode by viewModel.hardwareDecode.collectAsState()
     val timeoutSwitch by viewModel.timeoutSwitchSource.collectAsState()
     val reconnectIdx by viewModel.reconnectIndex.collectAsState()
     val screenLocked by viewModel.screenLock.collectAsState()
+
+    // 内核选择行的焦点：纳入独立 focusGroup + 打开面板时把初始焦点放到当前内核 chip。
+    // 之前这一行只有 tvFocusBorder 画边框、没有焦点锚点，遥控器从上方菜单向下移动时
+    // 会跳过 EXO chip，用户看到的是「焦点对不上 EXO 模块」。
+    val mpvChipFocus = remember { FocusRequester() }
+    val exoChipFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        runCatching {
+            if (currentPlayerType == PlayerType.EXO) exoChipFocus.requestFocus()
+            else mpvChipFocus.requestFocus()
+        }
+    }
 
     SectionTitle("播放器内核")
     Spacer(modifier = Modifier.height(4.dp))
     SectionDesc("切换播放器内核。MPV 功能最完整，ExoPlayer 兼容性好。两者都支持硬解/软解切换")
     Spacer(modifier = Modifier.height(8.dp))
     FlowRow(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .focusGroup(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
@@ -177,14 +195,20 @@ private fun PlayerSettingsLeftColumn(viewModel: AppViewModel) {
             selected = currentPlayerType == PlayerType.MPV,
             onClick = { viewModel.switchPlayerType(PlayerType.MPV) },
             label = { Text("MPV（推荐）") },
-            modifier = Modifier.tvFocusBorder(),
+            modifier = Modifier
+                .tvFocusBorder()
+                .tvFocusLayoutScale()
+                .focusRequester(mpvChipFocus),
             border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.50f))
         )
         FilterChip(
             selected = currentPlayerType == PlayerType.EXO,
             onClick = { viewModel.switchPlayerType(PlayerType.EXO) },
             label = { Text("ExoPlayer") },
-            modifier = Modifier.tvFocusBorder(),
+            modifier = Modifier
+                .tvFocusBorder()
+                .tvFocusLayoutScale()
+                .focusRequester(exoChipFocus),
             border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.50f))
         )
     }
@@ -291,6 +315,14 @@ private fun PlayerSettingsLeftColumn(viewModel: AppViewModel) {
             else -> "未知 vo: $currentVo"
         }
         Text(text = voDesc, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp))
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = voActualText(actualVo, currentVo, voAutoFallback),
+            color = if (voAutoFallback) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(horizontal = 4.dp)
+        )
         Spacer(modifier = Modifier.height(20.dp))
 
         SectionTitle("硬件解码（HWDEC）")
@@ -363,6 +395,8 @@ private fun PlayerSettingsRightColumn(viewModel: AppViewModel) {
     val currentRtspTransport by viewModel.currentRtspTransport.collectAsState()
     val logLevel by viewModel.logLevel.collectAsState()
     val currentVo by viewModel.currentVo.collectAsState()
+    val actualVo by viewModel.actualVo.collectAsState()
+    val colorCompatMode by viewModel.colorCompatMode.collectAsState()
     val epgTz by viewModel.epgTimezoneOffset.collectAsState()
     val epgCache by viewModel.epgCacheSchedule.collectAsState()
     val groupMd by viewModel.groupMode.collectAsState()
@@ -435,6 +469,45 @@ private fun PlayerSettingsRightColumn(viewModel: AppViewModel) {
         HdrMode.PASSTHROUGH -> "HDR 直通：HDR 视频按 bt.2020/pq 输出。需要显示器支持 HDR，否则画面可能过暗或色彩异常"
     }
     Text(text = hdrDesc, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp))
+    Spacer(modifier = Modifier.height(20.dp))
+
+    SectionTitle("色彩兼容模式")
+    Spacer(modifier = Modifier.height(4.dp))
+    SectionDesc("个别设备出现 HDR 过曝/发灰/偏色时开启。默认关闭，不改变现有正常画面；仅对 gpu / gpu-next 生效")
+    Spacer(modifier = Modifier.height(8.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(
+            checked = colorCompatMode,
+            onCheckedChange = { viewModel.setColorCompatMode(it) },
+            modifier = Modifier.tvFocusBorder()
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = if (colorCompatMode) "已开启（clip 映射 + bt.709 + 关闭 HDR hint）"
+            else "已关闭（按 HDR 模式自动选择）",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp
+        )
+    }
+    Spacer(modifier = Modifier.height(6.dp))
+    // 颜色管线诊断：用户反馈过曝/发灰时直接看这行对号（不依赖信息弹窗里新增字段）
+    val colorDiag = remember(colorCompatMode, actualVo) {
+        runCatching {
+            val p = viewModel.mpv
+            val tm = p.getPropertyString("tone-mapping") ?: "-"
+            val levels = p.getPropertyString("video-output-levels") ?: "-"
+            val gamma = p.getPropertyString("video-params/gamma") ?: "-"
+            val range = p.getPropertyString("video-params/color-range") ?: "-"
+            val prim = p.getPropertyString("video-params/primaries") ?: "-"
+            "当前画面：传输=$gamma · 色域=$prim · 色彩范围=$range · 色调映射=$tm · 输出范围=$levels"
+        }.getOrDefault("当前画面：未开始播放")
+    }
+    Text(
+        text = colorDiag,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 11.sp,
+        modifier = Modifier.padding(horizontal = 4.dp)
+    )
     Spacer(modifier = Modifier.height(20.dp))
 
     SectionTitle("RTSP 传输协议")
@@ -894,6 +967,16 @@ private fun PlayerSettingsPanelAptv(viewModel: AppViewModel) {
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = if (useGlass) 0.82f else 1f))
         ) { body() }
+    }
+}
+
+/** 实际生效的 vo 展示文案 */
+private fun voActualText(actual: String, selected: String, autoFallback: Boolean): String {
+    val actualPart = if (actual.isBlank()) "实际生效：未知（尚未开始播放）" else "实际生效：$actual"
+    return when {
+        autoFallback -> "$actualPart · 默认 mediacodec_embed 起播失败，已自动回退到 GPU（重新选择即可重试）"
+        actual.isNotBlank() && actual != selected -> "$actualPart（设置值：$selected）"
+        else -> actualPart
     }
 }
 

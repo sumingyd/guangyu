@@ -119,6 +119,11 @@ class UserPrefs private constructor() {
 
     fun getVo(): String = playerSettingsStore.getVo()
     fun setVo(vo: String) = playerSettingsStore.setVo(vo)
+    /** 用户是否显式选择过 vo（未选择时为 ABI 默认值） */
+    fun hasExplicitVo(): Boolean = playerSettingsStore.hasExplicitVo()
+    /** 默认 mediacodec_embed 是否已自动回退到 gpu */
+    fun isVoAutoFallback(): Boolean = playerSettingsStore.isVoAutoFallback()
+    fun setVoAutoFallback(fallback: Boolean) = playerSettingsStore.setVoAutoFallback(fallback)
     fun getHwdec(): String = playerSettingsStore.getHwdec()
     fun setHwdec(hwdec: String) = playerSettingsStore.setHwdec(hwdec)
 
@@ -130,6 +135,10 @@ class UserPrefs private constructor() {
     fun setVoFallbackConfirmed(confirmed: Boolean) = playerSettingsStore.setVoFallbackConfirmed(confirmed)
     fun getHdrMode(): String = playerSettingsStore.getHdrMode()
     fun setHdrMode(mode: String) = playerSettingsStore.setHdrMode(mode)
+
+    /** 色彩兼容模式（默认关闭，不改变现有用户画面） */
+    fun isColorCompatMode(): Boolean = playerSettingsStore.isColorCompatMode()
+    fun setColorCompatMode(enabled: Boolean) = playerSettingsStore.setColorCompatMode(enabled)
     fun getRtspTransport(): String = playerSettingsStore.getRtspTransport()
     fun setRtspTransport(transport: String) = playerSettingsStore.setRtspTransport(transport)
     fun getExoSurfaceView(): Boolean = playerSettingsStore.getExoSurfaceView()

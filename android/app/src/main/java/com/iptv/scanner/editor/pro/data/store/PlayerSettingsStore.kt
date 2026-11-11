@@ -23,10 +23,33 @@ class PlayerSettingsStore(
     // -----------------------------------------------------------------
 
     /** 获取持久化的 video output，未持久化时按设备类型给默认值 */
-    fun getVo(): String = prefs.getString(KEY_VO, null)?.takeIf { it.isNotEmpty() } ?: defaultVo()
+    fun getVo(): String {
+        val saved = prefs.getString(KEY_VO, null)?.takeIf { it.isNotEmpty() }
+        if (saved != null) return saved
+        // 自动回退过：本次（以及后续启动）固定 gpu，直到用户在设置页重新选择
+        if (isVoAutoFallback()) return DEFAULT_VO_VALUE
+        val vo = defaultVo()
+        // 硬解黑名单/机型强制软解（hwdec=no）时 mediacodec_embed 没有解码器直渲，必须退回 gpu
+        if (vo == VO_MEDIACODEC_EMBED && getHwdec() == "no") return DEFAULT_VO_VALUE
+        return vo
+    }
 
     fun setVo(vo: String) {
-        prefs.edit().putString(KEY_VO, vo).apply()
+        // 用户显式选择即重置自动回退标记（回退只是默认值的兜底，不能覆盖用户手选）
+        prefs.edit().putString(KEY_VO, vo).putBoolean(KEY_VO_AUTO_FALLBACK, false).apply()
+    }
+
+    /** 用户是否在设置页/频道级设置里显式选择过 vo（未选择时走 ABI 默认值） */
+    fun hasExplicitVo(): Boolean = prefs.contains(KEY_VO)
+
+    /**
+     * mediacodec_embed 默认路径是否已因起播失败自动回退到 gpu。
+     * 回退后写盘，避免每次启动都重试同一条在部分设备上黑屏的渲染路径。
+     */
+    fun isVoAutoFallback(): Boolean = prefs.getBoolean(KEY_VO_AUTO_FALLBACK, false)
+
+    fun setVoAutoFallback(fallback: Boolean) {
+        prefs.edit().putBoolean(KEY_VO_AUTO_FALLBACK, fallback).apply()
     }
 
     /** 获取持久化的 hwdec 模式，未持久化时按设备类型给默认值 */
@@ -65,6 +88,21 @@ class PlayerSettingsStore(
 
     fun setHdrMode(mode: String) {
         prefs.edit().putString(KEY_HDR_MODE, mode).apply()
+    }
+
+    // -----------------------------------------------------------------
+    // 颜色管线兼容模式
+    // -----------------------------------------------------------------
+
+    /**
+     * 色彩兼容模式：强制保守的 SDR 输出参数（clip 色调映射、pt.709 目标色域、
+     * 关闭 HDR 动态峰值/hint），用于个别设备过曝/发灰时排障。
+     * 默认关闭 —— 不改变现有正常用户的画面。
+     */
+    fun isColorCompatMode(): Boolean = prefs.getBoolean(KEY_COLOR_COMPAT_MODE, false)
+
+    fun setColorCompatMode(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_COLOR_COMPAT_MODE, enabled).apply()
     }
 
     // -----------------------------------------------------------------
@@ -233,6 +271,7 @@ class PlayerSettingsStore(
             .remove(KEY_VO)
             .remove(KEY_HWDEC)
             .remove(KEY_VO_FALLBACK)
+            .remove(KEY_VO_AUTO_FALLBACK)
             .remove(KEY_PLAYER_TYPE)
             .remove(KEY_HDR_MODE)
             .remove(KEY_RTSP_TRANSPORT)
@@ -247,6 +286,12 @@ class PlayerSettingsStore(
     companion object {
         private const val KEY_VO = "player_vo"
         private const val KEY_VO_FALLBACK = "player_vo_fallback_confirmed"
+
+        /** 默认 vo（arm64 TV 的 mediacodec_embed）因起播失败已自动回退到 gpu */
+        private const val KEY_VO_AUTO_FALLBACK = "player_vo_auto_fallback"
+
+        /** 色彩兼容模式（默认关闭） */
+        private const val KEY_COLOR_COMPAT_MODE = "player_color_compat_mode"
 
         /**
          * hwdec 偏好键。internal 供启动早期的 NativeCrashLogger 直接读 SharedPreferences
@@ -282,6 +327,10 @@ class PlayerSettingsStore(
         private const val DEFAULT_VO_VALUE = "gpu"
         private const val DEFAULT_HWDEC_VALUE = "auto-copy"
 
+        /** arm64 电视/盒子默认零拷贝直渲路径（MediaCodec 直接写 Surface） */
+        private const val VO_MEDIACODEC_EMBED = "mediacodec_embed"
+        private const val HWDEC_MEDIACODEC = "mediacodec"
+
         /**
          * arm32（armeabi-v7a）TV 设备：MediaCodec 硬解码器运行中的 teardown
          * 存在 native 空指针崩溃（Sony BRAVIA VH21 实测，无论 mediacodec copy
@@ -302,7 +351,30 @@ class PlayerSettingsStore(
             android.os.Build.SUPPORTED_ABIS.none { it == "arm64-v8a" }
     }
 
-    private fun defaultVo(): String = DEFAULT_VO_VALUE
+    /**
+     * 是否为 arm64 电视/盒子。
+     *
+     * 这类设备默认走 vo=mediacodec_embed + hwdec=mediacodec（解码器直接写 Surface，
+     * 零拷贝、少一次 GPU 上传）。出错时由 MpvController 自动回退 gpu + auto-copy 一次。
+     * 手机/平板/车机（非 TV 模式）不放开，避免非电视设备走未验证路径；
+     * arm32 TV 也不放开（解码器 teardown SIGSEGV，见 TV_ARM32_HWDEC_VALUE）。
+     */
+    private fun isArm64Tv(): Boolean {
+        val ctx = appContext ?: return false
+        val uiMode = (ctx.getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager)
+            ?.currentModeType
+        if (uiMode != Configuration.UI_MODE_TYPE_TELEVISION) return false
+        return android.os.Build.SUPPORTED_ABIS.any { it == "arm64-v8a" }
+    }
 
-    private fun defaultHwdec(): String = if (isArm32Tv()) TV_ARM32_HWDEC_VALUE else DEFAULT_HWDEC_VALUE
+    private fun defaultVo(): String =
+        if (isArm64Tv()) VO_MEDIACODEC_EMBED else DEFAULT_VO_VALUE
+
+    private fun defaultHwdec(): String = when {
+        // arm32 TV：MediaCodec teardown SIGSEGV，只能软解
+        isArm32Tv() -> TV_ARM32_HWDEC_VALUE
+        // 默认 vo 是 mediacodec_embed 时，hwdec 必须配对 mediacodec（零拷贝直渲）
+        hasExplicitVo().not() && defaultVo() == VO_MEDIACODEC_EMBED -> HWDEC_MEDIACODEC
+        else -> DEFAULT_HWDEC_VALUE
+    }
 }

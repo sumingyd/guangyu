@@ -25,10 +25,12 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.draw.drawWithContent
+import kotlin.math.roundToInt
 
 /**
  * TV 端焦点高亮边框 Modifier。
@@ -79,6 +81,40 @@ fun Modifier.tvFocusBorder(cornerRadius: Int = 8, focusedScale: Float = 1.07f): 
                     style = Stroke(width = stroke)
                 )
             }
+        }
+}
+
+/**
+ * TV 端「真实布局尺寸变化」的焦点放大 Modifier。
+ *
+ * 与 [tvFocusBorder] 的纯 graphicsLayer 缩放不同：焦点时通过 layout 报告更大的
+ * 测量尺寸，让相邻元素/FlowRow 真正重排，保证 D-pad 焦点搜索边界与视觉一致
+ * （纯绘制缩放不改变布局边界，密集 chip 行里会出现「焦点框对不上目标」）。
+ *
+ * 用法：`.tvFocusLayoutScale()`，与 `.tvFocusBorder()` 叠加使用（后者负责描边）。
+ */
+fun Modifier.tvFocusLayoutScale(focusedScale: Float = 1.07f): Modifier = composed {
+    var isFocused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = if (isFocused) focusedScale else 1f,
+        animationSpec = tween(durationMillis = 160),
+        label = "tvFocusLayoutScale"
+    )
+    this
+        .onFocusChanged { isFocused = it.isFocused }
+        .layout { measurable, constraints ->
+            val placeable = measurable.measure(constraints)
+            val maxW = if (constraints.hasBoundedWidth) constraints.maxWidth else Int.MAX_VALUE
+            val maxH = if (constraints.hasBoundedHeight) constraints.maxHeight else Int.MAX_VALUE
+            val w = (placeable.width * scale).roundToInt().coerceIn(1, maxW.coerceAtLeast(1))
+            val h = (placeable.height * scale).roundToInt().coerceIn(1, maxH.coerceAtLeast(1))
+            layout(w, h) {
+                placeable.place((w - placeable.width) / 2, (h - placeable.height) / 2)
+            }
+        }
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
         }
 }
 

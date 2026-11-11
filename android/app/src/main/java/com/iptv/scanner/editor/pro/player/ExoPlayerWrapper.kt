@@ -17,6 +17,7 @@ import androidx.media3.exoplayer.mediacodec.MediaCodecUtil
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -51,6 +52,15 @@ class ExoPlayerWrapper(
         private const val TAG = "ExoPlayerWrapper"
         private const val USER_AGENT = "VLC/3.0.18Libmpv"
 
+        /** exo_tuning 偏好：上次播放的视频高度（决定 1080/4K 缓冲档） */
+        private const val KEY_LAST_VIDEO_HEIGHT = "last_video_height"
+
+        /** 4K 视为 >=1440p（含 2160p / 1440p 源），1080/720 走 1080 档 */
+        private const val FOUR_K_HEIGHT_THRESHOLD = 1440
+
+        /** 4K 首帧看门狗超时 */
+        private const val FIRST_FRAME_TIMEOUT_MS = 6_000L
+
         /**
          * 软解专用 MediaCodecSelector：优先软件编解码器，若无软解则回退硬解（避免黑屏）。
          */
@@ -58,6 +68,31 @@ class ExoPlayerWrapper(
             val all = MediaCodecUtil.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
             val software = all.filter { !it.hardwareAccelerated }
             if (software.isNotEmpty()) software else all
+        }
+
+        /**
+         * 缓冲档位：1080 档优先秒开；4K 档给更大的前向缓冲吸收码率抖动。
+         *
+         * - 1080：min 15s / max 45s，起播 1.2s，重缓冲 2.5s，回退缓冲 15s，目标 64MiB
+         * - 4K：  min 30s / max 90s，起播 2.5s，重缓冲 5.0s，回退缓冲 30s，目标 160MiB
+         *
+         * 之前全用 media3 默认值（50s/50s/2.5s/5s），直播起播慢且 4K 缓冲不足。
+         */
+        fun buildLoadControl(use4kTier: Boolean): DefaultLoadControl {
+            val builder = DefaultLoadControl.Builder().setPrioritizeTimeOverSizeThresholds(true)
+            return if (use4kTier) {
+                builder
+                    .setBufferDurationsMs(30_000, 90_000, 2_500, 5_000)
+                    .setBackBuffer(30_000, false)
+                    .setTargetBufferBytes(160 * 1024 * 1024)
+                    .build()
+            } else {
+                builder
+                    .setBufferDurationsMs(15_000, 45_000, 1_200, 2_500)
+                    .setBackBuffer(15_000, false)
+                    .setTargetBufferBytes(64 * 1024 * 1024)
+                    .build()
+            }
         }
     }
 
@@ -222,6 +257,43 @@ class ExoPlayerWrapper(
         } catch (_: Exception) {}
     }
 
+    // -----------------------------------------------------------------
+    // 内核调优状态（缓冲档位 / 4K 降级 / 首帧看门狗）
+    // -----------------------------------------------------------------
+
+    /** 上次已知视频高度：跨进程持久化，用于下次建播放器时选 1080/4K 缓冲档 */
+    private var lastVideoHeight: Int = 0
+
+    /** 当前播放器实际使用的缓冲档位（true=4K 档） */
+    private var loadControl4k = false
+
+    /** 已检测到需要切换档位，等下一次 playFile 时重建播放器（避免播放中打断） */
+    private var pendingTierRebuild: Boolean? = null
+
+    /** 最近一次视频编码（用于判断 4K HEVC 降级） */
+    private var lastVideoMime: String? = null
+
+    /** 4K/HEVC 硬解初始化失败后本会话固定软解（只降一次，避免反复重建） */
+    private var fourKSoftFallbackDone = false
+
+    /** 4K 首帧看门狗：SurfaceView 输出在部分设备上不吐首帧时请求切 TextureView */
+    private var firstFrameSeen = false
+    private var textureFallbackRequested = false
+    var onRequestTextureViewFallback: (() -> Unit)? = null
+
+    private val firstFrameWatchdogRunnable = Runnable {
+        if (!firstFrameSeen && _videoHeight.value >= 1440 && !textureFallbackRequested) {
+            textureFallbackRequested = true
+            Log.w(TAG, "4K first frame not rendered in 6s, requesting TextureView fallback")
+            diagLog("4K first frame timeout -> request TextureView")
+            onRequestTextureViewFallback?.invoke()
+        }
+    }
+
+    private val tuningPrefs by lazy {
+        context.getSharedPreferences("exo_tuning", Context.MODE_PRIVATE)
+    }
+
     private fun ensurePlayer() {
         if (player != null) return
         try {
@@ -246,6 +318,13 @@ class ExoPlayerWrapper(
             // DefaultRenderersFactory 扩展渲染器模式说明：
             // - OFF：不加载扩展渲染器（无 FFmpeg 扩展时等于默认行为）
             // - setEnableDecoderFallback(true)：允许解码器 fallback，提升兼容性
+            // 4K 档判定：用上一次播放到的高度（跨进程持久化）。首次启动未知时先按 1080 档，
+            // 检测到 4K 后在下一次换台（playFile）时重建播放器切到 4K 缓冲档，不打断当前播放。
+            if (lastVideoHeight == 0) {
+                lastVideoHeight = tuningPrefs.getInt(KEY_LAST_VIDEO_HEIGHT, 0)
+            }
+            loadControl4k = lastVideoHeight >= 1440
+
             val renderersFactory = CustomRenderersFactory(context)
                 .setEnableDecoderFallback(true)
                 .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
@@ -256,6 +335,10 @@ class ExoPlayerWrapper(
             player = ExoPlayer.Builder(context, renderersFactory)
                 .setMediaSourceFactory(mediaSourceFactory)
                 .setUseLazyPreparation(true)
+                // 1080 / 4K 分档缓冲（直播优先起播速度，4K 给更大余量）
+                .setLoadControl(buildLoadControl(loadControl4k))
+                // 跳过静音段：直播插播静音时保持音频时钟连续，减少音画漂移
+                .setSkipSilenceEnabled(true)
                 .setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(C.USAGE_MEDIA)
@@ -275,6 +358,12 @@ class ExoPlayerWrapper(
                                     _paused.value = !p.isPlaying
                                     _fileLoaded.value = true
                                     _duration.value = (p.duration.coerceAtLeast(0)) / 1000.0
+                                    // 4K 首帧看门狗：SurfaceView 在部分电视盒子上不吐首帧（黑屏但有声），
+                                    // 6s 未出画则请求上层切 TextureView（同一次进程只请求一次）
+                                    mainHandler.removeCallbacks(firstFrameWatchdogRunnable)
+                                    if (_videoHeight.value >= FOUR_K_HEIGHT_THRESHOLD && !textureFallbackRequested) {
+                                        mainHandler.postDelayed(firstFrameWatchdogRunnable, FIRST_FRAME_TIMEOUT_MS)
+                                    }
                                 }
                                 Media3Player.STATE_ENDED -> {
                                     _eofReached.value = true
@@ -335,6 +424,26 @@ class ExoPlayerWrapper(
                         override fun onPlayerError(error: PlaybackException) {
                             Log.e(TAG, "Player error: ${error.message}", error)
                             _fileLoaded.value = false
+                            mainHandler.removeCallbacks(firstFrameWatchdogRunnable)
+                            // 4K / HEVC 硬解初始化失败：降级到软解重建一次，不依赖 media3 默认 fallback
+                            val is4kOrHevc = lastVideoHeight >= FOUR_K_HEIGHT_THRESHOLD ||
+                                lastVideoMime?.contains("hevc", ignoreCase = true) == true
+                            if (hardwareDecodeEnabled && is4kOrHevc && !fourKSoftFallbackDone &&
+                                currentUrl.isNotEmpty()
+                            ) {
+                                fourKSoftFallbackDone = true
+                                hardwareDecodeEnabled = false
+                                Log.w(TAG, "4K/HEVC hardware decode failed (${error.errorCodeName}), " +
+                                    "falling back to software decoder once")
+                                diagLog("4K/HEVC hw decode failed -> software fallback")
+                                player?.release()
+                                player = null
+                                ensurePlayer()
+                                val url = currentUrl
+                                currentUrl = ""
+                                playFile(url)
+                                return
+                            }
                             // 降级重试：若当前为软解且出错，自动切回硬解重试
                             if (!hardwareDecodeEnabled && currentUrl.isNotEmpty()) {
                                 Log.w(TAG, "Soft decode failed, falling back to hardware decode")
@@ -352,9 +461,19 @@ class ExoPlayerWrapper(
                             _videoWidth.value = videoSize.width
                             _videoHeight.value = videoSize.height
                             Log.i(TAG, "onVideoSizeChanged: ${videoSize.width}x${videoSize.height}")
+                            // 记录高度：下一次 playFile 时按 1080/4K 档重建缓冲配置
+                            lastVideoHeight = videoSize.height
+                            tuningPrefs.edit().putInt(KEY_LAST_VIDEO_HEIGHT, videoSize.height).apply()
+                            val want4k = videoSize.height >= FOUR_K_HEIGHT_THRESHOLD
+                            if (want4k != loadControl4k) {
+                                pendingTierRebuild = want4k
+                                Log.i(TAG, "buffer tier change pending: 4k=$want4k (applied on next playFile)")
+                            }
                         }
 
                         override fun onRenderedFirstFrame() {
+                            firstFrameSeen = true
+                            mainHandler.removeCallbacks(firstFrameWatchdogRunnable)
                             Log.i(TAG, "VIDEO first frame rendered")
                         }
                     })
@@ -380,6 +499,7 @@ class ExoPlayerWrapper(
                         format: androidx.media3.common.Format,
                         decoderReuseEvaluation: androidx.media3.exoplayer.DecoderReuseEvaluation?
                     ) {
+                        lastVideoMime = format.sampleMimeType
                         Log.i(TAG, "VIDEO input format: ${format.sampleMimeType} ${format.width}x${format.height}"); diagLog("format: ${format.sampleMimeType} ${format.width}x${format.height}")
                     }
 
@@ -507,6 +627,18 @@ class ExoPlayerWrapper(
     }
 
     private fun playFileOnMainThread(url: String) {
+        // 检测到 1080/4K 档位变化：在换台这一刻重建播放器（不打断正在播放的流）
+        pendingTierRebuild?.let { want4k ->
+            pendingTierRebuild = null
+            if (want4k != loadControl4k) {
+                Log.i(TAG, "rebuilding player for buffer tier: 4k=$want4k")
+                try { player?.release() } catch (_: Throwable) {}
+                player = null
+                loadControl4k = want4k
+            }
+        }
+        firstFrameSeen = false
+        mainHandler.removeCallbacks(firstFrameWatchdogRunnable)
         ensurePlayer()
         val p = player ?: run {
             Log.e(TAG, "playFile: player is null")

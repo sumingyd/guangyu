@@ -89,8 +89,27 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     private val _hwdecBlacklisted = MutableStateFlow(false)
     val hwdecBlacklisted: StateFlow<Boolean> = _hwdecBlacklisted.asStateFlow()
 
+    /** mpv 实际生效的 vo（可能与用户偏好不同：默认 mediacodec_embed 起播失败会自动回退 gpu） */
+    private val _actualVo = MutableStateFlow("")
+    val actualVo: StateFlow<String> = _actualVo.asStateFlow()
+
+    /** 是否发生过 mediacodec_embed → gpu 的自动回退 */
+    private val _voAutoFallback = MutableStateFlow(false)
+    val voAutoFallback: StateFlow<Boolean> = _voAutoFallback.asStateFlow()
+
+    /** 自动回退回调（UI 线程）：参数为回退后的 vo，用于同步界面与提示 */
+    @Volatile
+    var onVoAutoFallback: ((String) -> Unit)? = null
+
+    /** 每个进程只做一次 mediacodec_embed 自动回退，避免黑屏判定抖动时反复切 vo */
+    @Volatile
+    private var voFallbackDone = false
+
     /** VO 健康检查（每个文件只做一次） */
     private var voHealthCheckRunnable: Runnable? = null
+
+    /** VO 弱判定（无视频轨/无渲染帧）延时任务 */
+    private var voWeakCheckRunnable: Runnable? = null
 
     /** 稳定硬解 N 分钟后解除崩溃黑名单 */
     private var hwdecGraceRunnable: Runnable? = null
@@ -183,6 +202,7 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
 
         try {
             _hwdecBlacklisted.value = UserPrefs.getInstance().isHwdecBlacklisted()
+            _voAutoFallback.value = UserPrefs.getInstance().isVoAutoFallback()
         } catch (e: Throwable) {
             Log.w(TAG, "attach: read hwdec blacklist failed: ${e.message}")
         }
@@ -294,8 +314,16 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
         postOnUiThread { voReloadSuppressed = false }
     }
 
+    /** 用户显式重新选择 vo：清掉本进程的「已自动回退」记忆，允许再次尝试默认渲染路径 */
+    fun resetVoFallbackForUser() {
+        voFallbackDone = false
+        _voAutoFallback.value = false
+    }
+
     fun setVoAndHwdec(vo: String, hwdec: String): String? {
         val hasFile = _fileLoaded.value
+        // 显式设置 vo（用户切换 / 重置）视为重新选择：允许再次尝试 mediacodec_embed
+        voFallbackDone = false
         // houdini 转译层（x86 模拟器）强制软解：硬解码器 teardown 会 SIGSEGV
         val effectiveHwdec = MPVView.sanitizeHwdec(hwdec)
         postOnUiThread {
@@ -310,6 +338,8 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 }
                 mpvView?.reattachSurfaceWithVo(vo)
                 _voCache = vo
+                _actualVo.value = vo
+                _voAutoFallback.value = try { UserPrefs.getInstance().isVoAutoFallback() } catch (_: Throwable) { false }
 
                 val path = MPVLib.getPropertyString("path")
                 // 保守处理换台时序：抑制标记，或已有新的 loadfile 在途时，
@@ -476,17 +506,26 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
             voHealthCheckRunnable = null
             try {
                 val videoFormat = MPVLib.getPropertyString("video-format") ?: ""
-                if (videoFormat.isEmpty()) {
-                    Log.i(TAG, "vo health check: no video track, skip")
-                    return@Runnable
-                }
                 val configured = try {
                     MPVLib.getPropertyBoolean("vo-configured")
                 } catch (_: Throwable) {
                     null
                 }
+                val currentVo = try { MPVLib.getPropertyString("vo") } catch (_: Throwable) { null }
+                if (!currentVo.isNullOrEmpty()) _actualVo.value = currentVo
                 if (configured == true) {
-                    Log.i(TAG, "vo health check: ok (video-format=$videoFormat)")
+                    Log.i(TAG, "vo health check: ok (vo=$currentVo, video-format=$videoFormat)")
+                    return@Runnable
+                }
+                // 默认 mediacodec_embed（arm64 TV）起播失败：自动回退 gpu + auto-copy 一次
+                if (configured == false && maybeFallbackFromMediacodecEmbed("vo-configured=false, video-format=$videoFormat")) {
+                    return@Runnable
+                }
+                if (videoFormat.isEmpty()) {
+                    // 无 video track 无法判断是「纯音频流」还是「VO 没起来」，
+                    // 延时再取一次帧计数（弱判定），只有确实一帧都没出且 vo 未配置才回退。
+                    Log.i(TAG, "vo health check: no video track yet, scheduling weak check")
+                    scheduleVoWeakFailureCheck()
                     return@Runnable
                 }
                 Log.w(TAG, "vo health check: video-format=$videoFormat but vo-configured=$configured, rebuilding VO once")
@@ -505,9 +544,82 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
         mpvView?.asView()?.postDelayed(runnable, VO_HEALTH_CHECK_DELAY_MS)
     }
 
+    /**
+     * VO 弱判定（起播 4s 后）：无 video track 或一帧都没渲染，且 vo-configured 不为真时，
+     * 对默认 mediacodec_embed 路径执行一次自动回退。手选 vo / 已回退过的不受影响。
+     */
+    private fun scheduleVoWeakFailureCheck() {
+        voWeakCheckRunnable?.let { mpvView?.asView()?.removeCallbacks(it) }
+        val runnable = Runnable {
+            voWeakCheckRunnable = null
+            try {
+                val configured = try { MPVLib.getPropertyBoolean("vo-configured") } catch (_: Throwable) { null }
+                if (configured == true) return@Runnable
+                val videoFormat = MPVLib.getPropertyString("video-format") ?: ""
+                val frames = try { MPVLib.getPropertyInt("estimated-frame-number") ?: 0 } catch (_: Throwable) { 0 }
+                if (videoFormat.isEmpty() || frames <= 0) {
+                    Log.w(TAG, "vo weak check failed: video-format='$videoFormat', frames=$frames, vo-configured=$configured")
+                    maybeFallbackFromMediacodecEmbed(
+                        "no frames after ${(VO_HEALTH_CHECK_DELAY_MS + VO_WEAK_CHECK_DELAY_MS) / 1000}s " +
+                            "(video-format='$videoFormat', frames=$frames, vo-configured=$configured)"
+                    )
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "vo weak check failed: ${e.message}")
+            }
+        }
+        voWeakCheckRunnable = runnable
+        mpvView?.asView()?.postDelayed(runnable, VO_WEAK_CHECK_DELAY_MS)
+    }
+
+    /**
+     * 默认 vo=mediacodec_embed 起播失败时自动回退到 gpu + auto-copy，并写盘记住。
+     *
+     * 只对「用户没有显式选过 vo」的 ABI 默认值生效：手选的 vo 永不被自动回退覆盖。
+     * 每个进程只回退一次，避免在坏流上反复切 vo 抖动。
+     *
+     * @return true 表示本次已执行回退
+     */
+    private fun maybeFallbackFromMediacodecEmbed(reason: String): Boolean {
+        if (_voCache != "mediacodec_embed") return false
+        if (voFallbackDone) return false
+        val prefs = try { UserPrefs.getInstance() } catch (_: Throwable) { return false }
+        if (prefs.hasExplicitVo()) {
+            Log.i(TAG, "vo auto-fallback skipped: user explicitly selected vo=${prefs.getVo()}")
+            return false
+        }
+        voFallbackDone = true
+        prefs.setVoAutoFallback(true)
+        _voAutoFallback.value = true
+        // 回退到 gpu 后 hwdec=mediacodec（直渲专用）不再适用，按设备默认重新取
+        val fallbackHwdec = try { prefs.getHwdec() } catch (_: Throwable) { "auto-copy" }
+            .let { if (it == "mediacodec") "auto-copy" else it }
+        _voCache = "gpu"
+        _hwdecCache = fallbackHwdec
+        _actualVo.value = "gpu"
+        Log.w(TAG, "vo auto-fallback: mediacodec_embed -> gpu (hwdec=$fallbackHwdec), reason=$reason")
+        suppressFileError()
+        postOnUiThread {
+            try {
+                MPVLib.setPropertyString("hwdec", fallbackHwdec)
+                mpvView?.reattachSurfaceWithVo("gpu")
+                val path = try { MPVLib.getPropertyString("path") } catch (_: Throwable) { null }
+                if (!path.isNullOrEmpty()) mpvView?.playFile(path)
+                Log.i(TAG, "vo auto-fallback applied: vo=gpu, hwdec=$fallbackHwdec")
+            } catch (e: Throwable) {
+                Log.e(TAG, "vo auto-fallback apply failed", e)
+            }
+            onVoAutoFallback?.invoke("gpu")
+        }
+        clearSuppressFileError(1500)
+        return true
+    }
+
     private fun cancelVoHealthCheck() {
         voHealthCheckRunnable?.let { mpvView?.asView()?.removeCallbacks(it) }
         voHealthCheckRunnable = null
+        voWeakCheckRunnable?.let { mpvView?.asView()?.removeCallbacks(it) }
+        voWeakCheckRunnable = null
     }
 
     /**
@@ -792,6 +904,11 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 "videoPrimaries" to safeGet("video-params/primaries"),
                 "videoGamma" to safeGet("video-params/gamma"),
                 "videoColorRange" to safeGet("video-params/color-range"),
+                // 颜色管线诊断：当前色调映射算法 / 输出范围 / 是否发生色调映射，
+                // 用户反馈「过曝/发灰」时对号用（信息面板可只读该字段，无需改播放侧）
+                "videoToneMapping" to safeGet("tone-mapping"),
+                "videoOutputLevels" to safeGet("video-output-levels"),
+                "videoHdrComputePeak" to safeGet("hdr-compute-peak"),
                 // 扩展信息：音频细节、像素格式、实际渲染性能、流元数据
                 "audioSampleRate" to safeGet("audio-params/samplerate"),
                 "audioChannels" to safeGet("audio-params/channel-layout"),
@@ -927,6 +1044,14 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 } catch (_: Throwable) {
                 }
 
+                // 实际生效的 vo（默认 mediacodec_embed 起播失败会自动回退 gpu，设置页以此为准）
+                try {
+                    val voNow = MPVLib.getPropertyString("vo") ?: ""
+                    if (voNow.isNotEmpty()) _actualVo.value = voNow
+                    Log.i(TAG, "vo-current=$voNow")
+                } catch (_: Throwable) {
+                }
+
                 scheduleVoHealthCheck()
                 scheduleHwdecGraceClear()
 
@@ -1041,6 +1166,9 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
 
         /** FILE_LOADED 后多久做一次 VO 健康检查 */
         private const val VO_HEALTH_CHECK_DELAY_MS = 1500L
+
+        /** VO 弱判定（无视频轨/无帧）在健康检查之后再等多久 */
+        private const val VO_WEAK_CHECK_DELAY_MS = 2500L
 
         /** 硬解稳定运行多久后解除崩溃黑名单 */
         private const val HWDEC_GRACE_MS = 180_000L
