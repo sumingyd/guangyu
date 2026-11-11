@@ -5,4 +5,5 @@
     android:layout_height="match_parent"
     app:surface_type="surface_view"
     app:use_controller="false"
-    app:show_buffering="when_playing" />
+    app:show_buffering="when_playing"
+    app:keep_content_on_player_reset="false" />

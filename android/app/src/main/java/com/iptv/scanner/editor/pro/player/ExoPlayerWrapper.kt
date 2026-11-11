@@ -436,6 +436,7 @@ class ExoPlayerWrapper(
                                 Log.w(TAG, "4K/HEVC hardware decode failed (${error.errorCodeName}), " +
                                     "falling back to software decoder once")
                                 diagLog("4K/HEVC hw decode failed -> software fallback")
+                                playerView?.player = null
                                 player?.release()
                                 player = null
                                 ensurePlayer()
@@ -448,6 +449,7 @@ class ExoPlayerWrapper(
                             if (!hardwareDecodeEnabled && currentUrl.isNotEmpty()) {
                                 Log.w(TAG, "Soft decode failed, falling back to hardware decode")
                                 hardwareDecodeEnabled = true
+                                playerView?.player = null
                                 player?.release()
                                 player = null
                                 ensurePlayer()
@@ -597,6 +599,13 @@ class ExoPlayerWrapper(
                 })
                 }
             Log.i(TAG, "ExoPlayer initialized, hwdec=$hardwareDecodeEnabled")
+            // 播放器会因缓冲档位重建、解码降级等原因被 release 后重建。重建后必须把新实例
+            // 重新绑回 PlayerView，否则 PlayerView 仍指向已 release 的旧实例：
+            // 旧画面停在 Surface 上不动，新实例只有声音、没有视频输出（切台后画面停在旧频道）。
+            if (playerView?.player !== player) {
+                Log.i(TAG, "ensurePlayer: bind PlayerView to new player instance")
+                playerView?.player = player
+            }
             // 确保初始音量正确设置
             val initVol = if (_muted.value) 0f else (_volume.value / 100f).coerceIn(0f, 1f)
             player?.volume = initVol
@@ -632,6 +641,9 @@ class ExoPlayerWrapper(
             pendingTierRebuild = null
             if (want4k != loadControl4k) {
                 Log.i(TAG, "rebuilding player for buffer tier: 4k=$want4k")
+                // 先解除 View 对旧实例的引用，避免它继续持有已 release 的 player；
+                // 新实例在 ensurePlayer() 中重新绑定。
+                playerView?.player = null
                 try { player?.release() } catch (_: Throwable) {}
                 player = null
                 loadControl4k = want4k
@@ -643,6 +655,11 @@ class ExoPlayerWrapper(
         val p = player ?: run {
             Log.e(TAG, "playFile: player is null")
             return
+        }
+        // 兜底：任何路径重建过 player 后，都保证 View 绑定的是当前实例
+        if (playerView?.player !== p) {
+            Log.i(TAG, "playFile: rebind PlayerView to current player")
+            playerView?.player = p
         }
         try {
             Log.i(TAG, "playFile: $url"); diagLog("playFile: $url")
@@ -944,6 +961,7 @@ class ExoPlayerWrapper(
             val currentUrl = this.currentUrl
             if (currentUrl.isNotEmpty()) {
                 val currentPosition = p.currentPosition
+                playerView?.player = null
                 p.release()
                 player = null
                 ensurePlayer()

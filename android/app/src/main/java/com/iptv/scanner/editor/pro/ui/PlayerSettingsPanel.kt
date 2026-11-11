@@ -497,9 +497,18 @@ private fun PlayerSettingsRightColumn(viewModel: AppViewModel) {
             val tm = p.getPropertyString("tone-mapping") ?: "-"
             val levels = p.getPropertyString("video-output-levels") ?: "-"
             val gamma = p.getPropertyString("video-params/gamma") ?: "-"
-            val range = p.getPropertyString("video-params/color-range") ?: "-"
+            // mpv 的源范围属性是 colorlevels；color-range 不是标准子属性，
+            // 旧版本/旧构建若只认旧键，保留兜底避免诊断行整行失效
+            val range = p.getPropertyString("video-params/colorlevels")
+                ?: p.getPropertyString("video-params/color-range")
+                ?: "-"
             val prim = p.getPropertyString("video-params/primaries") ?: "-"
-            "当前画面：传输=$gamma · 色域=$prim · 色彩范围=$range · 色调映射=$tm · 输出范围=$levels"
+            val vo = p.getPropertyString("vo") ?: "-"
+            val hwdec = p.getPropertyString("hwdec-current") ?: "-"
+            val targetPrim = p.getPropertyString("target-prim") ?: "-"
+            val targetTrc = p.getPropertyString("target-trc") ?: "-"
+            "当前画面：vo=$vo · 解码=$hwdec · 传输=$gamma · 色域=$prim · 色彩范围=$range · " +
+                "色调映射=$tm · 输出范围=$levels · 目标原色=$targetPrim · 目标传输=$targetTrc"
         }.getOrDefault("当前画面：未开始播放")
     }
     Text(
