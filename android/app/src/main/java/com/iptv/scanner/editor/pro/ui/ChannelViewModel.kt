@@ -190,7 +190,10 @@ internal fun AppViewModel.playChannelDebounced(idx: Int) {
     val channel = _channels.value.getOrNull(idx) ?: return
     _currentIdx.value = idx
     _channelDisplayInfo.value = ChannelDisplayInfo(
-        name = channel.name, logo = channel.logo, group = channel.group, idx = idx,
+        // 显示名带分辨率后缀：同名多路流在 OSD/控制栏/分屏标题等其他展示位
+        // 也要能区分，否则只有频道列表加了后缀，其它地方仍是两个一样的名字
+        name = channelDisplayName(channel, duplicateChannelNames(_channels.value)),
+        logo = channel.logo, group = channel.group, idx = idx,
         isLocal = channel.source.isEmpty() || ProgressHelper.isLocalFile(channel.url)
     )
     if (uiMode.value.isTV) {
@@ -694,6 +697,10 @@ internal fun AppViewModel.fetchEpgForCurrent() {
         return
     }
     _epgLoading.value = true
+    // 缓存未命中时先把节目区清空：新频道的节目要等桥接返回，期间若保留上一个
+    // 频道的 _currentEpg，EPG 未匹配的台会长时间显示别的频道的节目。
+    _currentEpg.value = emptyList()
+    _currentEpgMeta.value = null
     val baseName = channel.name
         .removeSuffix("-4K").removeSuffix("-HDR").removeSuffix("-8K")
         .removeSuffix(" 4K").removeSuffix(" HDR").removeSuffix(" 8K")

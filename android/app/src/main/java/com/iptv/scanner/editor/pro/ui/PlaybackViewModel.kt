@@ -534,8 +534,23 @@ internal fun AppViewModel.playChannel(idx: Int, silent: Boolean = false) {
     Log.i(AppViewModel.TAG, "playChannel: ${channel.name} (${channel.url})")
 
     val oldIdx = _currentIdx.value
+    if (oldIdx != idx) {
+        // 切台瞬间把节目区切到"查询中/暂无节目"的中间态：新频道的节目要等 loadfile
+        // 完成后 fetchEpgForCurrent 才取，期间若保留上一个频道的 _currentEpg，
+        // EPG 未匹配的台会一直显示别人的节目。缓存命中则直接填充，避免多闪一次空白。
+        val cachedPrograms = epgCache[idx]
+        _currentEpg.value = cachedPrograms?.let { trimEpgNearNow(it) } ?: emptyList()
+        _currentEpgMeta.value = if (cachedPrograms != null) {
+            epgMetaCache[idx] ?: com.iptv.scanner.editor.pro.data.EpgMatchMeta()
+        } else {
+            null
+        }
+        _epgLoading.value = cachedPrograms == null
+    }
     _channelDisplayInfo.value = ChannelDisplayInfo(
-        name = channel.name, logo = channel.logo, group = channel.group, idx = idx,
+        // 与频道列表同口径：同名多路流补分辨率后缀，OSD/控制栏/分屏标题不再显示同一个名字
+        name = channelDisplayName(channel, duplicateChannelNames(_channels.value)),
+        logo = channel.logo, group = channel.group, idx = idx,
         isLocal = channel.source.isEmpty() || ProgressHelper.isLocalFile(channel.url)
     )
     _currentIdx.value = idx
