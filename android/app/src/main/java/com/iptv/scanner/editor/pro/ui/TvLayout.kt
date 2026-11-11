@@ -21,8 +21,10 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -76,6 +78,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.CompositionLocalProvider
 import coil.compose.AsyncImage
+import com.iptv.scanner.editor.pro.MainActivityCompose
 import com.iptv.scanner.editor.pro.data.IptvChannel
 import com.iptv.scanner.editor.pro.data.IptvEpgProgram
 import com.iptv.scanner.editor.pro.player.PlayMode
@@ -229,20 +232,28 @@ fun TvPlayerLayout(
     val stylePickerOpen by viewModel.stylePickerOpen.collectAsState()
     DisposableEffect(homeOverlay) {
         val activity = context as? Activity
-        val window = activity?.window
-        val controller = window?.let {
-            androidx.core.view.WindowCompat.getInsetsController(it, it.decorView)
+        val main = activity as? MainActivityCompose
+        val applyBars: (Boolean) -> Unit = { visible ->
+            if (main != null) {
+                // 统一收口到 Activity：退出 PiP / 回前台时由它按最近一次请求重放，
+                // 避免这里只在 homeOverlay 变化时执行、状态栏被系统重新显示后回不来
+                main.applySystemBarsVisible(visible)
+            } else {
+                val window = activity?.window
+                val controller = window?.let {
+                    androidx.core.view.WindowCompat.getInsetsController(it, it.decorView)
+                }
+                controller?.systemBarsBehavior =
+                    androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                if (visible) {
+                    controller?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+                } else {
+                    controller?.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+                }
+            }
         }
-        controller?.systemBarsBehavior =
-            androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        if (homeOverlay) {
-            controller?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
-        } else {
-            controller?.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
-        }
-        onDispose {
-            controller?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
-        }
+        applyBars(homeOverlay)
+        onDispose { applyBars(true) }
     }
 
     // DPI自适应缩放：以TV横屏720dp高度为基准，手机横屏高度不足时缩小UI。
@@ -295,7 +306,14 @@ fun TvPlayerLayout(
             val isAndroid12Plus = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S
             // 底栏与侧边栏互斥显示（showOverlays && !sidebarVisible），无需预留底栏高度，
             // 侧边栏直接贴到屏幕底部，避免底部空出一大块
-            Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(0.82f).padding(start = 16.dp, top = 10.dp, bottom = 10.dp)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(0.82f)
+                    // 状态栏万一被系统唤出（滑入/退出 PiP 瞬间），顶部按钮随之下移，不被遮挡
+                    .statusBarsPadding()
+                    .padding(start = 16.dp, top = 10.dp, bottom = 10.dp)
+            ) {
                 TvUnifiedPanel(viewModel = viewModel)
             }
         }
@@ -304,6 +322,8 @@ fun TvPlayerLayout(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .width(820.dp)
+                // 导航栏/手势条出现时底栏整体上移，不被系统栏覆盖
+                .navigationBarsPadding()
                 .padding(vertical = 8.dp)
         ) {
             AnimatedVisibility(

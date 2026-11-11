@@ -461,9 +461,44 @@ class MainActivityCompose : ComponentActivity() {
         }
     }
 
+    /** Compose 侧最近一次请求的系统栏可见性，供退出 PiP / 回到前台时重放 */
+    private var systemBarsRequestedVisible = true
+
+    /**
+     * 统一收口系统栏：edge-to-edge 内容延伸 + 状态栏/导航栏显隐。
+     * 全屏播放页传 false，首页/分屏传 true。
+     * 切后台、退出 PiP、窗口重新获得焦点后系统会重置系统栏，由 [reapplySystemBars] 重放。
+     */
+    fun applySystemBarsVisible(visible: Boolean) {
+        systemBarsRequestedVisible = visible
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        val controller = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+        controller.systemBarsBehavior =
+            androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (visible) {
+            controller.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    /** 按最近一次请求重新下发系统栏状态；PiP 小窗里保持系统栏可见，不重放 */
+    private fun reapplySystemBars() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode) return
+        applySystemBarsVisible(systemBarsRequestedVisible)
+    }
+
     override fun onResume() {
         super.onResume()
         viewModel.noteAppForeground(true)
+        // 退出 PiP / 回到前台时系统栏会被系统重新显示，按上次请求重放（全屏页隐藏）
+        reapplySystemBars()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // 部分 ROM 在窗口重获焦点时唤起系统栏，这里补一次
+        if (hasFocus) reapplySystemBars()
     }
 
     override fun onPause() {
@@ -1026,8 +1061,81 @@ class MainActivityCompose : ComponentActivity() {
         intent.action = null
     }
 
+    /** 画中画下被再次拉起：已请求退出 PiP，等 onResume / post 兜底执行一次 */
+    private var pipExitRequested = false
+    /** 退出请求已发出，等 PiP 回调清除，避免与 onNewIntent 重复拉起 */
+    private var pipExitInFlight = false
+    /** 主动退出 PiP 后的抑制截止时间（uptimeMillis），期间不再自动进入小窗 */
+    private var suppressAutoPipUntil = 0L
+
+    /**
+     * 退出画中画并把任务切回全屏。
+     * 系统没有公开的"退出 PiP"接口，用 singleTask 复用实例再次拉起本 Activity，
+     * 任务回前台后系统会自动收到 PiP 退出回调；界面不重建、播放不重载。
+     */
+    private fun exitPipToFullscreen() {
+        if (pipExitInFlight) return
+        pipExitInFlight = true
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (suppressAutoPipUntil <= now) {
+            // 退出动作本身会被系统当成一次"用户离开"，这里短暂抑制自动重入，
+            // 否则会 Exited PiP → Entered PiP 反复抖动（已有窗口不延长）
+            suppressAutoPipUntil = now + 4000L
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                // autoEnter 也必须临时关掉：否则系统在退出瞬间就把任务拉回小窗
+                setPictureInPictureParams(
+                    PictureInPictureParams.Builder()
+                        .setAutoEnterEnabled(false)
+                        .setSeamlessResizeEnabled(true)
+                        .build()
+                )
+            }
+            // 给系统一帧时间应用 autoEnter=false，再拉起全屏，避免参数还没生效就重入小窗
+            window.decorView.postDelayed({
+                try {
+                    // 用 Launcher 启动应用的等价 intent（MAIN/LAUNCHER），
+                    // 普通 component intent 在 pinned 任务里会被当成"仍开在小窗"
+                    startActivity(
+                        android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
+                            addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+                            setClassName(packageName, MainActivityCompose::class.java.name)
+                            addFlags(
+                                android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                                    or android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                            )
+                        }
+                    )
+                    Log.i(TAG, "PiP exit requested: bringing task to fullscreen")
+                } catch (e: Exception) {
+                    pipExitInFlight = false
+                    Log.w(TAG, "PiP exit failed: ${e.message}")
+                }
+            }, 150L)
+        } catch (e: Exception) {
+            pipExitInFlight = false
+            Log.w(TAG, "PiP exit failed: ${e.message}")
+        }
+    }
+
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
+        // singleTask：重复点图标只投递到这里，不会再堆出新实例。
+        // 若实例仍在小窗里，等系统先尝试展开；600ms 后还在小窗才主动拉起全屏兜底
+        // （直接 startActivity 在个别车机 ROM 上会被当成异常行为强杀进程）。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
+            && isInPictureInPictureMode && !pipExitInFlight
+        ) {
+            suppressAutoPipUntil = android.os.SystemClock.elapsedRealtime() + 4000L
+            pipExitRequested = true
+            window.decorView.postDelayed({
+                if (pipExitRequested) {
+                    pipExitRequested = false
+                    if (isInPictureInPictureMode) exitPipToFullscreen()
+                }
+            }, 300L)
+        }
         handleIntent(intent)
     }
 
@@ -1037,7 +1145,9 @@ class MainActivityCompose : ComponentActivity() {
         mpv.getVideoAspectRatio()?.let { ratio -> builder.setAspectRatio(ratio) }
         mpv.getVideoBoundsOnScreen()?.let { rect -> builder.setSourceRectHint(rect) }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            builder.setAutoEnterEnabled(true)
+            // 不用 autoEnter：系统在退出小窗的瞬间会判定"用户离开"并把任务又拉回小窗，
+            // 表现为点图标回不到全屏（车机上还会反复 Exited/Entered）。进小窗统一走 onUserLeaveHint。
+            builder.setAutoEnterEnabled(false)
             builder.setSeamlessResizeEnabled(true)
         }
         return builder.build()
@@ -1045,6 +1155,8 @@ class MainActivityCompose : ComponentActivity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
+        // 主动退出 PiP 回到全屏时会触发一次"用户离开"，此时不能再自动入小窗
+        if (android.os.SystemClock.elapsedRealtime() < suppressAutoPipUntil) return
         val mpv = MpvController.getInstance()
         // 仅在播放中（fileLoaded 且 !paused）才自动进入 PiP
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
@@ -1073,7 +1185,11 @@ class MainActivityCompose : ComponentActivity() {
             Log.i(TAG, "Entered PiP: panels closed, controls hidden")
         } else {
             // 退出 PiP 时不要重载视频，只是恢复控制层
+            pipExitRequested = false
+            pipExitInFlight = false
             viewModel.showControls()
+            // 退出小窗后系统会重新显示状态栏，这里按当前页面重放（全屏播放页继续隐藏）
+            reapplySystemBars()
             Log.i(TAG, "Exited PiP: controls shown")
         }
     }
