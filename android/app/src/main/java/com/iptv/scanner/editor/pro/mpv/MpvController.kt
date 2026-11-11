@@ -1,7 +1,10 @@
 package com.iptv.scanner.editor.pro.mpv
 
+import android.content.Context
 import android.os.Looper
 import android.util.Log
+import android.view.ViewGroup
+import android.widget.FrameLayout
 import `is`.xyz.mpv.MPVLib
 import com.iptv.scanner.editor.pro.NativeCrashLogger
 import com.iptv.scanner.editor.pro.data.UserPrefs
@@ -352,10 +355,20 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 mpvView?.asView()?.context?.let {
                     NativeCrashLogger.setActiveDecode(it, vo, effectiveHwdec)
                 }
-                mpvView?.reattachSurfaceWithVo(vo)
+                // 运行中切换 vo 必须重建 MPVView：reattachSurfaceWithVo 在 arm32 电视上
+                // 切到 mediacodec_embed 会在 video-reconfig 阶段让进程静默退出。
+                val rebuilt = rebuildWithVo(vo, effectiveHwdec)
+                if (!rebuilt) mpvView?.reattachSurfaceWithVo(vo)
                 _voCache = vo
                 _actualVo.value = vo
                 _voAutoFallback.value = try { UserPrefs.getInstance().isVoAutoFallback() } catch (_: Throwable) { false }
+
+                if (rebuilt) {
+                    // 重建时 MPVView.destroy() 已保存 path，新实例在 surfaceCreated 后自动恢复播放
+                    Log.i(TAG, "setVoAndHwdec: rebuilt player with vo=$vo, hwdec=$effectiveHwdec")
+                    Log.i(TAG, "diagnostic: ${mpvView?.getDiagnosticInfo()}")
+                    return@postOnUiThread
+                }
 
                 val path = MPVLib.getPropertyString("path")
                 // 保守处理换台时序：抑制标记，或已有新的 loadfile 在途时，
@@ -663,10 +676,13 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
         postOnUiThread {
             try {
                 MPVLib.setPropertyString("hwdec", fallbackHwdec)
-                mpvView?.reattachSurfaceWithVo("gpu")
-                val path = try { MPVLib.getPropertyString("path") } catch (_: Throwable) { null }
-                if (!path.isNullOrEmpty()) mpvView?.playFile(path)
-                Log.i(TAG, "vo auto-fallback applied: vo=gpu, hwdec=$fallbackHwdec")
+                val rebuilt = rebuildWithVo("gpu", fallbackHwdec)
+                if (!rebuilt) {
+                    mpvView?.reattachSurfaceWithVo("gpu")
+                    val path = try { MPVLib.getPropertyString("path") } catch (_: Throwable) { null }
+                    if (!path.isNullOrEmpty()) mpvView?.playFile(path)
+                }
+                Log.i(TAG, "vo auto-fallback applied: vo=gpu, hwdec=$fallbackHwdec, rebuilt=$rebuilt")
             } catch (e: Throwable) {
                 Log.e(TAG, "vo auto-fallback apply failed", e)
             }
@@ -718,15 +734,68 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 MPVLib.setPropertyString("hwdec", hwdec)
                 _hwdecCache = hwdec
             }
-            if (_voCache != vo) {
+            if (_voCache != vo || mpvView == null) {
+                mpvView?.asView()?.context?.let { NativeCrashLogger.setActiveDecode(it, vo, hwdec) }
+                val rebuilt = rebuildWithVo(vo, hwdec)
+                if (!rebuilt) mpvView?.reattachSurfaceWithVo(vo)
                 _voCache = vo
                 _actualVo.value = vo
-                mpvView?.asView()?.context?.let { NativeCrashLogger.setActiveDecode(it, vo, hwdec) }
-                mpvView?.reattachSurfaceWithVo(vo)
+                if (rebuilt) {
+                    Log.i(TAG, "applyVoSwitch: rebuilt player with vo=$vo, hwdec=$hwdec")
+                    return
+                }
             }
             Log.i(TAG, "applyVoSwitch: vo=$vo, hwdec=$hwdec")
         } catch (e: Throwable) {
             Log.w(TAG, "applyVoSwitch failed: ${e.message}")
+        }
+    }
+
+    /**
+     * 运行中切换渲染路径：销毁当前 MPVView，按新 vo/hwdec 重建并恢复播放。
+     *
+     * 不能再用 reattachSurfaceWithVo：在 Sony/MTK 的 arm32 电视上，运行中把 vo 切到
+     * mediacodec_embed，mpv 会在 video-reconfig 阶段静默退出（进程 exit(1)，无 Java
+     * 异常、无 tombstone）。重建走的是启动时同一套初始化流程（vo 在 surfaceCreated
+     * 里首次建立），绕开运行中重建 VO 模块这条失败路径。
+     *
+     * @return true=已完成重建（调用方不要再自己 reattach / 重载 URL）
+     */
+    private fun rebuildWithVo(newVo: String, newHwdec: String): Boolean {
+        val old = mpvView ?: return false
+        val oldView = old.asView()
+        val parent = oldView.parent as? ViewGroup ?: return false
+        val ctx: Context = oldView.context
+        val index = parent.indexOfChild(oldView)
+        return try {
+            Log.i(TAG, "rebuildWithVo: vo=$newVo, hwdec=$newHwdec")
+            // 先移除旧 View（触发 surfaceDestroyed → detach），再销毁实例
+            parent.removeView(oldView)
+            old.destroy()
+            val newView = MPVView(ctx)
+            newView.initialize(
+                ctx.getDir("mpv_config", Context.MODE_PRIVATE).absolutePath,
+                ctx.cacheDir.absolutePath,
+                newVo,
+                newHwdec
+            )
+            attach(newView)
+            parent.addView(
+                newView.asView(),
+                index,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+            )
+            _voCache = newVo
+            _hwdecCache = MPVView.sanitizeHwdec(newHwdec, newVo)
+            _actualVo.value = newVo
+            Log.i(TAG, "rebuildWithVo: done, vo=$newVo, hwdec=$newHwdec")
+            true
+        } catch (e: Throwable) {
+            Log.e(TAG, "rebuildWithVo failed, fallback to reattach", e)
+            false
         }
     }
 
