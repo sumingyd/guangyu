@@ -337,17 +337,17 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     }
 
     fun setVoAndHwdec(vo: String, hwdec: String): String? {
-        // arm32 电视/盒子：运行中把 vo 切到 mediacodec_embed 会让 mpv 在 video-reconfig
-        // 阶段结束进程（exit(1)，无 Java 异常）。这里只落盘选择，重启播放器后以 init
-        // option 形式建立直写 Surface（该路径可用）。
-        if (vo == "mediacodec_embed" && _actualVo.value != "mediacodec_embed") {
+        // arm32 电视/盒子：运行中切 vo（任一方向）都会在 video-reconfig 阶段结束进程
+        // （exit(1)，无 Java 异常；实测 embed→gpu 也会崩）。这里只落盘选择，重启播放器
+        // 后以 init option 形式生效。
+        if (_actualVo.value != vo) {
             try {
                 val p = UserPrefs.getInstance()
                 if (p.isTvEmbedRequired()) {
                     p.setVo(vo)
-                    p.setHwdec("mediacodec")
+                    p.setHwdec(hwdec)
                     p.setVoFallbackConfirmed(true)
-                    Log.i(TAG, "setVoAndHwdec: arm32 TV 运行中不切 embed，已落盘，重启播放器后生效")
+                    Log.i(TAG, "setVoAndHwdec: arm32 TV 运行中不切 vo（$vo），已落盘，重启播放器后生效")
                     return null
                 }
             } catch (_: Throwable) {
@@ -694,6 +694,17 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
         postOnUiThread {
             try {
                 MPVLib.setPropertyString("hwdec", fallbackHwdec)
+                // arm32 电视运行中切 vo 必崩：只落盘，下次启动以 gpu + 软解 起播
+                if (isTvEmbedDevice()) {
+                    try {
+                        val p = UserPrefs.getInstance()
+                        p.setVo("gpu"); p.setHwdec(fallbackHwdec); p.setVoAutoFallback(true)
+                    } catch (_: Throwable) {
+                    }
+                    Log.i(TAG, "vo auto-fallback: arm32 TV 只落盘，重启播放器后生效")
+                    onVoAutoFallback?.invoke("gpu")
+                    return@postOnUiThread
+                }
                 val rebuilt = rebuildWithVo("gpu", fallbackHwdec)
                 if (!rebuilt) {
                     mpvView?.reattachSurfaceWithVo("gpu")
@@ -745,6 +756,10 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
         else -> "auto-copy"
     }
 
+    /** arm32 电视/盒子：运行中切 vo 必崩，只能靠重启生效 */
+    private fun isTvEmbedDevice(): Boolean =
+        try { UserPrefs.getInstance().isTvEmbedRequired() } catch (_: Throwable) { false }
+
     /** 立即切换 vo/hwdec（调用方保证在 UI 线程） */
     private fun applyVoSwitch(vo: String, hwdec: String) {
         try {
@@ -753,6 +768,12 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 _hwdecCache = hwdec
             }
             if (_voCache != vo || mpvView == null) {
+                // arm32 电视运行中切 vo 必崩，这里直接放弃本次切换（自适应字幕/滤镜同理），
+                // 由换台前的 adaptivePreSwitchPlan 或下次冷启动生效。
+                if (vo != _voCache && isTvEmbedDevice()) {
+                    Log.i(TAG, "applyVoSwitch: arm32 TV 运行中不切 vo（$vo），跳过")
+                    return
+                }
                 mpvView?.asView()?.context?.let { NativeCrashLogger.setActiveDecode(it, vo, hwdec) }
                 val rebuilt = rebuildWithVo(vo, hwdec)
                 if (!rebuilt) mpvView?.reattachSurfaceWithVo(vo)
