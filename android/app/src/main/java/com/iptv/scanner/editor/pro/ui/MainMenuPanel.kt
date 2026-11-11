@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FileDownload
@@ -140,6 +141,8 @@ fun MainMenuPanel(viewModel: AppViewModel) {
     // 主题模式只有一路状态：菜单里的高亮必须读同一个 ViewModel 值，
     // 不能写死高亮「深色模式」（会让人误以为切浅色没生效）
     val themeMode by viewModel.themeMode.collectAsState()
+    // 界面模式：TV 端唯一可切换手机/平板/TV 形态的入口（电视没有竖屏设置页）
+    val uiModePref by viewModel.uiModePref.collectAsState()
 
     val isFavorite = currentIdx >= 0 && favorites.contains(currentIdx)
 
@@ -165,9 +168,13 @@ fun MainMenuPanel(viewModel: AppViewModel) {
         if (uri != null) viewModel.playLocalVideo(uri.toString())
     }
 
-    val sections = remember(currentIdx, isFavorite, osdShowTime, osdShowNetSpeed, osdHideChannelNum, osdDisableEpg, osdDisableFavorite, osdShowListIcon, osdShowBottomIcon, liquidGlass, sources, selectedSource, multiViewState, themeMode) {
+    val sections = remember(currentIdx, isFavorite, osdShowTime, osdShowNetSpeed, osdHideChannelNum, osdDisableEpg, osdDisableFavorite, osdShowListIcon, osdShowBottomIcon, liquidGlass, sources, selectedSource, multiViewState, themeMode, uiModePref) {
         buildMenuSections(
             themeMode = themeMode,
+            uiModeLabel = uiModePref.label,
+            onCycleUiMode = {
+                viewModel.setUiModePreference(UiModePreference.next(uiModePref))
+            },
             onOpenPlaylist = {
                 if (!viewModel.isSafAvailable()) {
                     viewModel.toggleMenuPanel()
@@ -780,6 +787,8 @@ private data class MenuSection(
 
 private fun buildMenuSections(
     themeMode: String = "dark",
+    uiModeLabel: String = "自动（按设备判断）",
+    onCycleUiMode: () -> Unit = {},
     onOpenPlaylist: () -> Unit,
     onOpenUrl: () -> Unit,
     onOpenLocalVideo: () -> Unit,
@@ -925,6 +934,12 @@ private fun buildMenuSections(
                 "当前：" + (TV_BOTTOM_BAR_STYLES.firstOrNull { it.first == bottomBarStyleValue }?.second
                     ?: "信息详情式") + " · 点击选择",
                 onSelectBottomBarStyle
+            ),
+            MenuEntry(
+                Icons.Default.Devices,
+                "界面模式",
+                "当前：$uiModeLabel · 点击切换",
+                onCycleUiMode
             )
         )
     )

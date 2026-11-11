@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Brightness4
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CropFree
+import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Menu
@@ -736,6 +737,8 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
     val bottomBarStyle by viewModel.bottomBarStyle.collectAsState()
     val screenSaverEnabled by viewModel.screenSaverEnabled.collectAsState()
     val screenSaverTimeout by viewModel.screenSaverTimeoutMinutes.collectAsState()
+    val uiModePref by viewModel.uiModePref.collectAsState()
+    val currentUiMode by viewModel.uiMode.collectAsState()
     val isMpv = playerType == PlayerType.MPV
     // 横屏（TV/平板）首页：面板入口走右侧详情路由（master-detail），竖屏走弹窗
     val isLandscape = androidx.compose.ui.platform.LocalConfiguration.current.orientation ==
@@ -744,11 +747,11 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
     // 底栏 TAB 的 UP 落点 + 详情关闭后的焦点回归：设置列表每一行都挂 FocusRequester。
     // - 底栏居中悬浮、正上方是 Mini 播放条，几何 UP 永远只会回到播放条，入口必须显式注册；
     // - BACK 关闭右侧详情后，焦点回到「进入详情前那一行」，而不是永远回第一项。
-    val rowFocuses = remember { List(17) { FocusRequester() } }
-    val rowBrings = remember { List(17) { BringIntoViewRequester() } }
+    val rowFocuses = remember { List(18) { FocusRequester() } }
+    val rowBrings = remember { List(18) { BringIntoViewRequester() } }
     var lastFocusedRow by remember { mutableStateOf(0) }
     val scrollScope = rememberCoroutineScope()
-    // 行序号：0-4 通用，5-11 播放，12-13 频道，14-15 屏保，16 关于
+    // 行序号：0-5 通用（主题/界面模式/续播/底栏样式/玻璃/自启），6-12 播放，13-14 频道，15-16 屏保，17 关于
     // 显式接管上下键：目标行在可视区外时几何焦点搜索命中不了（整列滚动的视口外节点），
     // 只靠 bringIntoView 会「先要焦点再滚动」形成死锁，到了「视图设置」就停住。
     fun moveRowFocus(from: Int, dir: Int) {
@@ -813,7 +816,7 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
     }
 
     androidx.compose.runtime.CompositionLocalProvider(LocalLiquidGlass provides liquidGlass) {
-    // 用整列滚动而不是 LazyColumn：设置行数固定（17 行），一次性组合能保证分组之间
+    // 用整列滚动而不是 LazyColumn：设置行数固定（18 行），一次性组合能保证分组之间
     // 没有「尚未组合的间隙」，遥控器 UP/DOWN 可在整列中连续移动；LazyColumn 跨 item
     // 的焦点搜索在未组合区域会断裂，焦点会从「开机自启」直接逃逸到底栏。
     Column(
@@ -842,7 +845,18 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
                     val next = when (themeMode) { "dark" -> "light"; "light" -> "system"; else -> "dark" }
                     viewModel.setThemeMode(next)
                 }
-                AptvRow(Icons.Default.Replay, stringResource(R.string.settings_auto_resume), value = if (autoResume) stringResource(R.string.settings_enabled) else stringResource(R.string.settings_disabled), modifier = rowModifier(1)) {
+                // 界面模式：自动沿用设备判定，或强制按手机/平板/TV 形态渲染
+                AptvRow(
+                    Icons.Default.Devices,
+                    "界面模式",
+                    value = if (uiModePref == UiModePreference.AUTO)
+                        "自动 · 当前${currentUiMode.displayName}"
+                    else "手动 · 强制${uiModePref.label.removePrefix("强制")}",
+                    modifier = rowModifier(1)
+                ) {
+                    viewModel.setUiModePreference(UiModePreference.next(uiModePref))
+                }
+                AptvRow(Icons.Default.Replay, stringResource(R.string.settings_auto_resume), value = if (autoResume) stringResource(R.string.settings_enabled) else stringResource(R.string.settings_disabled), modifier = rowModifier(2)) {
                     viewModel.setAutoResume(!autoResume)
                 }
                 // 横屏全屏播放页底栏布局样式（点击循环切换，右侧迷你预览当前样式结构）
@@ -857,44 +871,44 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
                         Spacer(modifier = Modifier.height(2.dp))
                         BottomBarStyleMiniPreview(bottomBarStyle, modifier = Modifier.width(88.dp))
                     }
-                }, modifier = rowModifier(2)) {
+                }, modifier = rowModifier(3)) {
                     viewModel.setBottomBarStyle((bottomBarStyle + 1) % TV_BOTTOM_BAR_STYLES.size)
                 }
-                AptvSwitchRow(Icons.Default.AutoAwesome, "液态玻璃", checked = liquidGlass, onCheckedChange = { viewModel.setLiquidGlass(it) }, modifier = rowModifier(3))
-                AptvSwitchRow(Icons.Default.PowerSettingsNew, "开机自启动", checked = bootStart, onCheckedChange = { viewModel.setBootStart(it) }, modifier = rowModifier(4))
+                AptvSwitchRow(Icons.Default.AutoAwesome, "液态玻璃", checked = liquidGlass, onCheckedChange = { viewModel.setLiquidGlass(it) }, modifier = rowModifier(4))
+                AptvSwitchRow(Icons.Default.PowerSettingsNew, "开机自启动", checked = bootStart, onCheckedChange = { viewModel.setBootStart(it) }, modifier = rowModifier(5))
             }
 
         AptvSectionHeader(stringResource(R.string.settings_playback))
         AptvGroupCard {
-            AptvRow(Icons.Default.PlayCircle, stringResource(R.string.settings_player), value = playerType.displayName, modifier = rowModifier(5)) {
+            AptvRow(Icons.Default.PlayCircle, stringResource(R.string.settings_player), value = playerType.displayName, modifier = rowModifier(6)) {
                 splitDetailOrToggle(isLandscape, viewModel.playerSettingsOpen, { PlayerSettingsPanel(viewModel = viewModel) }) { viewModel.togglePlayerSettings() }
             }
-            AptvRow(Icons.Default.Tv, stringResource(R.string.settings_video), modifier = rowModifier(6)) {
+            AptvRow(Icons.Default.Tv, stringResource(R.string.settings_video), modifier = rowModifier(7)) {
                 splitDetailOrToggle(isLandscape, viewModel.videoSettingsOpen, { VideoSettingsPanel(viewModel = viewModel) }) { viewModel.toggleVideoSettings() }
             }
-            AptvRow(Icons.Default.VolumeUp, stringResource(R.string.settings_audio), modifier = rowModifier(7)) {
+            AptvRow(Icons.Default.VolumeUp, stringResource(R.string.settings_audio), modifier = rowModifier(8)) {
                 splitDetailOrToggle(isLandscape, viewModel.audioSettingsOpen, { AudioSettingsPanel(viewModel = viewModel) }) { viewModel.toggleAudioSettings() }
             }
-            AptvRow(Icons.Default.Subtitles, stringResource(R.string.settings_subtitle), disabled = !isMpv, modifier = rowModifier(8)) {
+            AptvRow(Icons.Default.Subtitles, stringResource(R.string.settings_subtitle), disabled = !isMpv, modifier = rowModifier(9)) {
                 splitDetailOrToggle(isLandscape, viewModel.subtitleSettingsOpen, { SubtitleSettingsPanel(viewModel = viewModel) }) { viewModel.toggleSubtitleSettings() }
             }
-            AptvRow(Icons.Default.Tune, stringResource(R.string.settings_playback_settings), modifier = rowModifier(9)) {
+            AptvRow(Icons.Default.Tune, stringResource(R.string.settings_playback_settings), modifier = rowModifier(10)) {
                 splitDetailOrToggle(isLandscape, viewModel.playbackPanelOpen, { PlaybackPanel(viewModel = viewModel) }) { viewModel.togglePlaybackPanel() }
             }
-            AptvRow(Icons.Default.PhotoCamera, stringResource(R.string.settings_screenshot), disabled = !isMpv, modifier = rowModifier(10)) {
+            AptvRow(Icons.Default.PhotoCamera, stringResource(R.string.settings_screenshot), disabled = !isMpv, modifier = rowModifier(11)) {
                 splitDetailOrToggle(isLandscape, viewModel.screenshotPanelOpen, { ScreenshotPanel(viewModel = viewModel) }) { viewModel.toggleScreenshotPanel() }
             }
-            AptvRow(Icons.Default.Wallpaper, stringResource(R.string.settings_view), modifier = rowModifier(11)) {
+            AptvRow(Icons.Default.Wallpaper, stringResource(R.string.settings_view), modifier = rowModifier(12)) {
                 splitDetailOrToggle(isLandscape, viewModel.viewSettingsOpen, { ViewSettingsPanel(viewModel = viewModel) }) { viewModel.toggleViewSettings() }
             }
         }
 
         AptvSectionHeader(stringResource(R.string.settings_channels))
         AptvGroupCard {
-            AptvRow(Icons.Default.CompareArrows, stringResource(R.string.settings_mapping), modifier = rowModifier(12)) {
+            AptvRow(Icons.Default.CompareArrows, stringResource(R.string.settings_mapping), modifier = rowModifier(13)) {
                 splitDetailOrToggle(isLandscape, viewModel.mappingPanelOpen, { MappingPanel(viewModel = viewModel) }) { viewModel.toggleMappingPanel() }
             }
-            AptvRow(Icons.Default.Wifi, stringResource(R.string.settings_network), modifier = rowModifier(13)) {
+            AptvRow(Icons.Default.Wifi, stringResource(R.string.settings_network), modifier = rowModifier(14)) {
                 splitDetailOrToggle(isLandscape, viewModel.networkPanelOpen, { NetworkPanel(viewModel = viewModel) }) { viewModel.toggleNetworkPanel() }
             }
         }
@@ -906,14 +920,14 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
                 "屏保",
                 checked = screenSaverEnabled,
                 onCheckedChange = { viewModel.setScreenSaverEnabled(it) },
-                modifier = rowModifier(14)
+                modifier = rowModifier(15)
             )
             AptvRow(
                 Icons.Default.Schedule,
                 "屏保等待",
                 value = "$screenSaverTimeout 分钟",
                 disabled = !screenSaverEnabled,
-                modifier = rowModifier(15)
+                modifier = rowModifier(16)
             ) {
                 val next = when (screenSaverTimeout) {
                     1 -> 5
@@ -928,7 +942,7 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
 
         AptvSectionHeader(stringResource(R.string.aptv_group_about))
         AptvGroupCard {
-            AptvRow(Icons.Default.Info, stringResource(R.string.settings_about), modifier = rowModifier(16)) {
+            AptvRow(Icons.Default.Info, stringResource(R.string.settings_about), modifier = rowModifier(17)) {
                 splitDetailOrToggle(isLandscape, viewModel.aboutPanelOpen, { AboutPanel(viewModel = viewModel) }) { viewModel.toggleAboutPanel() }
             }
         }

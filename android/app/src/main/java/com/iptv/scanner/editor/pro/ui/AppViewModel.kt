@@ -203,9 +203,44 @@ it.onRequestTextureViewFallback = {
         _player.map { it.capabilities }
             .stateIn(viewModelScope, SharingStarted.Eagerly, mpvSingleton.capabilities)
 
-    // UI 模式（手机触摸 / TV 遥控器）
+    // UI 模式（手机触摸 / 平板触摸 / TV 遥控器）
     internal val _uiMode = MutableStateFlow(UiModeDetector.detect(app))
     val uiMode: StateFlow<UiMode> = _uiMode.asStateFlow()
+
+    /** 设置页「界面模式」：自动 / 手机 / 平板 / TV */
+    internal val _uiModePref = MutableStateFlow(
+        UiModePreference.fromStorage(userPrefs.getUiModePreference())
+    )
+    val uiModePref: StateFlow<UiModePreference> = _uiModePref.asStateFlow()
+
+    /**
+     * 切换界面模式：持久化后立即重算布局，不用重启。
+     * 同时清理旧布局的悬浮层，避免侧边栏/底栏状态残留到新布局。
+     */
+    fun setUiModePreference(pref: UiModePreference) {
+        _uiModePref.value = pref
+        userPrefs.setUiModePreference(pref.storageValue)
+        val old = _uiMode.value
+        val next = UiModeDetector.detect(getApplication())
+        if (old == next) return
+        _uiMode.value = next
+        closeAllPanels()
+        _landscapeSidebarVisible.value = false
+        _stylePickerOpen.value = false
+        _stylePreview.value = null
+        _controlsVisible.value = false
+        _controlsPinned.value = false
+        if (next == UiMode.TV) {
+            // TV 无独立首页，且不允许进入分屏
+            _landscapeSplitMode.value = false
+            _showHome.value = false
+        } else {
+            _landscapeSplitMode.value = userPrefs.getLandscapeSplitMode()
+            // 未选台时回到触摸布局首页；正在播放则停留在播放页
+            if (_currentIdx.value < 0) _showHome.value = true
+        }
+        Log.i("AppViewModel", "uiMode ${old.name} -> ${next.name} (pref=${pref.storageValue})")
+    }
 
     // 初始化状态
 

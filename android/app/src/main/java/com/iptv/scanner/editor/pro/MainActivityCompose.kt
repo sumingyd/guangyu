@@ -553,17 +553,9 @@ class MainActivityCompose : ComponentActivity() {
             val isDpad = kc == KeyEvent.KEYCODE_DPAD_UP || kc == KeyEvent.KEYCODE_DPAD_DOWN ||
                     kc == KeyEvent.KEYCODE_DPAD_LEFT || kc == KeyEvent.KEYCODE_DPAD_RIGHT
             if (event.action == KeyEvent.ACTION_DOWN) {
-                // 底栏控制条显示时：DPAD/OK 交给 Compose 焦点系统在底栏内移动焦点/触发按钮，
-                // 不再全局拦截为切台/seek（此前底栏内焦点移动只能暂用 TAB 键）。
-                // 侧边栏打开时底栏被互斥隐藏（TvLayout: showOverlays && !sidebarVisible），不适用。
-                // 未选台（停止后 idx=-1）时不转交：底栏 3 个按钮此时点不出任何可恢复的结果，
-                // 会让方向键/OK 看起来全部失效，必须保留全局路由（OK/左键开侧边栏、上下键起播）。
-                if ((isOk || isDpad) && !viewModel.anyPanelOpen &&
-                    !viewModel.landscapeSidebarVisible.value &&
-                    viewModel.currentChannel.value != null &&
-                    (viewModel.controlsVisible.value || viewModel.controlsPinned.value)) {
-                    return super.dispatchKeyEvent(event)
-                }
+                // TV 全屏底栏已改为只读（无控制按钮、不抢焦点），DPAD/OK 不再转交 Compose：
+                // 上下键始终优先换台、左右键时移/快退快进，避免焦点在底栏按钮间移动导致换台失效。
+                // 播放/停止/分屏等操作入口统一在「菜单 → 工具 → 播放工具」面板。
                 if (isOk) {
                     // 侧边栏（TvUnifiedPanel）打开时，DPAD_CENTER 必须传给 Compose 焦点系统，
                     // 让菜单项的 onClick / 频道列表的 onChannelClick 触发。
@@ -1157,6 +1149,12 @@ class MainActivityCompose : ComponentActivity() {
         super.onUserLeaveHint()
         // 主动退出 PiP 回到全屏时会触发一次"用户离开"，此时不能再自动入小窗
         if (android.os.SystemClock.elapsedRealtime() < suppressAutoPipUntil) return
+        // 大屏（TV/车机一体屏）不自动进小窗：这类设备没有便捷的"点图标回全屏"，
+        // 小窗残留会直接把主界面挡掉；手机/平板保持原有自动 PiP 行为。
+        if (viewModel.uiMode.value.isTV || !UiModeDetector.isHandheld(this)) {
+            Log.i(TAG, "Auto PiP skipped: uiMode=${viewModel.uiMode.value.name} handheld=${UiModeDetector.isHandheld(this)}")
+            return
+        }
         val mpv = MpvController.getInstance()
         // 仅在播放中（fileLoaded 且 !paused）才自动进入 PiP
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O

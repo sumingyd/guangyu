@@ -77,6 +77,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import coil.compose.AsyncImage
 import com.iptv.scanner.editor.pro.MainActivityCompose
 import com.iptv.scanner.editor.pro.data.IptvChannel
@@ -191,6 +192,9 @@ fun TvPlayerLayout(
 
     // ---- 以下为传统全屏布局（保持不变） ----
     val sidebarVisible by viewModel.landscapeSidebarVisible.collectAsState()
+    val uiMode by viewModel.uiMode.collectAsState()
+    // TV 模式底栏只做信息展示：不放控制按钮，也不参与焦点遍历
+    val barReadOnly = uiMode.isTV
     val controlsVisible by viewModel.controlsVisible.collectAsState()
     val controlsPinned by viewModel.controlsPinned.collectAsState()
     val displayInfo by viewModel.channelDisplayInfo.collectAsState()
@@ -343,7 +347,8 @@ fun TvPlayerLayout(
                     currentProgram = currentProgram,
                     epgList = currentEpg,
                     style = stylePreview ?: bottomBarStyle,
-                    grabFocus = stylePreview == null && !stylePickerOpen && !anyPanelOpen
+                    readOnly = barReadOnly,
+                    grabFocus = !barReadOnly && stylePreview == null && !stylePickerOpen && !anyPanelOpen
                 )
             }
         }
@@ -479,6 +484,12 @@ private fun formatNetSpeed(bytesPerSec: Long): String {
 }
 
 
+/**
+ * 底栏是否只读（TV 模式）：只读时各样式隐藏播放控制按钮，仅保留频道/节目/进度等信息。
+ * 用 CompositionLocal 传递，避免给 18 个样式逐一加参数。
+ */
+private val LocalTvBottomBarReadOnly = staticCompositionLocalOf { false }
+
 @Composable
 private fun TvBottomBar(
     viewModel: AppViewModel,
@@ -492,6 +503,7 @@ private fun TvBottomBar(
     currentProgram: IptvEpgProgram?,
     epgList: List<IptvEpgProgram>,
     style: Int = 0,
+    readOnly: Boolean = false,
     grabFocus: Boolean = true
 ) {
     // 底栏呼出时把焦点落到播放/暂停键：DPAD 直接在底栏内移动焦点（Activity dispatchKeyEvent 已放行），
@@ -499,12 +511,13 @@ private fun TvBottomBar(
     // grabFocus=false（样式弹窗预览态 / 面板打开态）时跳过：面板打开时底栏一旦抢焦点会破坏面板按键路由；
     // 面板关闭后 grabFocus 由 false 变回 true，effect 重新执行，把焦点从已关闭的面板归还到底栏。
     val barFocus = remember { FocusRequester() }
-    LaunchedEffect(grabFocus) {
-        if (grabFocus) {
+    LaunchedEffect(grabFocus, readOnly) {
+        if (grabFocus && !readOnly) {
             kotlinx.coroutines.delay(80)
             runCatching { barFocus.requestFocus() }
         }
     }
+    CompositionLocalProvider(LocalTvBottomBarReadOnly provides readOnly) {
     when (style) {
         1 -> TvBottomBarStyleB(viewModel, displayInfo, paused, fileLoaded, videoWidth, videoHeight, showExitCatchup, playbackMode, currentProgram, epgList, barFocus)
         2 -> TvBottomBarStyleC(viewModel, displayInfo, paused, fileLoaded, videoWidth, videoHeight, showExitCatchup, playbackMode, currentProgram, epgList, barFocus)
@@ -524,6 +537,7 @@ private fun TvBottomBar(
         16 -> TvBottomBarStyleQ(viewModel, displayInfo, paused, fileLoaded, videoWidth, videoHeight, showExitCatchup, playbackMode, currentProgram, epgList, barFocus)
         17 -> TvBottomBarStyleR(viewModel, displayInfo, paused, fileLoaded, videoWidth, videoHeight, showExitCatchup, playbackMode, currentProgram, epgList, barFocus)
         else -> TvBottomBarStyleA(viewModel, displayInfo, paused, fileLoaded, videoWidth, videoHeight, showExitCatchup, playbackMode, currentProgram, epgList, barFocus)
+    }
     }
 }
 
@@ -748,6 +762,8 @@ private fun TvBottomBarStyleA(
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(text = remainText, color = tvPalette.accentText, fontSize = 11.sp)
                         }
+                        // TV 只读底栏：不渲染控制按钮（入口在菜单/播放工具面板）
+                        if (!LocalTvBottomBarReadOnly.current) {
                         if (showExitCatchup) {
                             Spacer(modifier = Modifier.width(4.dp))
                             IconButton(onClick = { viewModel.exitCatchup() }, modifier = Modifier.size(30.dp).tvFocusBorder()) {
@@ -789,6 +805,7 @@ private fun TvBottomBarStyleA(
                         // 播放工具：同上，补齐遥控器入口（截图/切片/EPG/书签等）
                         IconButton(onClick = { viewModel.togglePlayerToolsPanel() }, modifier = Modifier.size(30.dp).tvFocusBorder()) {
                             Icon(Icons.Default.MoreVert, "播放工具", tint = oc.iconTint, modifier = Modifier.size(16.dp))
+                        }
                         }
                     }
 
@@ -935,6 +952,8 @@ private fun TvBottomBarStyleB(
                     }
                 }
             }
+            // TV 只读底栏：不渲染播放控制按钮
+            if (!LocalTvBottomBarReadOnly.current) {
             Spacer(modifier = Modifier.width(6.dp))
             // 播放控制组（播放/停止/返回分屏）
             IconButton(
@@ -951,6 +970,7 @@ private fun TvBottomBarStyleB(
             }
             IconButton(onClick = { viewModel.setLandscapeSplitMode(true) }, modifier = Modifier.size(30.dp).tvFocusBorder()) {
                 Icon(Icons.Default.FullscreenExit, "返回分屏", tint = oc.iconTint, modifier = Modifier.size(15.dp))
+            }
             }
         }
     }
@@ -1028,7 +1048,8 @@ private fun TvBottomBarStyleC(
                 }
             }
             Spacer(modifier = Modifier.height(8.dp))
-            // 行2：居中大号控制按钮组（播放/停止/返回分屏）
+            // 行2：居中大号控制按钮组（播放/停止/返回分屏）；TV 只读底栏不渲染
+            if (!LocalTvBottomBarReadOnly.current) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                 Surface(color = AptvAccent.copy(alpha = 0.18f), shape = androidx.compose.foundation.shape.CircleShape) {
                     IconButton(
@@ -1047,6 +1068,7 @@ private fun TvBottomBarStyleC(
                 IconButton(onClick = { viewModel.setLandscapeSplitMode(true) }, modifier = Modifier.size(36.dp).tvFocusBorder()) {
                     Icon(Icons.Default.FullscreenExit, "返回分屏", tint = oc.textSecondary, modifier = Modifier.size(20.dp))
                 }
+            }
             }
             // 行3：居中细进度条 + 时间
             if (progress != null) {
@@ -1164,10 +1186,10 @@ private fun TvBottomBarStyleD(
                     }
                 }
             }
-            // 竖分隔条
+            // 竖分隔条 + 右侧控制区（暂停/停止/返回分屏）；TV 只读底栏不渲染
+            if (!LocalTvBottomBarReadOnly.current) {
             Box(modifier = Modifier.width(1.dp).height(36.dp).background(TV_ROW_DIVIDER))
             Spacer(modifier = Modifier.width(10.dp))
-            // 右侧控制区（暂停/停止/返回分屏）
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 IconButton(
                     onClick = { viewModel.mpv.setPause(!paused) },
@@ -1184,6 +1206,7 @@ private fun TvBottomBarStyleD(
                 IconButton(onClick = { viewModel.setLandscapeSplitMode(true) }, modifier = Modifier.size(30.dp).tvFocusBorder()) {
                     Icon(Icons.Default.FullscreenExit, "返回分屏", tint = oc.iconTint, modifier = Modifier.size(16.dp))
                 }
+            }
             }
         }
     }
@@ -1319,6 +1342,8 @@ private fun TvBarControls(
     playIconSize: Dp = 20.dp,
     spacing: Dp = 4.dp
 ) {
+    // TV 只读底栏：控制按钮入口统一在菜单/播放工具面板
+    if (LocalTvBottomBarReadOnly.current) return
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(spacing)) {
         if (showPrevNext) {
             IconButton(onClick = { viewModel.prevChannel() }, modifier = Modifier.size(buttonSize).tvFocusBorder()) {
@@ -2016,9 +2041,10 @@ private fun TvBottomBarStyleJ(
                 }
             }
             Spacer(modifier = Modifier.width(12.dp))
+            // 右侧竖排按钮组（播放/停止/返回分屏）；TV 只读底栏不渲染
+            if (!LocalTvBottomBarReadOnly.current) {
             Box(modifier = Modifier.width(1.dp).height(52.dp).background(TV_ROW_DIVIDER))
             Spacer(modifier = Modifier.width(10.dp))
-            // 右侧竖排按钮组（播放/停止/返回分屏）
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 IconButton(
                     onClick = { viewModel.mpv.setPause(!paused) },
@@ -2037,6 +2063,7 @@ private fun TvBottomBarStyleJ(
                         Icon(Icons.Default.FullscreenExit, "返回分屏", tint = oc.iconTint, modifier = Modifier.size(15.dp))
                     }
                 }
+            }
             }
         }
     }
@@ -2227,9 +2254,10 @@ private fun TvBottomBarStyleL(
                 }
             }
             Spacer(modifier = Modifier.width(10.dp))
+            // 右按钮组（播放/停止 | 返回分屏）；TV 只读底栏不渲染
+            if (!LocalTvBottomBarReadOnly.current) {
             Box(modifier = Modifier.width(1.dp).height(52.dp).background(TV_ROW_DIVIDER))
             Spacer(modifier = Modifier.width(8.dp))
-            // 右按钮组（播放/停止 | 返回分屏）
             Column(verticalArrangement = Arrangement.spacedBy(4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     IconButton(
@@ -2248,6 +2276,7 @@ private fun TvBottomBarStyleL(
                 IconButton(onClick = { viewModel.setLandscapeSplitMode(true) }, modifier = Modifier.size(32.dp).tvFocusBorder()) {
                     Icon(Icons.Default.FullscreenExit, "返回分屏", tint = oc.iconTint, modifier = Modifier.size(17.dp))
                 }
+            }
             }
         }
     }
@@ -2677,8 +2706,9 @@ private fun TvBottomBarStyleQ(
                         Spacer(modifier = Modifier.height(1.dp))
                         TvBarEpgLine("下一节目", tvBarNextProgram(currentProgram, epgList), timeFmt, oc.textSecondary, titleSp = 10.sp)
                     }
+                    // 竖排按钮（播放/停止/返回分屏）；TV 只读底栏不渲染
+                    if (!LocalTvBottomBarReadOnly.current) {
                     Spacer(modifier = Modifier.width(8.dp))
-                    // 竖排按钮（播放/停止/返回分屏）
                     Column(verticalArrangement = Arrangement.spacedBy(3.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         IconButton(
                             onClick = { viewModel.mpv.setPause(!paused) },
@@ -2695,6 +2725,7 @@ private fun TvBottomBarStyleQ(
                         IconButton(onClick = { viewModel.setLandscapeSplitMode(true) }, modifier = Modifier.size(26.dp).tvFocusBorder()) {
                             Icon(Icons.Default.FullscreenExit, "返回分屏", tint = oc.iconTint, modifier = Modifier.size(14.dp))
                         }
+                    }
                     }
                 }
             }

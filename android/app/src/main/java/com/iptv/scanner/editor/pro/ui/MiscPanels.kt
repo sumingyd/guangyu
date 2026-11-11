@@ -47,14 +47,20 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.verticalScroll
 import kotlin.math.sqrt
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.SyncAlt
 import androidx.compose.material.icons.filled.Bookmark
@@ -353,7 +359,8 @@ fun ExitConfirmDialog(viewModel: AppViewModel) {
                             try {
                                 val builder = android.app.PictureInPictureParams.Builder()
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                                    builder.setAutoEnterEnabled(true)
+                                    // 手动进入即可，不允许系统再自动重入（车机 ROM 会反复把小窗拉回）
+                                    builder.setAutoEnterEnabled(false)
                                     builder.setSeamlessResizeEnabled(true)
                                 }
                                 activity.enterPictureInPictureMode(builder.build())
@@ -616,6 +623,11 @@ fun ToolsPanel(viewModel: AppViewModel) {
         scrollable = false
     ) {
         val tools = listOf(
+            // —— 播放控制入口（TV 全屏底栏已改为只读，控制操作集中到播放工具面板）——
+            ToolEntry("播放工具", "播放/暂停 / 停止 / 分屏 / 频道信息", Icons.Default.FullscreenExit) {
+                viewModel.toggleToolsPanel()
+                viewModel.togglePlayerToolsPanel()
+            },
             // —— 文件快捷入口 ——
             ToolEntry("打开播放列表", "选择设备上的 M3U/M3U8 文件", Icons.Default.FileOpen) {
                 viewModel.toggleToolsPanel()
@@ -712,9 +724,12 @@ private fun ToolEntryRow(tool: ToolEntry, compact: Boolean = false) {
  */
 @Composable
 fun PlayerToolsPanel(viewModel: AppViewModel) {
+    // TV 全屏底栏改为只读后，播放/停止/分屏/频道信息的入口集中到这里
+    val paused by viewModel.mpv.paused.collectAsState()
+    val playbackState by viewModel.playbackState.collectAsState()
     PanelScaffold(
         title = "播放工具",
-        subtitle = "截图 / 切片 / EPG时间线 / 搜索 / 提醒 / 续播 / 书签",
+        subtitle = "播放控制 / 截图 / 切片 / EPG时间线 / 搜索 / 提醒 / 续播 / 书签",
         onClose = { viewModel.togglePlayerToolsPanel() },
         scrollable = false
     ) {
@@ -723,7 +738,28 @@ fun PlayerToolsPanel(viewModel: AppViewModel) {
         fun routeOrToggle(flow: kotlinx.coroutines.flow.StateFlow<Boolean>, panel: @Composable () -> Unit, toggle: () -> Unit) {
             if (embedded) splitDetailPush(flow, panel, toggle) else toggle()
         }
-        val tools = listOf(
+        val controlTools = buildList<ToolEntry> {
+            add(ToolEntry(if (paused) "继续播放" else "暂停播放", "播放 / 暂停当前频道", if (paused) Icons.Default.PlayArrow else Icons.Default.Pause) {
+                viewModel.mpv.setPause(!paused)
+            })
+            add(ToolEntry("停止播放", "停止当前播放", Icons.Default.Stop) {
+                viewModel.stopPlay()
+            })
+            add(ToolEntry("返回分屏", "左视频 + 右面板", Icons.Default.FullscreenExit) {
+                viewModel.setLandscapeSplitMode(true)
+                viewModel.togglePlayerToolsPanel()
+            })
+            add(ToolEntry("频道信息", "当前频道详情", Icons.Default.Info) {
+                viewModel.togglePlayerToolsPanel()
+                viewModel.toggleChannelInfo()
+            })
+            if (playbackState.mode.isCatchupOrTimeshift) {
+                add(ToolEntry("退出回看/时移", "恢复直播", Icons.AutoMirrored.Filled.Backspace) {
+                    viewModel.exitCatchup()
+                })
+            }
+        }
+        val tools = controlTools + listOf(
             ToolEntry("截图", "截取当前画面", Icons.Default.CameraAlt) {
                 routeOrToggle(viewModel.screenshotPanelOpen, { ScreenshotPanel(viewModel) }) { viewModel.toggleScreenshotPanel() }
             },

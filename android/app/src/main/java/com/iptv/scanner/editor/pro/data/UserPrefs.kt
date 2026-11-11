@@ -492,6 +492,18 @@ class UserPrefs private constructor() {
     fun setOsdShowBottomIcon(enabled: Boolean) { prefs.edit().putBoolean(KEY_OSD_SHOW_BOTTOM_ICON, enabled).apply() }
 
     // -----------------------------------------------------------------
+    // 界面模式（自动 / 手机 / 平板 / TV）
+    // -----------------------------------------------------------------
+
+    /** 手动界面模式：auto / phone / tablet / tv */
+    fun getUiModePreference(): String =
+        prefs.getString(KEY_UI_MODE_OVERRIDE, DEFAULT_UI_MODE_OVERRIDE) ?: DEFAULT_UI_MODE_OVERRIDE
+
+    fun setUiModePreference(value: String) {
+        prefs.edit().putString(KEY_UI_MODE_OVERRIDE, value).apply()
+    }
+
+    // -----------------------------------------------------------------
     // 强制 TV 模式（调试/模拟器用）
     // -----------------------------------------------------------------
 
@@ -542,6 +554,9 @@ class UserPrefs private constructor() {
 
         private const val KEY_PORTRAIT_FULLSCREEN = "portrait_fullscreen"
         private const val DEFAULT_PORTRAIT_FULLSCREEN = false
+
+        private const val KEY_UI_MODE_OVERRIDE = "ui_mode_override"
+        private const val DEFAULT_UI_MODE_OVERRIDE = "auto"
 
         // SharedPreferences key 值保留 "ku9_*" 以兼容用户已有设置
         private const val KEY_OSD_SHOW_TIME = "ku9_show_time"
