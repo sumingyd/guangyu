@@ -80,7 +80,23 @@ class PlayerSettingsStore(
     private fun resolveRequestedHwdec(): String {
         val saved = prefs.getString(KEY_HWDEC, null)?.takeIf { it.isNotEmpty() }
         if (saved == null) return defaultHwdec()
-        return normalizeHwdecForDevice(saved)
+        return normalizeHwdecForDevice(migrateHandheldHwdec(saved))
+    }
+
+    /**
+     * 老用户一次性迁移：手机/平板之前默认是 auto-copy（解码后回读 CPU），
+     * 升级后沿用旧值就永远拿不到 mediacodec 直通。这里在第一次读取时改写一次，
+     * 之后用户再手动选择就以用户选择为准（KEY_HWDEC_MIGRATED 只置位一次）。
+     */
+    private fun migrateHandheldHwdec(saved: String): String {
+        if (!isArm64Handheld()) return saved
+        if (prefs.getBoolean(KEY_HWDEC_MIGRATED, false)) return saved
+        prefs.edit().putBoolean(KEY_HWDEC_MIGRATED, true).apply()
+        if (saved == "auto-copy" || saved == "auto") {
+            prefs.edit().putString(KEY_HWDEC, HWDEC_MEDIACODEC).apply()
+            return HWDEC_MEDIACODEC
+        }
+        return saved
     }
 
     /**
@@ -329,6 +345,7 @@ class PlayerSettingsStore(
             .remove(KEY_VO_FALLBACK)
             .remove(KEY_VO_AUTO_FALLBACK)
             .remove(KEY_HWDEC_CRASH_COMBO)
+            .remove(KEY_HWDEC_MIGRATED)
             .remove(KEY_PLAYER_TYPE)
             .remove(KEY_HDR_MODE)
             .remove(KEY_RTSP_TRANSPORT)
@@ -393,6 +410,9 @@ class PlayerSettingsStore(
 
         /** 崩溃黑名单记录的具体 vo+hwdec 组合（"vo|hwdec"），空=旧版本遗留 */
         internal const val KEY_HWDEC_CRASH_COMBO = "player_hwdec_crash_combo"
+
+        /** 手机端 auto-copy → mediacodec 的一次性迁移标记 */
+        private const val KEY_HWDEC_MIGRATED = "player_hwdec_handheld_migrated"
     }
 
     /** 是否为 arm32 TV 设备（仅 armeabi-v7a 主 ABI 的电视/盒子） */
