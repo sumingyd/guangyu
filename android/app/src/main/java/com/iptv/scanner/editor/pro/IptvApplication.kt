@@ -72,6 +72,15 @@ class IptvApplication : PyApplication(), ImageLoaderFactory {
             Log.e(TAG, "NativeCrashLogger initialization failed", e)
         }
 
+        // 直写 Surface 起播兜底：上次用 mediacodec_embed 起播没撑到首帧就没了，
+        // 判定该组合在这台设备不可用，拉黑组合并回退 gpu+软解，避免崩溃循环。
+        try {
+            val prefs = com.iptv.scanner.editor.pro.data.UserPrefs.getInstance()
+            prefs.recoverPendingEmbedSession()
+        } catch (e: Exception) {
+            Log.w(TAG, "recoverPendingEmbedSession failed: ${e.message}")
+        }
+
         // 原生信号 handler：崩溃瞬间把 backtrace 直接写到 crash-reports（不依赖 logcat）
         try {
             NativeSignalHandler.install(this)

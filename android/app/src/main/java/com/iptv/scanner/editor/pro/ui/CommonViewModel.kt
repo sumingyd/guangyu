@@ -870,6 +870,20 @@ internal fun AppViewModel.togglePlayerSettings() {
 }
 
 internal fun AppViewModel.setPlayerVo(vo: String) {
+    // arm32 电视/盒子：运行中把 vo 切到 mediacodec_embed 会让 mpv 在 video-reconfig
+    // 阶段直接结束进程（exit(1)，无 Java 异常）。这里只落盘选择，等重启播放器后
+    // 以 init option 的形式建立直写 Surface（该路径实测可用）。
+    if (vo == "mediacodec_embed" && userPrefs.isArm32TvDevice() && actualVo.value != "mediacodec_embed") {
+        userPrefs.setVo(vo)
+        userPrefs.setHwdec("mediacodec")
+        userPrefs.setVoFallbackConfirmed(true)
+        // 用户明确重选：解除黑名单，让下次冷启动再试一次直写
+        userPrefs.setHwdecBlacklisted(false)
+        _currentVo.value = vo
+        _currentHwdec.value = "mediacodec"
+        showOsd("播放器设置", "已选择直写 Surface：重启播放器后生效")
+        return
+    }
     userPrefs.setVo(vo)
     _currentVo.value = vo
     // 用户显式重选 vo：清掉本进程「已自动回退」记忆，允许再次尝试默认 mediacodec_embed 路径

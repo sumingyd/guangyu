@@ -157,6 +157,11 @@ class UserPrefs private constructor() {
     fun setHwdecBlacklisted(blacklisted: Boolean) = playerSettingsStore.setHwdecBlacklisted(blacklisted)
     fun isVoFallbackConfirmed(): Boolean = playerSettingsStore.isVoFallbackConfirmed()
     fun setVoFallbackConfirmed(confirmed: Boolean) = playerSettingsStore.setVoFallbackConfirmed(confirmed)
+
+    /** 直写 Surface 起播兜底：初始化前打标记、首帧后清除、启动时判定上次是否崩在起播 */
+    fun beginEmbedSession() = playerSettingsStore.beginEmbedSession()
+    fun endEmbedSession() = playerSettingsStore.endEmbedSession()
+    fun recoverPendingEmbedSession() = playerSettingsStore.recoverPendingEmbedSession()
     fun getHdrMode(): String = playerSettingsStore.getHdrMode()
     fun setHdrMode(mode: String) = playerSettingsStore.setHdrMode(mode)
 

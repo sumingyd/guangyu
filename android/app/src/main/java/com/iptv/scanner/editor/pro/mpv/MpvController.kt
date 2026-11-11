@@ -337,6 +337,22 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     }
 
     fun setVoAndHwdec(vo: String, hwdec: String): String? {
+        // arm32 电视/盒子：运行中把 vo 切到 mediacodec_embed 会让 mpv 在 video-reconfig
+        // 阶段结束进程（exit(1)，无 Java 异常）。这里只落盘选择，重启播放器后以 init
+        // option 形式建立直写 Surface（该路径可用）。
+        if (vo == "mediacodec_embed" && _actualVo.value != "mediacodec_embed") {
+            try {
+                val p = UserPrefs.getInstance()
+                if (p.isTvEmbedRequired()) {
+                    p.setVo(vo)
+                    p.setHwdec("mediacodec")
+                    p.setVoFallbackConfirmed(true)
+                    Log.i(TAG, "setVoAndHwdec: arm32 TV 运行中不切 embed，已落盘，重启播放器后生效")
+                    return null
+                }
+            } catch (_: Throwable) {
+            }
+        }
         val hasFile = _fileLoaded.value
         // 显式设置 vo（用户切换 / 重置）视为重新选择：允许再次尝试 mediacodec_embed
         voFallbackDone = false
@@ -533,6 +549,8 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 if (frames > 0) {
                     firstFramePerfRunnable = null
                     SwitchPerf.markFirstFrame()
+                    // 直写 Surface 已出帧：清掉 pending 标记，下次启动不再判该组合不可用
+                    try { UserPrefs.getInstance().endEmbedSession() } catch (_: Throwable) {}
                     return
                 }
                 if (android.os.SystemClock.elapsedRealtime() >= deadline) {

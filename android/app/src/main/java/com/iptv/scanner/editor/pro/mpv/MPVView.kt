@@ -101,6 +101,11 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
         voInUse = vo
         savedConfigDir = configDir
         savedCacheDir = cacheDir
+        // 直写 Surface 起播兜底：初始化前打 pending 标记，首帧出来后清除；
+        // 下次启动若标记还在，说明该组合在这台设备上起播即崩，由启动流程拉黑并回退。
+        if (vo == "mediacodec_embed") {
+            try { UserPrefs.getInstance().beginEmbedSession() } catch (_: Throwable) {}
+        }
         // houdini 转译层（x86 模拟器）强制软解：硬解码器 teardown 会 SIGSEGV
         val effectiveHwdec = sanitizeHwdec(hwdec, vo)
         savedHwdec = effectiveHwdec

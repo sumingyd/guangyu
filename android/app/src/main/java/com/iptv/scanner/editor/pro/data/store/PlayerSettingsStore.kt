@@ -153,6 +153,36 @@ class PlayerSettingsStore(
     }
 
     // -----------------------------------------------------------------
+    // 直写 Surface 起播兜底（防止电视卡在崩溃循环）
+    // -----------------------------------------------------------------
+
+    /**
+     * 用 mediacodec_embed 初始化前打标记；首帧稳定后清除。
+     * 下次启动若标记还在，说明这台设备上该组合起播即崩，写入组合黑名单并回退 gpu+软解。
+     */
+    fun beginEmbedSession() {
+        prefs.edit().putBoolean(KEY_EMBED_PENDING, true).apply()
+    }
+
+    fun endEmbedSession() {
+        if (prefs.getBoolean(KEY_EMBED_PENDING, false)) {
+            prefs.edit().putBoolean(KEY_EMBED_PENDING, false).apply()
+        }
+    }
+
+    /** 启动时调用：清理上次遗留的 embed pending 标记，并判定该组合不可用 */
+    fun recoverPendingEmbedSession() {
+        if (!prefs.getBoolean(KEY_EMBED_PENDING, false)) return
+        val combo = "$VO_MEDIACODEC_EMBED|$HWDEC_MEDIACODEC"
+        prefs.edit()
+            .putBoolean(KEY_EMBED_PENDING, false)
+            .putBoolean(KEY_HWDEC_CRASH_BLACKLIST, true)
+            .putString(KEY_HWDEC_CRASH_COMBO, combo)
+            .putBoolean(KEY_VO_AUTO_FALLBACK, true)
+            .apply()
+    }
+
+    // -----------------------------------------------------------------
     // HDR 输出模式
     // -----------------------------------------------------------------
 
@@ -363,6 +393,9 @@ class PlayerSettingsStore(
 
         /** 默认 vo（arm64 TV 的 mediacodec_embed）因起播失败已自动回退到 gpu */
         private const val KEY_VO_AUTO_FALLBACK = "player_vo_auto_fallback"
+
+        /** mediacodec_embed 起播 pending 标记（首帧稳定后清除） */
+        private const val KEY_EMBED_PENDING = "player_embed_pending"
 
         /** 色彩兼容模式（默认关闭） */
         private const val KEY_COLOR_COMPAT_MODE = "player_color_compat_mode"
