@@ -166,8 +166,6 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     @Volatile
     private var voReloadSuppressed = false
 
-    private val unavailableProperties = mutableSetOf<String>()
-
     // -----------------------------------------------------------------
     // 子控制器
     // -----------------------------------------------------------------
@@ -1060,59 +1058,80 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     // -----------------------------------------------------------------
     override fun getMediaInfo(): Map<String, String?> {
         if (mpvView == null) return emptyMap()
-        return try {
+        val startedNs = System.nanoTime()
+        val timings = ArrayList<Pair<String, Long>>(32)
+        fun timedGet(key: String, prop: String): String? {
+            val s = System.nanoTime()
+            val v = safeGet(prop)
+            timings.add(key to (System.nanoTime() - s) / 1000)
+            return v
+        }
+        fun timedGetDouble(key: String, prop: String): String? {
+            val s = System.nanoTime()
+            val v = safeGetDouble(prop)
+            timings.add(key to (System.nanoTime() - s) / 1000)
+            return v
+        }
+        val result = try {
             mapOf(
-                "videoCodec" to safeGet("video-format"),
-                "audioCodec" to safeGet("audio-codec-name"),
+                "videoCodec" to timedGet("videoCodec", "video-format"),
+                "audioCodec" to timedGet("audioCodec", "audio-codec-name"),
                 "videoRes" to "${_videoWidth.value}x${_videoHeight.value}",
-                "fps" to safeGet("container-fps"),
-                "displayFps" to safeGetDouble("display-fps"),
-                "bitrate" to safeGet("video-bitrate"),
-                "audioBitrate" to safeGet("audio-bitrate"),
-                "cacheDuration" to safeGet("demuxer-cache-duration"),
-                "avdiff" to safeGet("total-avsync-change"),
-                "containerFormat" to safeGet("file-format"),
-                "hwdec" to safeGet("hwdec-current"),
-                "vo" to safeGet("vo"),
-                "videoPrimaries" to safeGet("video-params/primaries"),
-                "videoGamma" to safeGet("video-params/gamma"),
-                "videoColorRange" to safeGet("video-params/color-range"),
+                "fps" to timedGet("fps", "container-fps"),
+                "displayFps" to timedGetDouble("displayFps", "display-fps"),
+                "bitrate" to timedGet("bitrate", "video-bitrate"),
+                "audioBitrate" to timedGet("audioBitrate", "audio-bitrate"),
+                "cacheDuration" to timedGet("cacheDuration", "demuxer-cache-duration"),
+                "avdiff" to timedGet("avdiff", "total-avsync-change"),
+                "containerFormat" to timedGet("containerFormat", "file-format"),
+                "hwdec" to timedGet("hwdec", "hwdec-current"),
+                "vo" to timedGet("vo", "vo"),
+                "videoPrimaries" to timedGet("videoPrimaries", "video-params/primaries"),
+                "videoGamma" to timedGet("videoGamma", "video-params/gamma"),
+                "videoColorRange" to timedGet("videoColorRange", "video-params/color-range"),
                 // 颜色管线诊断：当前色调映射算法 / 输出范围 / 是否发生色调映射，
                 // 用户反馈「过曝/发灰」时对号用（信息面板可只读该字段，无需改播放侧）
-                "videoToneMapping" to safeGet("tone-mapping"),
-                "videoOutputLevels" to safeGet("video-output-levels"),
-                "videoHdrComputePeak" to safeGet("hdr-compute-peak"),
+                "videoToneMapping" to timedGet("videoToneMapping", "tone-mapping"),
+                "videoOutputLevels" to timedGet("videoOutputLevels", "video-output-levels"),
+                "videoHdrComputePeak" to timedGet("videoHdrComputePeak", "hdr-compute-peak"),
                 // 扩展信息：音频细节、像素格式、实际渲染性能、流元数据
-                "audioSampleRate" to safeGet("audio-params/samplerate"),
-                "audioChannels" to safeGet("audio-params/channel-layout"),
-                "pixelFormat" to safeGet("video-params/pixelformat"),
-                "colorspace" to safeGet("video-params/colorspace"),
-                "renderFps" to safeGetDouble("estimated-vf-fps"),
-                "droppedFrames" to safeGet("decoder-frame-drop-count"),
-                "cacheSpeed" to safeGetDouble("cache-speed"),
-                "mediaTitle" to safeGet("media-title"),
-                "serviceName" to safeGet("metadata/by-key/service_name"),
-                "serviceProvider" to safeGet("metadata/by-key/service_provider"),
-                "trackCount" to safeGet("track-list/count")
+                "audioSampleRate" to timedGet("audioSampleRate", "audio-params/samplerate"),
+                "audioChannels" to timedGet("audioChannels", "audio-params/channel-layout"),
+                "pixelFormat" to timedGet("pixelFormat", "video-params/pixelformat"),
+                "colorspace" to timedGet("colorspace", "video-params/colorspace"),
+                "renderFps" to timedGetDouble("renderFps", "estimated-vf-fps"),
+                "droppedFrames" to timedGet("droppedFrames", "decoder-frame-drop-count"),
+                "cacheSpeed" to timedGetDouble("cacheSpeed", "cache-speed"),
+                "mediaTitle" to timedGet("mediaTitle", "media-title"),
+                "serviceName" to timedGet("serviceName", "metadata/by-key/service_name"),
+                "serviceProvider" to timedGet("serviceProvider", "metadata/by-key/service_provider"),
+                "trackCount" to timedGet("trackCount", "track-list/count")
             )
         } catch (e: Throwable) {
             Log.w(TAG, "getMediaInfo failed: ${e.message}")
             emptyMap()
         }
+        // 逐属性耗时仅在调试时输出：adb shell setprop log.tag.MpvController VERBOSE
+        // 用于确认「切台徽章读取是否占用 UI 线程并推迟首帧」。
+        if (Log.isLoggable(TAG, Log.VERBOSE)) {
+            val totalUs = (System.nanoTime() - startedNs) / 1000
+            val detail = timings.joinToString(", ") { "${it.first}=${it.second}us" }
+            Log.v(TAG, "getMediaInfo ${result.size} props total=${totalUs}us thread=${Thread.currentThread().name} [$detail]")
+        }
+        return result
     }
 
-    private fun safeGet(name: String): String? {
-        if (name in unavailableProperties) return null
-        return try { MPVLib.getPropertyString(name) } catch (_: Throwable) { unavailableProperties.add(name); null }
-    }
+    // 注意：不要在这里“记住失败过的属性”。切台刚 FILE_LOADED 时 video-format /
+    // audio-codec-name / hwdec-current 可能还不可用，一次读取失败不代表该属性永远取不到；
+    // 一旦缓存成黑名单，本次播放期间徽章与信息面板会一直显示为空。
+    private fun safeGet(name: String): String? =
+        try { MPVLib.getPropertyString(name) } catch (_: Throwable) { null }
 
-    private fun safeGetDouble(name: String): String? {
-        if (name in unavailableProperties) return null
-        return try {
+    private fun safeGetDouble(name: String): String? =
+        try {
             val v = MPVLib.getPropertyDouble(name)
             if (v != null && v > 0) String.format("%.1f", v) else null
-        } catch (_: Throwable) { unavailableProperties.add(name); null }
-    }
+        } catch (_: Throwable) { null }
 
     // -----------------------------------------------------------------
     // HDR 重建协调
@@ -1267,7 +1286,6 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 }
                 playbackController.onStartFile()
                 SwitchPerf.markStartFile()
-                unavailableProperties.clear()
                 cancelPendingFileError()
                 Log.i(TAG, "MPV_EVENT_START_FILE: loadingUrl=${playbackController.loadingUrl}")
             }

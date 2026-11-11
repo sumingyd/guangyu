@@ -75,6 +75,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -98,6 +99,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.iptv.scanner.editor.pro.data.ReminderItem
 import com.iptv.scanner.editor.pro.data.UserPrefs
 import com.iptv.scanner.editor.pro.data.IptvChannel
@@ -357,7 +360,10 @@ internal fun PortraitLocalFileInfo(
             delay(2000L)
         }
     }
-    val mediaInfo = remember(tick) { player.getMediaInfo() }
+    // 媒体信息放后台线程读：单次约 2-40ms，不能占组合主线程（切台时尤甚）
+    val mediaInfo by produceState(initialValue = emptyMap<String, String?>(), tick) {
+        value = withContext(Dispatchers.Default) { player.getMediaInfo() }
+    }
 
     // 最近播放的本地文件
     val recentLocal = remember(history, channels) {
@@ -1128,7 +1134,10 @@ internal fun PortraitPlayerInfoPanel(
             delay(2000L)
         }
     }
-    val mediaInfo = remember(tick) { player.getMediaInfo() }
+    // 媒体信息放后台线程读：单次约 2-40ms，不能占组合主线程（切台时尤甚）
+    val mediaInfo by produceState(initialValue = emptyMap<String, String?>(), tick) {
+        value = withContext(Dispatchers.Default) { player.getMediaInfo() }
+    }
 
     // 关键指标块（替代原频谱）：分辨率+扫描 / 编码 / 码率 / 解码方式。
     // 全部取自 libmpv 属性，取不到的一律显示「—」，不做推断或写死。

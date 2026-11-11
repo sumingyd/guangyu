@@ -78,6 +78,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.derivedStateOf
@@ -100,6 +101,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.iptv.scanner.editor.pro.data.ReminderItem
 import com.iptv.scanner.editor.pro.data.UserPrefs
 import com.iptv.scanner.editor.pro.data.IptvChannel
@@ -695,10 +698,16 @@ internal fun PortraitMediaInfoBar(viewModel: AppViewModel) {
         }
     }
 
-    val mediaInfo = remember(tick, fileLoaded, videoWidth, videoHeight) {
+    val mediaInfo by produceState(
+        initialValue = emptyMap<String, String?>(),
+        tick, fileLoaded, videoWidth, videoHeight
+    ) {
         // 只有在文件已加载且视频尺寸有效时才获取媒体信息
         // 停止状态（fileLoaded=false）不显示任何媒体信息
-        if (fileLoaded && (videoWidth > 0 || videoHeight > 0)) player.getMediaInfo() else emptyMap()
+        // 读取放后台线程：切台瞬间 video-format 首次读取要 20-30ms，不能占组合线程
+        value = if (fileLoaded && (videoWidth > 0 || videoHeight > 0)) {
+            withContext(Dispatchers.Default) { player.getMediaInfo() }
+        } else emptyMap()
     }
 
     // 停止状态（未加载文件）不显示媒体信息内容，但保留与信息条一致的高度占位：

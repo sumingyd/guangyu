@@ -50,6 +50,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.runtime.collectAsState
@@ -81,6 +82,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import coil.compose.AsyncImage
@@ -593,9 +596,9 @@ private fun TvBottomBarStyleA(
     var tick by remember { mutableStateOf(0L) }
     LaunchedEffect(Unit) { while (true) { tick = System.currentTimeMillis(); delay(1000L) } }
 
-    val mediaInfoBadges = if (fileLoaded) remember(tick, videoWidth, videoHeight) {
-        buildTvMediaBadges(mpv, videoWidth, videoHeight, viewModel.getCurrentPlaybackUrl())
-    } else emptyList()
+    val mediaInfoBadges = TvBarMediaBadges(
+        fileLoaded, mpv, videoWidth, videoHeight, viewModel.getCurrentPlaybackUrl(), tick
+    )
 
     val isAndroid12Plus = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S
     val timeFmt = remember { java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()) }
@@ -1447,11 +1450,18 @@ private fun TvBarMediaBadges(
     videoHeight: Int,
     playbackUrl: String,
     tick: Long
-): List<String> = if (fileLoaded) {
-    remember(tick, videoWidth, videoHeight) {
-        buildTvMediaBadges(mpv, videoWidth, videoHeight, playbackUrl)
+): List<String> {
+    // mpv 属性读取放到后台线程：切台瞬间 video-format 首次读取要 20-30ms，
+    // 留在组合线程上会阻塞重组，也会推迟 T5 首帧打点的轮询。
+    val badges by produceState(
+        initialValue = emptyList<String>(),
+        fileLoaded, tick, videoWidth, videoHeight, playbackUrl
+    ) {
+        value = if (!fileLoaded) emptyList()
+        else withContext(Dispatchers.Default) { buildTvMediaBadges(mpv, videoWidth, videoHeight, playbackUrl) }
     }
-} else emptyList()
+    return badges
+}
 
 /** 容器/协议等固定格式标签：这类文本长度固定，统一给固定宽度避免挤压相邻徽章 */
 private val TV_BADGE_FORMAT_LABELS = setOf(
