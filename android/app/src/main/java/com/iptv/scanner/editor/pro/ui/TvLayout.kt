@@ -20,12 +20,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 
@@ -332,9 +336,16 @@ fun TvPlayerLayout(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .width(820.dp)
-                // 导航栏/手势条出现时底栏整体上移，不被系统栏覆盖
-                .navigationBarsPadding()
-                // 外边上边距压到 4dp：底栏贴屏幕底边，去掉上方多余空白
+                // 只取导航栏的「下 + 左右」内边距：
+                // 部分车机 ROM 把顶部系统条也上报为 navigationBars，整组 navigationBarsPadding()
+                // 会在底栏容器顶部加出 40~50dp 的空白，表现为「底栏内容整体被压到下方、
+                // 上面空一条」。全屏播放页系统栏已隐藏，顶部不需要任何让位。
+                .windowInsetsPadding(
+                    WindowInsets.navigationBars.only(
+                        WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal
+                    )
+                )
+                // 上下对称外边距：底栏贴屏幕底边，顶部不再额外留白
                 .padding(vertical = 4.dp)
         ) {
             CompositionLocalProvider(LocalDensity provides barDensity) {
