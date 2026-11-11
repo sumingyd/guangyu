@@ -273,9 +273,11 @@ internal fun AppViewModel.reloadEpgSources(notify: Boolean = true) {
     epgReloadJob = viewModelScope.launch {
         if (notify) showOsd("正在重载 EPG...")
         epgCache.clear()
+        epgMetaCache.clear()
         _epgCacheVersion.value++
         _focusedEpg.value = emptyList()
         _currentEpg.value = emptyList()
+        _currentEpgMeta.value = null
         val result = withContext(Dispatchers.IO) { repository.reloadEpg() }
         result.onSuccess {
             if (notify) showOsd("EPG 重载已启动")
@@ -295,6 +297,7 @@ internal fun AppViewModel.reloadEpgSources(notify: Boolean = true) {
                 }
             }
             epgCache.clear()
+            epgMetaCache.clear()
             _epgCacheVersion.value++
             preloadEpgForAllChannels()
             if (_currentIdx.value >= 0) fetchEpgForCurrent()

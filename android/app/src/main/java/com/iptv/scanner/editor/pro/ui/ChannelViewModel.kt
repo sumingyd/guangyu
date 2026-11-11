@@ -18,6 +18,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.iptv.scanner.editor.pro.data.IptvChannel
+import com.iptv.scanner.editor.pro.data.EpgMatchMeta
 import com.iptv.scanner.editor.pro.data.IptvEpgList
 import com.iptv.scanner.editor.pro.data.IptvEpgProgram
 import com.iptv.scanner.editor.pro.data.IptvEpgSource
@@ -249,6 +250,7 @@ internal fun AppViewModel.stopPlay() {
     mpv.stop()
     _currentIdx.value = -1
     _currentEpg.value = emptyList()
+    _currentEpgMeta.value = null
     showOsd("已停止")
 }
 
@@ -677,16 +679,20 @@ internal fun AppViewModel.fetchEpgForCurrent() {
     val idx = _currentIdx.value
     if (idx < 0) {
         _currentEpg.value = emptyList()
+        _currentEpgMeta.value = null
         return
     }
-    val channel = _channels.value.getOrNull(idx) ?: return
+    val channel = _channels.value.getOrNull(idx) ?: run {
+        _currentEpgMeta.value = null
+        return
+    }
 
     // 优先用缓存（裁剪后给UI，缓存保留完整数据供EPG面板展开用）
     epgCache[idx]?.let { cached ->
         _currentEpg.value = trimEpgNearNow(cached)
+        _currentEpgMeta.value = epgMetaCache[idx] ?: EpgMatchMeta()
         return
     }
-
     _epgLoading.value = true
     val baseName = channel.name
         .removeSuffix("-4K").removeSuffix("-HDR").removeSuffix("-8K")
@@ -700,6 +706,8 @@ internal fun AppViewModel.fetchEpgForCurrent() {
         )
         result.fold(
             onSuccess = { epgList ->
+                epgMetaCache[idx] = EpgMatchMeta.from(epgList)
+                _currentEpgMeta.value = epgMetaCache[idx]
                 val programs = epgList.programmes
                 if (programs.isEmpty()) {
                     // EPG 数据可能还在后台加载，3秒后重试一次
@@ -708,6 +716,10 @@ internal fun AppViewModel.fetchEpgForCurrent() {
                     val retry = withContext(Dispatchers.IO) {
                         // 重试同样使用去后缀的 baseName，避免写错 keyed 缓存
                         repository.getEpg(baseName, channel.tvgId, channel.tvgName, channel.name)
+                    }
+                    retry.getOrNull()?.let { retryEpg ->
+                        epgMetaCache[idx] = EpgMatchMeta.from(retryEpg)
+                        _currentEpgMeta.value = epgMetaCache[idx]
                     }
                     val retryPrograms = retry.getOrNull()?.programmes ?: emptyList()
                     if (retryPrograms.isNotEmpty()) {
@@ -733,6 +745,13 @@ internal fun AppViewModel.fetchEpgForCurrent() {
                     val retry = withContext(Dispatchers.IO) {
                         repository.getEpg(channel.name, channel.tvgId, channel.tvgName, channel.name)
                     }
+                    retry.getOrNull()?.let { retryEpg ->
+                        epgMetaCache[idx] = EpgMatchMeta.from(retryEpg)
+                        _currentEpgMeta.value = epgMetaCache[idx]
+                    } ?: run {
+                        epgMetaCache[idx] = EpgMatchMeta()
+                        _currentEpgMeta.value = epgMetaCache[idx]
+                    }
                     val retryPrograms = retry.getOrNull()?.programmes ?: emptyList()
                     if (retryPrograms.isNotEmpty()) {
                         epgCache[idx] = retryPrograms
@@ -742,6 +761,8 @@ internal fun AppViewModel.fetchEpgForCurrent() {
                     Log.i(AppViewModel.TAG, "fetchEpgForCurrent (retry after fail): ${retryPrograms.size} programs for ${channel.name}")
                 } catch (e2: Exception) {
                     _currentEpg.value = emptyList()
+                    epgMetaCache[idx] = EpgMatchMeta()
+                    _currentEpgMeta.value = epgMetaCache[idx]
                 }
             }
         )
@@ -782,6 +803,7 @@ internal fun AppViewModel.fetchEpgForChannel(idx: Int) {
         )
         result.fold(
             onSuccess = { epgList ->
+                epgMetaCache[idx] = EpgMatchMeta.from(epgList)
                 val programs = epgList.programmes
                 if (programs.isNotEmpty()) {
                     epgCache[idx] = programs
@@ -794,6 +816,7 @@ internal fun AppViewModel.fetchEpgForChannel(idx: Int) {
                     val retry = withContext(Dispatchers.IO) {
                         repository.getEpg(baseName, channel.tvgId, channel.tvgName, channel.name)
                     }
+                    retry.getOrNull()?.let { epgMetaCache[idx] = EpgMatchMeta.from(it) }
                     val retryPrograms = retry.getOrNull()?.programmes ?: emptyList()
                     if (retryPrograms.isNotEmpty()) {
                         epgCache[idx] = retryPrograms
@@ -839,6 +862,7 @@ internal fun AppViewModel.preloadEpgForAllChannels() {
                         )
                         result.fold(
                             onSuccess = { epgList ->
+                                epgMetaCache[idx] = EpgMatchMeta.from(epgList)
                                 val programs = epgList.programmes
                                 if (programs.isNotEmpty()) {
                                     epgCache[idx] = programs

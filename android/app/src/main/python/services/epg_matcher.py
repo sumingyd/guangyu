@@ -66,6 +66,36 @@ _PINYIN_MAP = {
 }
 
 
+try:
+    from services.epg_channel_aliases import CHANNEL_ALIASES as _CHANNEL_ALIASES
+except Exception:  # pragma: no cover - 兼容以包内相对方式导入的场景
+    try:
+        from .epg_channel_aliases import CHANNEL_ALIASES as _CHANNEL_ALIASES
+    except Exception:
+        _CHANNEL_ALIASES = {}
+
+# 匹配层级 -> 展示文案（UI 直接显示这一层，便于用户核对为什么是这条节目单）
+_TIER_LABELS = {
+    'tvg_id 精确': 'tvg-id 精确',
+    'tvg_name 精确': 'tvg-name 精确',
+    'comma_name 精确': '频道名（逗号后）精确',
+    'channel_name 精确': '频道名精确',
+    '归一化精确': '归一化精确',
+    '别名表': '别名表',
+    '核心词精确': '核心词精确',
+}
+
+_alias_lookup_cache = None
+
+
+def _alias_lookup():
+    """人工别名表（频道名 -> {epg_id, source, note}），按归一化名索引。"""
+    global _alias_lookup_cache
+    if _alias_lookup_cache is None:
+        _alias_lookup_cache = {_normalize(k): v for k, v in _CHANNEL_ALIASES.items()}
+    return _alias_lookup_cache
+
+
 def _normalize(name):
     if not name:
         return ''
@@ -155,6 +185,7 @@ class EpgMatcher:
         by_name = {}
         by_norm_name = {}
         by_core_name = {}
+        display_names = {}
         if isinstance(epg_channels, dict):
             items = epg_channels.items()
         elif isinstance(epg_channels, list):
@@ -170,6 +201,7 @@ class EpgMatcher:
             if not epg_id:
                 continue
             by_id[epg_id] = epg_id
+            display_names[epg_id] = epg_display_name or epg_id
             _index_add(by_name, epg_display_name, epg_id)
             _index_add(by_norm_name, _normalize(epg_display_name), epg_id)
             # 核心词索引同时收录"原始归一化名"和"剥离通用词后的核心"，
@@ -177,7 +209,7 @@ class EpgMatcher:
             # 但匹配仍要求整词相等，不做任何模糊/包含。
             _index_add(by_core_name, _normalize(epg_display_name), epg_id)
             _index_add(by_core_name, _core_name(epg_display_name), epg_id)
-        return by_id, by_name, by_norm_name, by_core_name
+        return by_id, by_name, by_norm_name, by_core_name, display_names
 
     @classmethod
     def _resolve_tier(cls, indexes):
@@ -196,16 +228,36 @@ class EpgMatcher:
 
     @classmethod
     def match(cls, channel_name, epg_channels, tvg_id=None, tvg_name=None, comma_name=None):
+        """兼容入口：只返回匹配到的 epg 频道 id（未匹配返回 None）。"""
+        return cls.match_detail(
+            channel_name, epg_channels, tvg_id=tvg_id, tvg_name=tvg_name, comma_name=comma_name
+        ).get('epg_id')
+
+    @classmethod
+    def match_detail(cls, channel_name, epg_channels, tvg_id=None, tvg_name=None, comma_name=None):
+        """返回匹配详情（供 UI 展示"匹配到哪个 EPG 源 / 哪个频道 / 走哪一级命中"）。
+
+        Returns:
+            {
+              'matched': bool,      # 是否匹配到 EPG 频道
+              'epg_id': str|None,   # 匹配到的 epg 频道 id
+              'epg_name': str,      # epg 频道 display-name（取不到时回退 id）
+              'tier': str,          # tvg-id 精确 / 归一化精确 / 别名表 / 核心词精确 / 未匹配
+              'field': str,         # 命中的标识符字段
+              'key': str,           # 命中的比较值
+              'ambiguous': bool,    # 是否因歧义而留空
+            }
+        """
         if not channel_name and not tvg_id and not tvg_name and not comma_name:
-            return None
+            return cls._empty_detail()
 
         cache_key = (channel_name, tvg_id, tvg_name, comma_name)
         with cls._cache_lock:
             if cache_key in cls._smart_cache:
                 cls._smart_cache.move_to_end(cache_key)
-                return cls._smart_cache[cache_key]
+                return dict(cls._smart_cache[cache_key])
 
-        by_id, by_name, by_norm_name, by_core_name = cls._build_index(epg_channels)
+        by_id, by_name, by_norm_name, by_core_name, display_names = cls._build_index(epg_channels)
 
         # 标识符优先级：tvg-id > tvg-name > 逗号后名称 > 频道名
         identifiers = (
@@ -217,6 +269,11 @@ class EpgMatcher:
 
         result = None
         tier = ''
+        field_hit = ''
+        key_hit = ''
+        # 先记录歧义、继续尝试更严格的层级：显式别名表允许消解歧义，
+        # 但核心词层级在存在歧义时不再尝试（宁可留空）。
+        pending_ambiguous = None
 
         # 第 1 级：原始字符串精确（id 或显示名逐字符相等）
         for field, value in identifiers:
@@ -226,11 +283,10 @@ class EpgMatcher:
                 ((by_id, value), (by_name, value))
             )
             if hit:
-                result, tier = hit, f'{field} 精确'
+                result, tier, field_hit, key_hit = hit, f'{field} 精确', field, value
                 break
-            if amb_key:
-                return cls._finish(cache_key, None, channel_name, tvg_id, tvg_name,
-                                   comma_name, ambiguous=(amb_key, amb_ids, field))
+            if amb_key and pending_ambiguous is None:
+                pending_ambiguous = (amb_key, amb_ids, field)
 
         # 第 2 级：归一化后精确相等
         if result is None:
@@ -240,15 +296,14 @@ class EpgMatcher:
             )
             hit, amb_key, amb_ids = cls._resolve_tier(norm_indexes)
             if hit:
-                result, tier = hit, '归一化精确'
-            elif amb_key:
-                return cls._finish(cache_key, None, channel_name, tvg_id, tvg_name,
-                                   comma_name, ambiguous=(amb_key, amb_ids, '归一化'))
+                result, tier, field_hit = hit, '归一化精确', '归一化'
+            elif amb_key and pending_ambiguous is None:
+                pending_ambiguous = (amb_key, amb_ids, '归一化')
 
-        # 第 3 级：严格别名表（人工维护白名单）
+        # 第 3 级：严格别名表（人工维护白名单，可显式消解上一级的歧义）
         if result is None:
             alias_indexes = []
-            for _, value in identifiers:
+            for field, value in identifiers:
                 if not value:
                     continue
                 alias = _COMMON_ALIASES.get(_normalize(value))
@@ -261,38 +316,55 @@ class EpgMatcher:
                     alias_indexes.append((by_norm_name, _normalize(pinyin_alias)))
                     if _core_name(pinyin_alias):
                         alias_indexes.append((by_core_name, _core_name(pinyin_alias)))
+                # 人工别名表：直接指定 epg 频道 id，且该 id 必须真实存在于当前 EPG 数据
+                entry = _alias_lookup().get(_normalize(value))
+                if entry:
+                    alias_id = entry.get('epg_id')
+                    if alias_id and alias_id in by_id:
+                        alias_indexes.append((by_id, alias_id))
+                        if not key_hit:
+                            key_hit = alias_id
             hit, amb_key, amb_ids = cls._resolve_tier(alias_indexes)
             if hit:
-                result, tier = hit, '别名表'
-            elif amb_key:
-                return cls._finish(cache_key, None, channel_name, tvg_id, tvg_name,
-                                   comma_name, ambiguous=(amb_key, amb_ids, '别名表'))
+                result, tier, field_hit = hit, '别名表', 'alias'
+            elif amb_key and pending_ambiguous is None:
+                pending_ambiguous = (amb_key, amb_ids, '别名表')
 
         # 第 4 级：剥离通用词后核心词整词相等（必须仍保留区分性词）
-        if result is None:
+        if result is None and pending_ambiguous is None:
             core_indexes = tuple(
                 (by_core_name, _core_name(value))
                 for _, value in identifiers if _core_name(value)
             )
             hit, amb_key, amb_ids = cls._resolve_tier(core_indexes)
             if hit:
-                result, tier = hit, '核心词精确'
+                result, tier, field_hit = hit, '核心词精确', '核心词'
             elif amb_key:
-                return cls._finish(cache_key, None, channel_name, tvg_id, tvg_name,
-                                   comma_name, ambiguous=(amb_key, amb_ids, '核心词'))
+                pending_ambiguous = (amb_key, amb_ids, '核心词')
 
-        return cls._finish(cache_key, result, channel_name, tvg_id, tvg_name,
-                           comma_name, tier=tier)
+        return cls._finish(
+            cache_key, result, channel_name, tvg_id, tvg_name, comma_name,
+            tier=tier, ambiguous=pending_ambiguous,
+            display_name=display_names.get(result, result) if result else '',
+            field=field_hit, key=key_hit,
+        )
+
+    @staticmethod
+    def _empty_detail():
+        return {
+            'matched': False, 'epg_id': None, 'epg_name': '', 'tier': '未匹配',
+            'field': '', 'key': '', 'ambiguous': False,
+        }
 
     @classmethod
     def _finish(cls, cache_key, result, channel_name, tvg_id, tvg_name, comma_name,
-                tier='', ambiguous=None):
+                tier='', ambiguous=None, display_name='', field='', key=''):
         if ambiguous:
-            key, candidates, level = ambiguous
+            amb_key, candidates, level = ambiguous
             logger.debug(
                 f"EPG匹配歧义未匹配: channel={channel_name!r} tvg_id={tvg_id!r} "
                 f"tvg_name={tvg_name!r} comma_name={comma_name!r} "
-                f"层级={level} key={key!r} 候选={list(candidates)!r}"
+                f"层级={level} key={amb_key!r} 候选={list(candidates)!r}"
             )
         else:
             logger.debug(
@@ -300,11 +372,20 @@ class EpgMatcher:
                 f"tvg_name={tvg_name!r} comma_name={comma_name!r} "
                 f"-> epg_id={result!r}" + (f" via {tier}" if result else " via 未匹配")
             )
+        detail = {
+            'matched': bool(result),
+            'epg_id': result,
+            'epg_name': display_name or (result or ''),
+            'tier': _TIER_LABELS.get(tier, tier) if result else '未匹配',
+            'field': field,
+            'key': key,
+            'ambiguous': bool(ambiguous),
+        }
         with cls._cache_lock:
             if len(cls._smart_cache) >= _MAX_CACHE_SIZE:
                 cls._smart_cache.popitem(last=False)
-            cls._smart_cache[cache_key] = result
-        return result
+            cls._smart_cache[cache_key] = detail
+        return detail
 
     @classmethod
     def clear_cache(cls):

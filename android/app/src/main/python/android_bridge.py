@@ -1102,8 +1102,12 @@ def get_epg_status_json():
 
 def get_epg_json(channel_name='', tvg_id='', tvg_name='', comma_name=''):
     """获取指定频道的节目单 JSON。
-    匹配优先级：tvg_name > tvg_id > comma_name > channel_name > EpgMatcher 模糊匹配。
-    返回 {programmes: [{title, desc, start, end, start_ts, stop_ts}]} 或 {error}
+
+    匹配优先级：tvg_id > tvg_name > comma_name > channel_name > EpgMatcher 分级匹配。
+    除节目列表外还返回匹配元数据（EPG 源、epg 频道 id/display-name、命中层级），
+    供播放页信息弹窗显示"这个频道匹配到了哪个 EPG 源的哪个频道"。
+    返回 {programmes: [...], matched, epg_matched, epg_id, epg_name, match_tier,
+          epg_source_name, epg_source_url} 或 {error}
     """
     try:
         ctx = _get_ctx()
@@ -1111,13 +1115,24 @@ def get_epg_json(channel_name='', tvg_id='', tvg_name='', comma_name=''):
             return _err('not inited')
         sm = ctx.get_epg_parser()
         if sm is None:
-            return _ok({'programmes': [], 'matched': False})
-        programmes = sm.get_channel_epg(
-            channel_name=channel_name,
-            tvg_id=tvg_id or None,
-            tvg_name=tvg_name or None,
-            comma_name=comma_name or None,
-        )
+            return _ok({'programmes': [], 'matched': False, 'epg_matched': False,
+                        'epg_id': '', 'epg_name': '', 'match_tier': '未匹配',
+                        'epg_source_name': '', 'epg_source_url': ''})
+        meta = {}
+        if hasattr(sm, 'get_channel_epg_detail'):
+            programmes, meta = sm.get_channel_epg_detail(
+                channel_name=channel_name,
+                tvg_id=tvg_id or None,
+                tvg_name=tvg_name or None,
+                comma_name=comma_name or None,
+            )
+        else:
+            programmes = sm.get_channel_epg(
+                channel_name=channel_name,
+                tvg_id=tvg_id or None,
+                tvg_name=tvg_name or None,
+                comma_name=comma_name or None,
+            )
         # 填充 Unix 时间戳字段（Kotlin 端用此判断当前节目，与 server/routes.py handle_epg 逻辑一致）
         for p in (programmes or []):
             if 'start_ts' not in p:
@@ -1161,6 +1176,12 @@ def get_epg_json(channel_name='', tvg_id='', tvg_name='', comma_name=''):
         return _ok({
             'programmes': programmes or [],
             'matched': bool(programmes),
+            'epg_matched': bool(meta.get('matched')),
+            'epg_id': meta.get('epg_id', '') or '',
+            'epg_name': meta.get('epg_name', '') or '',
+            'match_tier': meta.get('tier', '未匹配') or '未匹配',
+            'epg_source_name': meta.get('source_name', '') or '',
+            'epg_source_url': meta.get('source_url', '') or '',
         })
     except Exception as e:
         _ab_logger.exception('get_epg_json failed')

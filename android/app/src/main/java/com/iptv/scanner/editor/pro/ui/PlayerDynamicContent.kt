@@ -1064,6 +1064,7 @@ internal fun PortraitRecentLocalFiles(viewModel: AppViewModel) {
 /**
  * 播放信息「关键指标块」：大字数值在上、小字标签在下（对齐 TiviMini 播放信息面板的层级）。
  * 配色只走现有 token：数值 accentText、标签 textSecondary、底 surfaceVariant、描边 borderSubtle。
+ * 数值字号 16sp + 占满块宽居中：码率等数值在窄块里也能完整显示（不会出现 "5.4 …"）。
  */
 @Composable
 private fun InfoStatChip(label: String, value: String, modifier: Modifier = Modifier) {
@@ -1072,16 +1073,18 @@ private fun InfoStatChip(label: String, value: String, modifier: Modifier = Modi
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .border(1.dp, tvPalette.borderSubtle, RoundedCornerShape(12.dp))
-            .padding(vertical = 10.dp, horizontal = 6.dp),
+            .padding(vertical = 10.dp, horizontal = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         Text(
             text = value,
             color = tvPalette.accentText,
-            fontSize = 18.sp,
+            fontSize = 16.sp,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
             overflow = TextOverflow.Ellipsis
         )
         Text(
@@ -1093,6 +1096,11 @@ private fun InfoStatChip(label: String, value: String, modifier: Modifier = Modi
         )
     }
 }
+
+/** 码率紧凑格式："5.4M" / "640K"；供窄信息块与媒体徽章统一使用，避免被省略号截断。 */
+internal fun formatBitrateCompact(bitsPerSecond: Long): String =
+    if (bitsPerSecond >= 1_000_000) "%.1fM".format(bitsPerSecond / 1e6)
+    else "${(bitsPerSecond / 1000).coerceAtLeast(1)}K"
 
 // -----------------------------------------------------------------
 // 播放信息面板（竖屏播放页 Tab）
@@ -1242,7 +1250,9 @@ internal fun PortraitPlayerInfoPanel(
     }
     val bitrateValue = (liveBitrate?.takeIf { it > 0 }?.toLong()
         ?: v("bitrate")?.toLongOrNull()?.takeIf { it > 0 })?.let {
-        if (it >= 1_000_000) String.format("%.1f Mbps", it / 1e6) else "${it / 1000} kbps"
+        // 紧凑写法（5.4M / 640K）：竖屏信息 Tab 的指标块只有约 1/4 屏宽，
+        // 原来的 "5.4 Mbps" 会被省略成 "5.4 …"，这里缩短数值并保留单位，确保完整显示。
+        formatBitrateCompact(it)
     } ?: "—"
     val decodeValue = mediaInfo["hwdec"]
         ?.takeIf { it.isNotEmpty() && it != "null" }

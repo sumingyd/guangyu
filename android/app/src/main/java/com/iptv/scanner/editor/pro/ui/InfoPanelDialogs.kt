@@ -381,6 +381,7 @@ internal fun ChannelInfoDialog(viewModel: AppViewModel) {
     val videoWidth by mpv.videoWidth.collectAsState()
     val videoHeight by mpv.videoHeight.collectAsState()
     val currentProgram = viewModel.getCurrentProgram()
+    val epgMeta by viewModel.currentEpgMeta.collectAsState()
     val oc = rememberPlayerOverlayColors()
     val config = LocalConfiguration.current
     val isAptv = config.orientation == Configuration.ORIENTATION_PORTRAIT
@@ -392,6 +393,25 @@ internal fun ChannelInfoDialog(viewModel: AppViewModel) {
         currentChannel?.let { ch ->
             add("频道名" to ch.name)
             if (ch.group.isNotEmpty()) add("分类" to ch.group)
+            // EPG 匹配来源：这个频道的节目单来自哪个 EPG 源、哪个 epg 频道、走哪一级命中。
+            // 未匹配的频道明确显示"未匹配"，不留空。
+            val meta = epgMeta
+            when {
+                meta == null -> add("EPG 源" to "查询中…")
+                meta.matched -> {
+                    add("EPG 源" to meta.sourceName.ifEmpty {
+                        meta.sourceUrl.ifEmpty { "未知源" }
+                    })
+                    add("EPG 频道" to meta.epgName.ifEmpty { meta.epgId })
+                    if (meta.epgId.isNotEmpty()) add("EPG ID" to meta.epgId)
+                    add("匹配方式" to meta.tier.ifEmpty { "已匹配" })
+                }
+                else -> {
+                    add("EPG 源" to "未匹配")
+                    add("EPG 频道" to "—")
+                    add("匹配方式" to "—")
+                }
+            }
             if (ch.tvgId.isNotEmpty()) add("TVG-ID" to ch.tvgId)
             if (ch.tvgName.isNotEmpty()) add("TVG-Name" to ch.tvgName)
             if (ch.tvgChno.isNotEmpty()) add("频道号" to ch.tvgChno)

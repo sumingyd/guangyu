@@ -120,7 +120,36 @@ data class IptvEpgProgram(
 data class IptvEpgList(
     @SerialName("programmes") val programmes: List<IptvEpgProgram> = emptyList(),
     @SerialName("matched") val matched: Boolean = false,
+    /** 是否匹配到 EPG 频道（与"是否有节目"无关，便于信息弹窗展示匹配来源） */
+    @SerialName("epg_matched") val epgMatched: Boolean = false,
+    @SerialName("epg_id") val epgId: String = "",
+    @SerialName("epg_name") val epgName: String = "",
+    @SerialName("match_tier") val matchTier: String = "",
+    @SerialName("epg_source_name") val epgSourceName: String = "",
+    @SerialName("epg_source_url") val epgSourceUrl: String = "",
 )
+
+/** 频道 → EPG 的匹配来源（播放页信息弹窗展示用） */
+data class EpgMatchMeta(
+    val matched: Boolean = false,
+    val epgId: String = "",
+    val epgName: String = "",
+    /** 命中层级：tvg-id 精确 / 归一化精确 / 别名表 / 核心词精确 / 未匹配 */
+    val tier: String = "",
+    val sourceName: String = "",
+    val sourceUrl: String = "",
+) {
+    companion object {
+        fun from(epg: IptvEpgList): EpgMatchMeta = EpgMatchMeta(
+            matched = epg.epgMatched,
+            epgId = epg.epgId,
+            epgName = epg.epgName,
+            tier = epg.matchTier,
+            sourceName = epg.epgSourceName,
+            sourceUrl = epg.epgSourceUrl,
+        )
+    }
+}
 
 @Serializable
 data class IptvEpgStatus(

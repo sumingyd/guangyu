@@ -1007,8 +1007,7 @@ private fun buildSplitAllBadges(
     // 视频码率
     val videoBitrate = try { mpv.getPropertyInt("video-bitrate") } catch (_: Exception) { null }
     if (videoBitrate != null && videoBitrate > 0) {
-        val kbps = videoBitrate / 1000
-        result.add(if (kbps >= 1000) "%.1fMbps".format(kbps / 1000.0) else "${kbps}kbps")
+        result.add(formatBitrateCompact(videoBitrate.toLong()))
     }
     // HDR（传输特性/色彩域）
     when {

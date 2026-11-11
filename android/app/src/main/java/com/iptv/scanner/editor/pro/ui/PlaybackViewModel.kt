@@ -718,7 +718,9 @@ internal fun AppViewModel.setEpgTimezoneOffset(value: Int) {
     userPrefs.setEpgTimezoneOffset(value)
     // 清除 EPG 缓存，下次获取时使用新时区
     epgCache.clear()
+    epgMetaCache.clear()
     _currentEpg.value = emptyList()
+    _currentEpgMeta.value = null
     fetchEpgForCurrent()
 }
 

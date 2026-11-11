@@ -26,6 +26,9 @@ class SubscriptionManager(Singleton):
         self._config = ConfigManager()
         self._epg_data = {}
         self._epg_channel_names = {}
+        # epg 频道 id -> {'name': EPG源名称, 'url': EPG源地址}
+        # 多源合并时同一频道只保留第一个提供数据的源，与 _epg_data 的替补规则一致。
+        self._epg_channel_sources = {}
         self._last_epg_update = None
         self._epg_lock = threading.RLock()
         # 最近一次 EPG 加载失败的可读原因（成功时为空串），供上层提示用户
@@ -280,6 +283,7 @@ class SubscriptionManager(Singleton):
             return False
         
         merged_data = {}
+        merged_sources = {}
         total_sources = len(sources)
         failed_sources = 0
         failed_reasons = []
@@ -293,9 +297,14 @@ class SubscriptionManager(Singleton):
 
                 if data:
                     new_channels = 0
+                    source_info = {
+                        'name': source.get('name', '') or source['url'],
+                        'url': source['url'],
+                    }
                     for channel_id, programs in data.items():
                         if channel_id not in merged_data:
                             merged_data[channel_id] = programs
+                            merged_sources[channel_id] = source_info
                             new_channels += 1
 
                     logger.info(f"成功加载EPG源: {source.get('name', '')}, 包含 {len(data)} 个频道, 新增 {new_channels} 个频道")
@@ -323,6 +332,7 @@ class SubscriptionManager(Singleton):
         
         with self._epg_lock:
             self._epg_data = merged_data
+            self._epg_channel_sources = merged_sources
             self._last_epg_update = datetime.now()
         self._clear_epg_matcher_cache()
         
@@ -372,9 +382,14 @@ class SubscriptionManager(Singleton):
             
             with self._epg_lock:
                 new_channels = 0
+                source_info = {
+                    'name': source.get('name', '') or source.get('url', ''),
+                    'url': source.get('url', ''),
+                }
                 for channel_id, programs in data.items():
                     if channel_id not in self._epg_data:
                         self._epg_data[channel_id] = programs
+                        self._epg_channel_sources[channel_id] = source_info
                         new_channels += 1
                 
                 self._last_epg_update = datetime.now()
@@ -427,9 +442,11 @@ class SubscriptionManager(Singleton):
             if data:
                 with self._epg_lock:
                     new_channels = 0
+                    source_info = {'name': epg_url, 'url': epg_url}
                     for channel_id, programs in data.items():
                         if channel_id not in self._epg_data:
                             self._epg_data[channel_id] = programs
+                            self._epg_channel_sources[channel_id] = source_info
                             new_channels += 1
                     self._last_epg_update = datetime.now()
                 self._clear_epg_matcher_cache()
@@ -948,53 +965,89 @@ class SubscriptionManager(Singleton):
 
     def get_channel_epg(self, channel_name: str, tvg_id: str | None = None,
                         tvg_name: str | None = None, comma_name: str | None = None) -> list:
-        """获取频道的EPG节目列表（仅精确匹配）
+        """获取频道的EPG节目列表（仅精确匹配），不关心匹配来源时用这个入口。"""
+        programmes, _meta = self.get_channel_epg_detail(
+            channel_name, tvg_id, tvg_name=tvg_name, comma_name=comma_name
+        )
+        return programmes
+
+    def get_channel_epg_detail(self, channel_name: str, tvg_id: str | None = None,
+                              tvg_name: str | None = None,
+                              comma_name: str | None = None) -> tuple[list, dict]:
+        """获取频道的EPG节目列表 + 匹配元数据（供 UI 显示"匹配到哪个源/哪个频道/哪一级"）。
 
         匹配优先级：
-        1. tvg-name 精确匹配
-        2. tvg-id 精确匹配
+        1. tvg-id 精确匹配
+        2. tvg-name 精确匹配
         3. m3u标签行逗号后的频道名字精确匹配
         4. channel_name 精确匹配
-
-        Args:
-            channel_name: 频道名称
-            tvg_id: TVG-ID（可选）
-            tvg_name: TVG-NAME（可选）
-            comma_name: m3u标签行逗号后的频道名字（可选）
+        5. EpgMatcher 分级匹配（归一化精确 / 别名表 / 核心词精确）
+        6. 未匹配
 
         Returns:
-            节目列表
+            (节目列表, 元数据)。元数据字段：
+            matched / epg_id / epg_name / tier / source_name / source_url / ambiguous
         """
         with self._epg_lock:
-            if tvg_name:
-                if tvg_name in self._epg_data:
-                    return list(self._epg_data[tvg_name])
-
-            if tvg_id:
-                if tvg_id in self._epg_data:
-                    return list(self._epg_data[tvg_id])
-
-            if comma_name:
-                if comma_name in self._epg_data:
-                    return list(self._epg_data[comma_name])
-
-            if channel_name:
-                if channel_name in self._epg_data:
-                    return list(self._epg_data[channel_name])
+            for field, value, tier in (
+                ('tvg_id', tvg_id, 'tvg-id 精确'),
+                ('tvg_name', tvg_name, 'tvg-name 精确'),
+                ('comma_name', comma_name, '频道名（逗号后）精确'),
+                ('channel_name', channel_name, '频道名精确'),
+            ):
+                if value and value in self._epg_data:
+                    return (list(self._epg_data[value]),
+                            self._build_epg_meta(value, tier=tier, field=field, key=value))
 
             try:
                 from services.epg_matcher import EpgMatcher
-                epg_channels = {epg_id: self._epg_channel_names.get(epg_id, epg_id) for epg_id in self._epg_data.keys()}
-                matched_id = EpgMatcher.match(
+                epg_channels = {epg_id: self._epg_channel_names.get(epg_id, epg_id)
+                                for epg_id in self._epg_data.keys()}
+                detail = EpgMatcher.match_detail(
                     channel_name, epg_channels,
                     tvg_id=tvg_id, tvg_name=tvg_name, comma_name=comma_name
                 )
+                matched_id = detail.get('epg_id')
                 if matched_id and matched_id in self._epg_data:
-                    return list(self._epg_data[matched_id])
+                    return (list(self._epg_data[matched_id]),
+                            self._build_epg_meta(
+                                matched_id, tier=detail.get('tier', ''),
+                                field=detail.get('field', ''), key=detail.get('key', ''),
+                                ambiguous=detail.get('ambiguous', False),
+                            ))
+                return [], self._build_epg_meta(None, ambiguous=detail.get('ambiguous', False))
             except Exception as ex:
                 logger.warning(f"EpgMatcher 匹配异常: {ex}")
 
-            return []
+            return [], self._build_epg_meta(None)
+
+    def _build_epg_meta(self, epg_id: str | None, tier: str = '未匹配', field: str = '',
+                        key: str = '', ambiguous: bool = False) -> dict:
+        """组装 EPG 匹配元数据（调用方需持有 _epg_lock）"""
+        if not epg_id:
+            return {
+                'matched': False,
+                'epg_id': '',
+                'epg_name': '',
+                'tier': '未匹配',
+                'source_name': '',
+                'source_url': '',
+                'field': field,
+                'key': key,
+                'ambiguous': bool(ambiguous),
+            }
+        source = self._epg_channel_sources.get(epg_id) or {}
+        return {
+            'matched': True,
+            'epg_id': epg_id,
+            'epg_name': self._epg_channel_names.get(epg_id, epg_id),
+            'tier': tier or '未匹配',
+            'source_name': source.get('name', ''),
+            'source_url': source.get('url', ''),
+            'field': field,
+            'key': key,
+            'ambiguous': bool(ambiguous),
+        }
     
     def get_current_program(self, channel_name: str, tvg_id: str | None = None,
                             tvg_name: str | None = None, comma_name: str | None = None) -> dict | None:
@@ -1084,9 +1137,11 @@ class SubscriptionManager(Singleton):
         try:
             with self._epg_lock:
                 channel_names = dict(self._epg_channel_names)
+                channel_sources = dict(getattr(self, '_epg_channel_sources', {}) or {})
             cache_payload = {
                 'epg_data': data,
                 'channel_names': channel_names,
+                'channel_sources': channel_sources,
             }
             fd, tmp_path = tempfile.mkstemp(dir=cache_dir, suffix='.tmp', prefix='epg_')
             try:
@@ -1128,9 +1183,12 @@ class SubscriptionManager(Singleton):
                 if isinstance(data, dict) and 'epg_data' in data:
                     self._epg_data = data['epg_data']
                     self._epg_channel_names = data.get('channel_names', {})
+                    # 旧缓存没有来源信息，按空处理（UI 会显示"未知源"）
+                    self._epg_channel_sources = data.get('channel_sources', {}) or {}
                 else:
                     self._epg_data = data
                     self._epg_channel_names = {}
+                    self._epg_channel_sources = {}
                     for channel_id in data.keys():
                         self._epg_channel_names[channel_id] = channel_id
                 self._last_epg_update = datetime.now()

@@ -413,6 +413,13 @@ internal var switchPlayJob: Job? = null
     internal val _currentEpg = MutableStateFlow<List<IptvEpgProgram>>(emptyList())
     val currentEpg: StateFlow<List<IptvEpgProgram>> = _currentEpg.asStateFlow()
 
+    /** key=channel idx, value=该频道 EPG 的匹配来源（信息弹窗展示"匹配到哪个源/哪个频道"） */
+    internal val epgMetaCache = mutableMapOf<Int, com.iptv.scanner.editor.pro.data.EpgMatchMeta>()
+
+    internal val _currentEpgMeta = MutableStateFlow<com.iptv.scanner.editor.pro.data.EpgMatchMeta?>(null)
+    val currentEpgMeta: StateFlow<com.iptv.scanner.editor.pro.data.EpgMatchMeta?> =
+        _currentEpgMeta.asStateFlow()
+
     internal val _epgLoading = MutableStateFlow(false)
     val epgLoading: StateFlow<Boolean> = _epgLoading.asStateFlow()
 

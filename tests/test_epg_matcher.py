@@ -88,3 +88,33 @@ def test_cctv_alias_table_still_works():
     epg = {'CCTV1': 'CCTV-1', 'CCTV5': 'CCTV-5'}
     assert EpgMatcher.match('央视一套', epg) == 'CCTV1'
     assert EpgMatcher.match('CCTV1综合', epg) == 'CCTV1'
+
+
+def test_match_detail_reports_tier_and_display_name():
+    """UI 信息弹窗依赖的匹配元数据：epg id / display-name / 命中层级。"""
+    d = EpgMatcher.match_detail('完全不同的名字', EPG, tvg_id='CCTV5')
+    assert d['matched'] is True
+    assert d['epg_id'] == 'CCTV5'
+    assert d['epg_name'] == 'CCTV-5'
+    assert d['tier'] == 'tvg-id 精确'
+
+    d = EpgMatcher.match_detail('湖南卫视', EPG)
+    assert d['tier'] == '频道名精确'
+
+
+def test_match_detail_unmatched_is_explicit():
+    d = EpgMatcher.match_detail('靖江新闻综合', EPG)
+    assert d['matched'] is False
+    assert d['epg_id'] is None
+    assert d['tier'] == '未匹配'
+    assert EpgMatcher.match('靖江新闻综合', EPG) is None
+
+
+def test_alias_table_backfills_only_existing_epg_ids():
+    """人工别名表：命中记为"别名表"层级；登记的 id 不在当前 EPG 数据里时不得凭空命中。"""
+    epg = {'临淄TV-1': '临淄TV-1'}
+    d = EpgMatcher.match_detail('临淄综合', epg, tvg_id='临淄综合', tvg_name='临淄综合')
+    assert d['epg_id'] == '临淄TV-1'
+    assert d['tier'] == '别名表'
+
+    assert EpgMatcher.match('临淄综合', {'其他频道': '其他频道'}) is None
