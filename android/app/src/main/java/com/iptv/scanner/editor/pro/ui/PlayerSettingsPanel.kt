@@ -816,6 +816,13 @@ private fun PlayerSettingsPanelAptv(viewModel: AppViewModel) {
                         // 电视/盒子：copy-back 与 AImageReader 直通都会崩，只保留软解
                         else -> if (viewModel.isArm32TvDevice) {
                             listOf("no" to "no（软解）")
+                        } else if (viewModel.isHandheldDevice) {
+                            // 手机/平板：mediacodec 经 AImageReader 直通，不回落 CPU
+                            listOf(
+                                "mediacodec" to "mediacodec（直通，推荐）",
+                                "auto-copy" to "auto-copy（兼容）",
+                                "no" to "no（软解）"
+                            )
                         } else listOf(
                             "auto-copy" to "auto-copy（推荐）",
                             "auto" to "auto（4K HDR）",
@@ -832,7 +839,7 @@ private fun PlayerSettingsPanelAptv(viewModel: AppViewModel) {
                     val hwdecDesc = when (currentHwdec) {
                         "auto-copy" -> "自动选择硬件解码器，解码后拷贝到 CPU 内存再上传 GPU。兼容性好，支持视频滤镜（翻转/裁剪/360°）。4K HDR 可能卡顿"
                         "auto" -> "自动选择最佳硬解，优先直接输出（零拷贝）。4K HDR 流畅，但视频翻转/裁剪/360° 滤镜可能不可用"
-                        "mediacodec" -> "MediaCodec 硬件解码，直接渲染到 Surface。必须与 vo=mediacodec_embed 配合"
+                        "mediacodec" -> "MediaCodec 硬件解码：vo=mediacodec_embed 时直接写 Surface；vo=gpu/gpu-next 时经 AImageReader 直通，不回落 CPU"
                         "no" -> "纯软件解码。兼容性最好但耗电，CPU 解码可能慢"
                         else -> "未知 hwdec: $currentHwdec"
                     }

@@ -593,6 +593,9 @@ internal var switchPlayJob: Job? = null
     /** arm32 电视/盒子：设置页隐藏 copy-back（auto-copy/auto）选项 */
     val isArm32TvDevice: Boolean = userPrefs.isArm32TvDevice()
 
+    /** 手机/平板（arm64 手持）：GPU 路径默认走 mediacodec 直通 */
+    val isHandheldDevice: Boolean = userPrefs.isHandheldDevice()
+
     /** 自适应渲染路径原因：subtitle / filter / fallback，null=默认或手动选择 */
     val renderPathReason: StateFlow<String?> get() = mpvSingleton.renderPathReason
 
