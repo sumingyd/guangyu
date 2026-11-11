@@ -184,6 +184,9 @@ class IptvApplication : PyApplication(), ImageLoaderFactory {
                 loader.memoryCache?.clear()
                 loader.diskCache?.clear()
                 Log.w(TAG, "onTrimMemory: cleared all caches (level=$level)")
+                // 后台低内存回收不是硬解崩溃：先标记非播放中，
+                // 避免下次启动把系统回收误判成 MediaCodec 崩溃而拉黑硬解。
+                NativeCrashLogger.setPlaybackActive(this, false)
             }
         }
 

@@ -127,6 +127,14 @@ class UserPrefs private constructor() {
     fun getHwdec(): String = playerSettingsStore.getHwdec()
     fun setHwdec(hwdec: String) = playerSettingsStore.setHwdec(hwdec)
 
+    /** arm32 TV 是否允许默认硬解（MTK/Sony 等已知崩溃厂商仍返回 false） */
+    fun isArm32TvHardwareDecodeAllowed(): Boolean =
+        playerSettingsStore.isArm32TvHardwareDecodeAllowed()
+
+    /** 是否为已知会导致 MediaCodec teardown 崩溃的厂商/平台 */
+    fun isHardwareDecodeUnsafeVendor(): Boolean =
+        playerSettingsStore.isHardwareDecodeUnsafeVendor()
+
     /** 是否处于「硬解导致崩溃」的设备黑名单（强制软解） */
     fun isHwdecBlacklisted(): Boolean = playerSettingsStore.isHwdecBlacklisted()
 

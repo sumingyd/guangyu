@@ -532,6 +532,7 @@ internal fun AppViewModel.playChannel(idx: Int, silent: Boolean = false) {
         return
     }
     Log.i(AppViewModel.TAG, "playChannel: ${channel.name} (${channel.url})")
+    com.iptv.scanner.editor.pro.mpv.SwitchPerf.markRequest(channel.name, channel.url)
 
     val oldIdx = _currentIdx.value
     if (oldIdx != idx) {
@@ -580,6 +581,7 @@ internal fun AppViewModel.playChannel(idx: Int, silent: Boolean = false) {
         // 如果在 loadfile 之后发送（旧实现），代理不知道新频道，
         // mpv 连接后代理才开始加入组播，导致数秒延迟。
         fccService.onChannelChange(channel.url)
+        com.iptv.scanner.editor.pro.mpv.SwitchPerf.markFccJoined()
         // 先应用频道专属设置（vo/hwdec），避免 loadfile 后再重建 VO 触发二次 loadfile。
         // 换台期间抑制 setVoAndHwdec 对旧 URL 的重载：否则会把旧流重新 loadfile，
         // 与「先 JOIN 新组播、再加载新 URL」的 FCC 时序冲突（L6）。
@@ -588,6 +590,9 @@ internal fun AppViewModel.playChannel(idx: Int, silent: Boolean = false) {
         // 用户看到的是“换台后一直卡、改回硬解也没用”。
         (_player.value as? MpvController)?.retryHardwareDecodeIfDegraded("channel switch")
         applyChannelSettingsIfNeeded(idx)
+        com.iptv.scanner.editor.pro.mpv.SwitchPerf.markBeforeLoad(
+            userPrefs.getVo(), userPrefs.getHwdec()
+        )
         mpv.playFile(channel.url)
         (_player.value as? MpvController)?.releaseVoReloadSuppression()
         // 超时换源必须在等待加载前启动：加载成功后定时器到点检查

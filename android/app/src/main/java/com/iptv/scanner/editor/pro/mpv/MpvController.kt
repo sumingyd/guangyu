@@ -111,8 +111,8 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     /** VO 弱判定（无视频轨/无渲染帧）延时任务 */
     private var voWeakCheckRunnable: Runnable? = null
 
-    /** 稳定硬解 N 分钟后解除崩溃黑名单 */
-    private var hwdecGraceRunnable: Runnable? = null
+    /** 换台首帧耗时打点任务 */
+    private var firstFramePerfRunnable: Runnable? = null
 
     /** 本会话内“会话级软解降级”的重试次数上限，防止在坏设备上反复崩溃 */
     private var hwdecRetryCount = 0
@@ -495,6 +495,39 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     }
 
     /**
+     * 首帧出画耗时打点：FILE_LOADED 之后轮询 estimated-frame-number，
+     * 第一次 > 0 即认为新频道首帧已经显示，输出 T5 相对 T0 的耗时。
+     * 只做日志，不影响播放行为。
+     */
+    private fun scheduleFirstFramePerf() {
+        firstFramePerfRunnable?.let { mpvView?.asView()?.removeCallbacks(it) }
+        val view = mpvView?.asView() ?: return
+        val deadline = android.os.SystemClock.elapsedRealtime() + 3_000L
+        val runnable = object : Runnable {
+            override fun run() {
+                val frames = try {
+                    MPVLib.getPropertyInt("estimated-frame-number") ?: 0
+                } catch (_: Throwable) {
+                    0
+                }
+                if (frames > 0) {
+                    firstFramePerfRunnable = null
+                    SwitchPerf.markFirstFrame()
+                    return
+                }
+                if (android.os.SystemClock.elapsedRealtime() >= deadline) {
+                    firstFramePerfRunnable = null
+                    Log.w(TAG, "first-frame perf: timeout after 3s")
+                    return
+                }
+                view.postDelayed(this, 16L)
+            }
+        }
+        firstFramePerfRunnable = runnable
+        view.postDelayed(runnable, 16L)
+    }
+
+    /**
      * VO 健康检查（每个文件最多一次）：
      * FILE_LOADED 后 1.5s，如果有视频轨但 `vo-configured` 仍不是 yes，
      * 说明 VO 没真正接管 Surface（表现为“只有声音没画面”），
@@ -623,34 +656,6 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     }
 
     /**
-     * 硬解稳定运行 N 分钟后确认这部分设备可硬解，解除崩溃黑名单。
-     * （旧实现只写不清，黑名单一旦写入就永久软解。）
-     */
-    private fun scheduleHwdecGraceClear() {
-        hwdecGraceRunnable?.let { mpvView?.asView()?.removeCallbacks(it) }
-        val runnable = Runnable {
-            hwdecGraceRunnable = null
-            try {
-                if (!_fileLoaded.value) return@Runnable
-                val current = _actualHwdec.value.ifEmpty { MPVLib.getPropertyString("hwdec-current") ?: "" }
-                if (current.isEmpty() || current == "no") return@Runnable
-                hwdecRetryCount = 0
-                if (UserPrefs.getInstance().isHwdecBlacklisted()) {
-                    UserPrefs.getInstance().setHwdecBlacklisted(false)
-                    _hwdecBlacklisted.value = false
-                    Log.w(TAG, "hwdec blacklist cleared after ${HWDEC_GRACE_MS / 1000}s stable hardware playback ($current)")
-                } else {
-                    Log.i(TAG, "hwdec stable for ${HWDEC_GRACE_MS / 1000}s ($current), nothing to clear")
-                }
-            } catch (e: Throwable) {
-                Log.w(TAG, "hwdec grace clear failed: ${e.message}")
-            }
-        }
-        hwdecGraceRunnable = runnable
-        mpvView?.asView()?.postDelayed(runnable, HWDEC_GRACE_MS)
-    }
-
-    /**
      * 用户在设置页显式选择了硬解：解除崩溃黑名单并给一次干净的重试机会。
      * 若该机型真的会崩，NativeCrashLogger 会在下次启动重新写入黑名单。
      */
@@ -708,6 +713,11 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
             return
         }
         userStopped = false
+        // 从发起加载起就标记「播放中」：硬解崩溃可能发生在 FILE_LOADED 之前的解码器初始化阶段，
+        // 等到 FILE_LOADED 再写会漏判成后台回收，导致黑名单兜底失效。
+        mpvView?.asView()?.context?.applicationContext?.let {
+            NativeCrashLogger.setPlaybackActive(it, true)
+        }
         ensureAudioFocus()?.onUserResume()
         playbackController.playFile(url)
     }
@@ -757,7 +767,14 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     override fun stop() {
         // 用户主动停止：随后的 END_FILE 不应被当作播放错误
         userStopped = true
+        firstFramePerfRunnable?.let { mpvView?.asView()?.removeCallbacks(it) }
+        firstFramePerfRunnable = null
+        SwitchPerf.markAbort("user-stop")
         audioFocusHelper?.abandon()
+        // 停止后标记空闲：按 Home/退出播放页再被系统回收，不再误判成硬解崩溃
+        mpvView?.asView()?.context?.applicationContext?.let {
+            NativeCrashLogger.setPlaybackActive(it, false)
+        }
         playbackController.stop()
     }
     override fun togglePause() {
@@ -1023,6 +1040,8 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 userStopped = false
                 val loadedUrl = try { MPVLib.getPropertyString("path") ?: "" } catch (_: Throwable) { "" }
                 playbackController.onFileLoaded(loadedUrl)
+                SwitchPerf.markFileLoaded()
+                scheduleFirstFramePerf()
                 _eofReached.value = false
 
                 try {
@@ -1053,7 +1072,6 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 }
 
                 scheduleVoHealthCheck()
-                scheduleHwdecGraceClear()
 
                 mpvView?.let { v ->
                     val pos = v.pendingResumePos
@@ -1073,7 +1091,12 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 _fileLoaded.value = false
                 _eofReached.value = false
                 userStopped = false
+                // 新文件开始加载即视为播放中（解码器初始化阶段的硬解崩溃要能被黑名单捕获）
+                mpvView?.asView()?.context?.applicationContext?.let {
+                    NativeCrashLogger.setPlaybackActive(it, true)
+                }
                 playbackController.onStartFile()
+                SwitchPerf.markStartFile()
                 unavailableProperties.clear()
                 cancelPendingFileError()
                 Log.i(TAG, "MPV_EVENT_START_FILE: loadingUrl=${playbackController.loadingUrl}")
@@ -1087,6 +1110,7 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 // loadfile replace 时 path 很可能已经指向新 URL，用它判断归属会失真。
                 // 现在用「上一次真正 FILE_LOADED 的 URL」+「换台代次」记账。
                 val switching = playbackController.switchingChannel
+                val hadPendingLoad = playbackController.pendingLoadUrl.isNotEmpty()
                 val endedUrl = playbackController.lastLoadedUrl.ifEmpty { playbackController.loadingUrl }
                 val wasPlaying = wasLoaded || playbackController.lastLoadedUrl.isNotEmpty()
                 val gen = playbackController.switchGeneration
@@ -1141,6 +1165,14 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                     playbackController.clearPendingLoadUrl()
                 }
                 playbackController.onEndFile()
+                // 文件已结束且没有在途换台：若随后按 Home 被系统回收，不应算作硬解崩溃。
+                // 换台时保留「播放中」，由新文件的 START_FILE/FILE_LOADED 继续维持。
+                if (!switching && !hadPendingLoad) {
+                    mpvView?.asView()?.context?.applicationContext?.let {
+                        NativeCrashLogger.setPlaybackActive(it, false)
+                    }
+                    SwitchPerf.markAbort("end-file")
+                }
             }
             MPVLib.MpvEvent.MPV_EVENT_SHUTDOWN -> {
                 Log.w(TAG, "MPV_EVENT_SHUTDOWN: mpv core has shut down, marking instance as dead")
@@ -1169,9 +1201,6 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
 
         /** VO 弱判定（无视频轨/无帧）在健康检查之后再等多久 */
         private const val VO_WEAK_CHECK_DELAY_MS = 2500L
-
-        /** 硬解稳定运行多久后解除崩溃黑名单 */
-        private const val HWDEC_GRACE_MS = 180_000L
 
         /** 进程内允许的“会话级软解降级”恢复重试次数 */
         private const val MAX_HWDEC_RETRIES_PER_SESSION = 3

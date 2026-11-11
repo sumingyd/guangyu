@@ -336,7 +336,8 @@ private fun PlayerSettingsLeftColumn(viewModel: AppViewModel) {
         ) {
             when (currentVo) {
                 "gpu", "gpu-next" -> {
-                    FilterChip(selected = currentHwdec == "auto-copy", onClick = { viewModel.setPlayerHwdec("auto-copy") }, label = { Text("auto-copy（推荐）") }, modifier = Modifier.tvFocusBorder())
+                    FilterChip(selected = currentHwdec == "mediacodec", onClick = { viewModel.setPlayerHwdec("mediacodec") }, label = { Text("mediacodec（硬解）") }, modifier = Modifier.tvFocusBorder())
+                    FilterChip(selected = currentHwdec == "auto-copy", onClick = { viewModel.setPlayerHwdec("auto-copy") }, label = { Text("auto-copy（兼容）") }, modifier = Modifier.tvFocusBorder())
                     FilterChip(selected = currentHwdec == "auto", onClick = { viewModel.setPlayerHwdec("auto") }, label = { Text("auto（4K HDR）") }, modifier = Modifier.tvFocusBorder())
                     FilterChip(selected = currentHwdec == "no", onClick = { viewModel.setPlayerHwdec("no") }, label = { Text("no（软解）") }, modifier = Modifier.tvFocusBorder())
                 }
@@ -345,11 +346,23 @@ private fun PlayerSettingsLeftColumn(viewModel: AppViewModel) {
                 }
             }
         }
+        if (hwdecBlacklisted) {
+            Spacer(modifier = Modifier.height(6.dp))
+            FilterChip(
+                selected = false,
+                onClick = {
+                    // 用户显式重试硬解：解除黑名单 + 清除会话降级，只给这一次机会
+                    viewModel.setPlayerHwdec("mediacodec")
+                },
+                label = { Text("重试硬件解码") },
+                modifier = Modifier.tvFocusBorder()
+            )
+        }
         Spacer(modifier = Modifier.height(6.dp))
         val hwdecDesc = when (currentHwdec) {
             "auto-copy" -> "自动选择硬件解码器，解码后拷贝到 CPU 内存再上传 GPU。兼容性好，支持视频滤镜（翻转/裁剪/360°）。4K HDR 可能卡顿"
             "auto" -> "自动选择最佳硬解，优先直接输出（零拷贝）。4K HDR 流畅，但视频翻转/裁剪/360° 滤镜可能不可用"
-            "mediacodec" -> "MediaCodec 硬件解码，直接渲染到 Surface。必须与 vo=mediacodec_embed 配合"
+            "mediacodec" -> "MediaCodec 硬件解码：vo=gpu 时经 AImageReader 直通 GPU（不落 CPU 内存），vo=mediacodec_embed 时解码器直接写 Surface"
             "no" -> "纯软件解码。兼容性最好但耗电，CPU 解码可能慢"
             else -> "未知 hwdec: $currentHwdec"
         }
@@ -996,5 +1009,9 @@ private fun hwdecActualText(actual: String, blacklisted: Boolean): String {
         actual == "no" -> "实际生效：软解（no）"
         else -> "实际生效：$actual"
     }
-    return if (blacklisted) "$actualPart · 该设备在硬解崩溃黑名单中（成功硬解 3 分钟后自动解除）" else actualPart
+    return if (blacklisted) {
+        "$actualPart · 上次硬解异常退出，已自动降级为软解；可点「重试硬件解码」再试一次"
+    } else {
+        actualPart
+    }
 }

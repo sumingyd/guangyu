@@ -98,18 +98,32 @@ object NativeCrashLogger {
             if (sessionFile.exists()) {
                 val content = sessionFile.readText().trim()
                 if (content.startsWith("true")) {
-                    // 上次会话异常退出（native 崩溃），保存日志缓冲区 + 系统缓冲区 dump
-                    saveCrashReport(context)
-                    // 上次会话是硬解：说明该设备硬解路径可能导致 native 崩溃，
-                    // 加入设备黑名单，本次会话强制软解（用户手动切回硬解时解除）
-                    val crashedHwdec = content.substringAfter("hwdec=", "").trim()
-                    if (crashedHwdec.isNotEmpty() && crashedHwdec != "no") {
-                        // 直接写 SharedPreferences：此时 UserPrefs 门面尚未 init
-                        prefs(context).edit()
-                            .putBoolean(PlayerSettingsStore.KEY_HWDEC_CRASH_BLACKLIST, true)
-                            .apply()
-                        Log.w(TAG, "previous session crashed with hwdec=$crashedHwdec, " +
-                            "hardware decode blacklisted for this device")
+                    // playing=0 表示上次退出时并不在播放：更可能是按 Home 后被系统回收，
+                    // 不是硬解 native 崩溃。此时不写崩溃报告、也不拉黑硬解。
+                    // 旧格式没有 playing=，按原来的崩溃处理，避免升级后漏掉真实崩溃。
+                    val playingFlag = if (content.contains("playing=")) {
+                        content.substringAfter("playing=").substringBefore("|").trim()
+                    } else {
+                        null
+                    }
+                    if (playingFlag == "0") {
+                        Log.i(TAG, "previous session ended while idle (likely background kill), " +
+                            "skip crash report and hwdec blacklist")
+                    } else {
+                        // 上次会话异常退出（native 崩溃），保存日志缓冲区 + 系统缓冲区 dump
+                        saveCrashReport(context)
+                        // 上次会话是硬解：说明该设备硬解路径可能导致 native 崩溃，
+                        // 加入设备黑名单，本次会话强制软解（用户手动切回硬解时解除）
+                        val crashedHwdec = content.substringAfter("hwdec=", "")
+                            .substringBefore("|").trim()
+                        if (crashedHwdec.isNotEmpty() && crashedHwdec != "no") {
+                            // 直接写 SharedPreferences：此时 UserPrefs 门面尚未 init
+                            prefs(context).edit()
+                                .putBoolean(PlayerSettingsStore.KEY_HWDEC_CRASH_BLACKLIST, true)
+                                .apply()
+                            Log.w(TAG, "previous session crashed with hwdec=$crashedHwdec, " +
+                                "hardware decode blacklisted for this device")
+                        }
                     }
                 }
             }
@@ -266,13 +280,50 @@ object NativeCrashLogger {
     /**
      * 记录当前生效的 hwdec，供下次启动判断「硬解是否导致崩溃」。
      * 按频道切换 hwdec 时也会更新，保证崩溃时记录的是真实生效值。
+     * 保留已有的 playing 标记，避免切换 hwdec 时把「播放中」误清成空闲。
      */
     fun setActiveHwdec(context: Context, hwdec: String) {
         try {
             val appContext = context.applicationContext
-            File(appContext.filesDir, SESSION_FILE).writeText("true|hwdec=$hwdec")
+            val file = File(appContext.filesDir, SESSION_FILE)
+            val playing = try {
+                if (file.exists()) {
+                    val content = file.readText()
+                    if (content.startsWith("true")) {
+                        content.substringAfter("playing=", "0").substringBefore("|").trim()
+                    } else {
+                        "0"
+                    }
+                } else {
+                    "0"
+                }
+            } catch (_: Throwable) {
+                "0"
+            }
+            file.writeText("true|hwdec=$hwdec|playing=${playing.ifEmpty { "0" }}")
         } catch (e: Exception) {
             Log.w(TAG, "setActiveHwdec failed: ${e.message}")
+        }
+    }
+
+    /**
+     * 标记当前是否处于「播放中」。
+     *
+     * 崩溃判定只认「播放中异常退出」：按 Home 后进程被系统回收时播放早已停止，
+     * 不应被当成硬解崩溃而拉黑硬解。
+     */
+    fun setPlaybackActive(context: Context, active: Boolean) {
+        try {
+            val appContext = context.applicationContext
+            val file = File(appContext.filesDir, SESSION_FILE)
+            if (!file.exists()) return
+            val content = file.readText()
+            // 已正常退出（false）后不再改写，避免把干净会话重新标成 alive
+            if (!content.startsWith("true")) return
+            val hwdec = content.substringAfter("hwdec=", "unknown").substringBefore("|").trim()
+            file.writeText("true|hwdec=${hwdec.ifEmpty { "unknown" }}|playing=${if (active) 1 else 0}")
+        } catch (e: Exception) {
+            Log.w(TAG, "setPlaybackActive failed: ${e.message}")
         }
     }
 
@@ -289,7 +340,7 @@ object NativeCrashLogger {
             } catch (e: Exception) {
                 "unknown"
             }
-            File(context.filesDir, SESSION_FILE).writeText("true|hwdec=$hwdec")
+            File(context.filesDir, SESSION_FILE).writeText("true|hwdec=$hwdec|playing=0")
         } catch (e: Exception) {
             Log.w(TAG, "markSessionAlive failed: ${e.message}")
         }

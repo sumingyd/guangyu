@@ -770,8 +770,18 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
                     Log.w(TAG, "hwdec: device in crash blacklist -> force software decode")
                     "no"
                 }
-                isHoudiniTranslation() || arm32TvDetected == true -> {
-                    Log.w(TAG, "hwdec: houdini=${isHoudiniTranslation()} arm32Tv=$arm32TvDetected -> force software decode (avoid MediaCodec teardown SIGSEGV)")
+                isHoudiniTranslation() -> {
+                    Log.w(TAG, "hwdec: houdini=true -> force software decode (translation layer SIGSEGV)")
+                    "no"
+                }
+                // arm32 TV：只对已知会崩的厂商（MediaTek / Sony BRAVIA）强制软解；
+                // Amlogic 等未出现 teardown 崩溃的设备放开，由崩溃黑名单兜底。
+                arm32TvDetected == true && (try {
+                    UserPrefs.getInstance().isHardwareDecodeUnsafeVendor()
+                } catch (_: Throwable) {
+                    true
+                }) -> {
+                    Log.w(TAG, "hwdec: arm32 TV on known-bad vendor -> force software decode")
                     "no"
                 }
                 else -> hwdec

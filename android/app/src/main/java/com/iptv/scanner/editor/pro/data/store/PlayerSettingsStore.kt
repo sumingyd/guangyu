@@ -332,13 +332,20 @@ class PlayerSettingsStore(
         private const val HWDEC_MEDIACODEC = "mediacodec"
 
         /**
-         * arm32（armeabi-v7a）TV 设备：MediaCodec 硬解码器运行中的 teardown
-         * 存在 native 空指针崩溃（Sony BRAVIA VH21 实测，无论 mediacodec copy
-         * 还是 mediacodec_embed 直渲，vo 切换/换台触发解码器销毁即 SIGSEGV，
-         * fault addr 0x18/0x24，OMX.MTK 解码器区域）。唯一稳定路径是软解，
-         * 与 houdini 转译层同构规避：默认 hwdec=no（sanitizeHwdec 双保险强制）。
+         * arm32（armeabi-v7a）TV 设备默认尝试 MediaCodec 硬解。
+         *
+         * 历史崩溃只发生在 Sony BRAVIA VH21（MediaTek / OMX.MTK）单机型：
+         * copy 起播路径 fault addr 0x18、embed teardown 路径 fault addr 0x24。
+         * 没有 Amlogic/S905 等设备的崩溃证据，且同 SoC 上 EXO 硬解流畅，
+         * 因此默认放开，由崩溃黑名单兜底；已知会崩的厂商仍走软解（见下方判断）。
          */
-        private const val TV_ARM32_HWDEC_VALUE = "no"
+        private const val TV_ARM32_HWDEC_VALUE = "mediacodec"
+
+        /** 已知会导致 MediaCodec teardown SIGSEGV 的 arm32 设备走软解 */
+        private const val TV_ARM32_UNSAFE_HWDEC_VALUE = "no"
+
+        /** MediaTek 平台标识：mt5895 / mt5891 / mt8695 等 */
+        private val MTK_PLATFORM_PATTERN = Regex("(^|[-_])mt\\d{3,5}")
     }
 
     /** 是否为 arm32 TV 设备（仅 armeabi-v7a 主 ABI 的电视/盒子） */
@@ -352,12 +359,44 @@ class PlayerSettingsStore(
     }
 
     /**
+     * 是否为已知会导致 MediaCodec teardown SIGSEGV 的厂商/平台。
+     *
+     * 目前只有 Sony BRAVIA VH21（MediaTek / OMX.MTK）有实测崩溃证据：
+     * - `vo=gpu + hwdec=auto-copy` 起播数秒内 SIGSEGV（fault addr 0x18）；
+     * - `vo=mediacodec_embed + hwdec=mediacodec` 换台/切 vo 解码器销毁时 SIGSEGV（0x24）。
+     * 因此 MediaTek 平台和 Sony BRAVIA 一律保留软解，其他 arm32 设备才放开。
+     */
+    fun isHardwareDecodeUnsafeVendor(): Boolean {
+        return try {
+            val manufacturer = android.os.Build.MANUFACTURER.orEmpty().lowercase()
+            val brand = android.os.Build.BRAND.orEmpty().lowercase()
+            val model = android.os.Build.MODEL.orEmpty().lowercase()
+            val hardware = android.os.Build.HARDWARE.orEmpty().lowercase()
+            val board = android.os.Build.BOARD.orEmpty().lowercase()
+            manufacturer.contains("sony") ||
+                brand.contains("sony") ||
+                model.contains("bravia") ||
+                MTK_PLATFORM_PATTERN.containsMatchIn(hardware) ||
+                MTK_PLATFORM_PATTERN.containsMatchIn(board) ||
+                hardware.contains("mtk") ||
+                board.contains("mtk")
+        } catch (_: Throwable) {
+            // 判断失败时保守：不放开硬解
+            true
+        }
+    }
+
+    /** 供 mpv 层判断：arm32 TV 是否允许默认硬解（排除已知会崩的厂商） */
+    fun isArm32TvHardwareDecodeAllowed(): Boolean =
+        isArm32Tv() && !isHardwareDecodeUnsafeVendor()
+
+    /**
      * 是否为 arm64 电视/盒子。
      *
      * 这类设备默认走 vo=mediacodec_embed + hwdec=mediacodec（解码器直接写 Surface，
      * 零拷贝、少一次 GPU 上传）。出错时由 MpvController 自动回退 gpu + auto-copy 一次。
      * 手机/平板/车机（非 TV 模式）不放开，避免非电视设备走未验证路径；
-     * arm32 TV 也不放开（解码器 teardown SIGSEGV，见 TV_ARM32_HWDEC_VALUE）。
+     * arm32 TV 由 [isArm32TvHardwareDecodeAllowed] 判定（MTK/Sony 仍走软解）。
      */
     private fun isArm64Tv(): Boolean {
         val ctx = appContext ?: return false
@@ -371,8 +410,11 @@ class PlayerSettingsStore(
         if (isArm64Tv()) VO_MEDIACODEC_EMBED else DEFAULT_VO_VALUE
 
     private fun defaultHwdec(): String = when {
-        // arm32 TV：MediaCodec teardown SIGSEGV，只能软解
-        isArm32Tv() -> TV_ARM32_HWDEC_VALUE
+        // arm32 TV：Amlogic 等非 MTK 设备默认尝试 mediacodec（vo=gpu + AImageReader 直通），
+        // MTK/Sony 等已知崩溃厂商仍保持软解。
+        isArm32Tv() ->
+            if (isArm32TvHardwareDecodeAllowed()) TV_ARM32_HWDEC_VALUE
+            else TV_ARM32_UNSAFE_HWDEC_VALUE
         // 默认 vo 是 mediacodec_embed 时，hwdec 必须配对 mediacodec（零拷贝直渲）
         hasExplicitVo().not() && defaultVo() == VO_MEDIACODEC_EMBED -> HWDEC_MEDIACODEC
         else -> DEFAULT_HWDEC_VALUE
