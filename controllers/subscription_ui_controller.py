@@ -167,10 +167,24 @@ class SubscriptionUIController:
 
     # ---- 通用实现 ----
 
+    def _refresh_source_item_text(self, item, source, source_type):
+        if source_type == 'playlist':
+            item.setFlags(item.flags() | QtCore.Qt.ItemFlag.ItemIsUserCheckable)
+            checked = bool(source.get('enabled'))
+            item.setCheckState(
+                QtCore.Qt.CheckState.Checked if checked else QtCore.Qt.CheckState.Unchecked)
+            item.setText(f"{'✓ ' if checked else '  '}{source.get('name', 'Unnamed')}")
+        else:
+            item.setText(source.get('name', 'Unnamed'))
+        item.setToolTip(source.get('url', ''))
+
     def _add_or_update_source(self, source_type):
-        from core.subscription_manager import global_subscription_manager
+        """只改对话框内的列表，写盘与下载统一在点「保存」时进行。
+
+        以前每次增删改都立即写配置：点「取消」也会生效，且保存时对比不出
+        URL 变化，改完订阅地址不会重新下载。
+        """
         cfg = self._get_source_config(source_type)
-        mgr = global_subscription_manager
 
         url = cfg['url_edit'].text().strip()
         name = cfg['name_edit'].text().strip() or None
@@ -180,30 +194,26 @@ class SubscriptionUIController:
         editing_index = self._get_editing_index(source_type)
         list_widget = cfg['list_widget']
 
-        if editing_index >= 0:
-            getattr(self, cfg['manager_updater'])(mgr, editing_index, url, name)
-            sources = getattr(self, cfg['manager_getter'])(mgr)
-            if editing_index >= len(sources):
-                self._set_editing_index(source_type, -1)
-                return
-            updated_source = sources[editing_index]
+        if 0 <= editing_index < list_widget.count():
             item = list_widget.item(editing_index)
-            if item:
-                item.setText(updated_source.get('name', 'Unnamed'))
-                item.setData(QtCore.Qt.ItemDataRole.UserRole, updated_source)
-                item.setToolTip(updated_source.get('url', ''))
+            source = dict(item.data(QtCore.Qt.ItemDataRole.UserRole) or {})
+            source['url'] = url
+            if name:
+                source['name'] = name
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, source)
+            self._refresh_source_item_text(item, source, source_type)
             self._set_editing_index(source_type, -1)
             cfg['add_btn'].setText(self._tr("add_source", "+ Add Source"))
         else:
-            index = getattr(self, cfg['manager_adder'])(mgr, url, name)
-            sources = getattr(self, cfg['manager_getter'])(mgr)
-            if index is None or index < 0 or index >= len(sources):
-                return
-            new_source = sources[index]
-            item = QListWidgetItem(new_source.get('name', 'Unnamed'))
-            item.setData(QtCore.Qt.ItemDataRole.UserRole, new_source)
-            item.setToolTip(new_source.get('url', ''))
+            source = {
+                'url': url,
+                'name': name or f"Source {list_widget.count() + 1}",
+                'enabled': list_widget.count() == 0,
+            }
+            item = QListWidgetItem(source['name'])
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, source)
             list_widget.addItem(item)
+            self._refresh_source_item_text(item, source, source_type)
 
         cfg['url_edit'].clear()
         cfg['name_edit'].clear()
@@ -225,16 +235,25 @@ class SubscriptionUIController:
         cfg['add_btn'].setText(self._tr("update_source", "✎ Update"))
 
     def _remove_selected_source(self, source_type):
-        from core.subscription_manager import global_subscription_manager
+        """只从对话框列表移除，点「保存」时才写配置。"""
         cfg = self._get_source_config(source_type)
-        mgr = global_subscription_manager
+        list_widget = cfg['list_widget']
 
-        current_row = cfg['list_widget'].currentRow()
+        current_row = list_widget.currentRow()
         if current_row < 0:
             return
 
-        getattr(self, cfg['manager_remover'])(mgr, current_row)
-        cfg['list_widget'].takeItem(current_row)
+        removed = list_widget.takeItem(current_row)
+        removed_source = removed.data(QtCore.Qt.ItemDataRole.UserRole) if removed else None
+
+        # 删掉的正好是启用中的直播源：把第一项改为启用，避免保存后没有任何启用的源
+        if source_type == 'playlist' and removed_source and removed_source.get('enabled'):
+            if list_widget.count() > 0:
+                first = list_widget.item(0)
+                first_source = dict(first.data(QtCore.Qt.ItemDataRole.UserRole) or {})
+                first_source['enabled'] = True
+                first.setData(QtCore.Qt.ItemDataRole.UserRole, first_source)
+                self._refresh_source_item_text(first, first_source, source_type)
 
         editing_index = self._get_editing_index(source_type)
         if editing_index == current_row:

@@ -413,6 +413,91 @@ class TestChannelSettingsPersistence:
         ctrl.clear_settings_for_url('http://live.example/1.m3u8')
         assert PlaybackSettingsStore(str(tmp_path)).load_settings('http://live.example/1.m3u8') == {}
 
+class TestSubscriptionDialogIsolation:
+    """设置对话框内的订阅源增删改只改列表，点保存才落盘。"""
+
+    @staticmethod
+    def _ensure_app():
+        from PySide6.QtWidgets import QApplication
+        return QApplication.instance() or QApplication([])
+
+    def _make(self):
+        from PySide6.QtWidgets import QLineEdit, QListWidget, QPushButton
+        from controllers.subscription_ui_controller import SubscriptionUIController
+        self._ensure_app()
+        w = MagicMock()
+        w.playlist_list_widget = QListWidget()
+        w.playlist_new_url_edit = QLineEdit()
+        w.playlist_new_name_edit = QLineEdit()
+        w._playlist_add_btn = QPushButton()
+        w._editing_playlist_index = -1
+        w.language_manager = None
+        return w, SubscriptionUIController(w)
+
+    def test_add_source_does_not_write_config(self):
+        from PySide6 import QtCore
+        w, ctrl = self._make()
+        w.playlist_new_url_edit.setText('http://127.0.0.1/a.m3u')
+        with patch('core.subscription_manager.global_subscription_manager') as mgr:
+            ctrl.add_or_update_playlist_source()
+            mgr.add_playlist_source.assert_not_called()
+            mgr._config.save_playlist_sources.assert_not_called()
+        assert w.playlist_list_widget.count() == 1
+        item = w.playlist_list_widget.item(0)
+        data = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        assert data['url'] == 'http://127.0.0.1/a.m3u'
+        assert data['enabled'] is True
+        assert '✓' in item.text()
+
+    def test_remove_source_does_not_write_config(self):
+        from PySide6 import QtCore
+        from PySide6.QtWidgets import QListWidgetItem
+        w, ctrl = self._make()
+        for i in range(2):
+            item = QListWidgetItem(f'S{i}')
+            item.setData(QtCore.Qt.ItemDataRole.UserRole,
+                         {'url': f'http://127.0.0.1/{i}.m3u', 'name': f'S{i}',
+                          'enabled': i == 0})
+            w.playlist_list_widget.addItem(item)
+        w.playlist_list_widget.setCurrentRow(0)
+        with patch('core.subscription_manager.global_subscription_manager') as mgr:
+            ctrl.remove_selected_playlist_source()
+            mgr.remove_playlist_source.assert_not_called()
+        assert w.playlist_list_widget.count() == 1
+        first = w.playlist_list_widget.item(0).data(QtCore.Qt.ItemDataRole.UserRole)
+        assert first['enabled'] is True
+
+    def test_save_reloads_when_url_changed_in_dialog(self):
+        from PySide6 import QtCore
+        from PySide6.QtWidgets import QListWidget, QListWidgetItem
+        from controllers.settings_file_ops import SettingsFileOperations
+        self._ensure_app()
+        w = MagicMock()
+        w.language_manager.tr = lambda k, d=None: d or k
+        w.playlist_list_widget = QListWidget()
+        item = QListWidgetItem('UiTest')
+        item.setData(QtCore.Qt.ItemDataRole.UserRole,
+                     {'url': 'http://new/a.m3u', 'name': 'UiTest', 'enabled': True})
+        w.playlist_list_widget.addItem(item)
+        w.epg_list_widget = QListWidget()
+
+        dialog = MagicMock()
+        dialog._old_playlist_sources = [
+            {'url': 'http://old/a.m3u', 'name': 'UiTest', 'enabled': True}]
+        dialog._old_epg_sources = []
+        dialog._old_active_playlist_index = 0
+
+        ops = SettingsFileOperations(w)
+        with patch.object(ops, '_reload_playlist_async') as reload_mock, \
+             patch.object(ops, '_save_intervals'), \
+             patch.object(ops, '_save_close_behavior'), \
+             patch.object(ops, '_save_screensaver_settings'), \
+             patch.object(ops, '_apply_playback_settings'), \
+             patch('controllers.settings_file_ops.global_subscription_manager'):
+            ops._save_and_close_settings(dialog)
+        reload_mock.assert_called_once()
+
+
 class TestReconnectTerminalStatusBar:
     """断流重连耗尽后，状态栏不能显示成用户主动“已暂停”。"""
 

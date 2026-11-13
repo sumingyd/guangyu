@@ -251,6 +251,14 @@ class SettingsFileOperations:
 
         main_layout.addWidget(tab_widget, 1)
 
+        # 记录打开对话框时的订阅配置，作为「保存」时判断是否需要重新下载的基线
+        dialog._old_playlist_sources = [
+            dict(s) for s in global_subscription_manager.get_playlist_sources()]
+        dialog._old_epg_sources = [
+            dict(s) for s in global_subscription_manager.get_epg_sources()]
+        dialog._old_active_playlist_index = (
+            global_subscription_manager.get_active_playlist_source_index())
+
         self._connect_subscription_signals(playlist_section, epg_section)
 
         button_layout = QHBoxLayout()
@@ -937,18 +945,25 @@ class SettingsFileOperations:
 
     def _save_and_close_settings(self, dialog):
         try:
-            old_playlist = global_subscription_manager.get_playlist_sources()
-            old_epg = global_subscription_manager.get_epg_sources()
-            old_active_index = global_subscription_manager.get_active_playlist_source_index()
+            # 订阅源在对话框内只改列表，因此用「打开对话框时」的配置做对比基线；
+            # 保存时再读配置会拿到已改动后的值，导致改 URL 后不触发重新下载。
+            old_playlist = getattr(dialog, '_old_playlist_sources', None)
+            old_epg = getattr(dialog, '_old_epg_sources', None)
+            old_active_index = getattr(dialog, '_old_active_playlist_index', None)
+            if old_playlist is None:
+                old_playlist = global_subscription_manager.get_playlist_sources()
+            if old_epg is None:
+                old_epg = global_subscription_manager.get_epg_sources()
+            if old_active_index is None:
+                old_active_index = global_subscription_manager.get_active_playlist_source_index()
 
             new_playlist = self._extract_sources_from_ui('playlist')
             new_epg = self._extract_sources_from_ui('epg')
             new_playback = self._extract_playback_settings(dialog)
 
-            if new_playlist:
-                global_subscription_manager._config.save_playlist_sources(new_playlist)
-            if new_epg:
-                global_subscription_manager._config.save_epg_sources(new_epg)
+            # 无条件写入：删光订阅源也要能保存为空
+            global_subscription_manager._config.save_playlist_sources(new_playlist)
+            global_subscription_manager._config.save_epg_sources(new_epg)
 
             self._save_intervals(dialog)
             self._save_close_behavior(dialog)
