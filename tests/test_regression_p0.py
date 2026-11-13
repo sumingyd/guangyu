@@ -348,3 +348,67 @@ class TestEpgReminderBoundary:
         svc._check_reminders()
         assert len(fired) == 1
         assert fired[0]['program_title'] == '新闻联播'
+
+class TestChannelSettingsPersistence:
+    """按频道（URL）保存的播放设置：换台前必须落盘，删除频道后要清掉。"""
+
+    class _Sig:
+        def connect(self, _fn):
+            pass
+
+    class _PC:
+        def __init__(self):
+            self.file_loaded = TestChannelSettingsPersistence._Sig()
+            self.local_file_position_to_save = TestChannelSettingsPersistence._Sig()
+            self.about_to_stop = TestChannelSettingsPersistence._Sig()
+            self.current_url = 'http://live.example/1.m3u8'
+            self.is_playing = True
+
+        def get_volume(self): return 40
+        def get_mute(self): return False
+        def get_aspect_ratio(self): return '16:9'
+        def get_video_rotate(self): return 0
+        def get_video_flip(self): return ''
+        def get_sub_delay(self): return 0.0
+        def get_audio_delay(self): return 0.0
+        def get_current_track(self, kind):
+            return {'sub': 1, 'audio': 2}.get(kind)
+
+    def _window(self, tmp_path):
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            player_controller=self._PC(),
+            config=SimpleNamespace(config_dir=str(tmp_path)),
+            current_channel={'name': 'CCTV1', 'url': 'http://live.example/1.m3u8'},
+        )
+
+    def test_save_on_channel_switch(self, tmp_path):
+        from controllers.playback_settings_controller import PlaybackSettingsController
+        from core.playback_settings_store import PlaybackSettingsStore
+        w = self._window(tmp_path)
+        ctrl = PlaybackSettingsController(w)
+        ctrl.save_current_settings()
+        saved = PlaybackSettingsStore(str(tmp_path)).load_settings('http://live.example/1.m3u8')
+        assert saved['volume'] == 40
+        assert saved['aspect_ratio'] == '16:9'
+        assert saved['audio_track'] == 2
+        assert saved['sub_track'] == 1
+
+    def test_switch_calls_save_before_play(self):
+        from unittest.mock import MagicMock
+        from controllers.playback_controller import PlaybackController
+        w = MagicMock()
+        w.play_state.is_catchup_or_timeshift = False
+        ctrl = PlaybackController(w)
+        ctrl._do_play_channel({'name': 'CCTV1', 'url': 'http://live.example/1.m3u8'})
+        w.playback_settings_ctrl.save_current_settings.assert_called_once_with()
+
+    def test_clear_on_channel_delete(self, tmp_path):
+        from controllers.playback_settings_controller import PlaybackSettingsController
+        from core.playback_settings_store import PlaybackSettingsStore
+        store = PlaybackSettingsStore(str(tmp_path))
+        store.save_settings('http://live.example/1.m3u8', {'volume': 30})
+        w = self._window(tmp_path)
+        ctrl = PlaybackSettingsController(w)
+        ctrl.clear_settings_for_url('http://live.example/1.m3u8')
+        assert PlaybackSettingsStore(str(tmp_path)).load_settings('http://live.example/1.m3u8') == {}

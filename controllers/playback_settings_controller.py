@@ -115,6 +115,24 @@ class PlaybackSettingsController(QObject):
             logger.debug(f"设置{track_type}轨失败: {e}")
 
     # ---------- 保存当前设置 ----------
+    def save_current_settings(self):
+        """对外入口：换台/停止前保存当前 URL 的播放设置。
+
+        play() 直接 loadfile，不经过 stop()，网络频道也不会触发断点信号，
+        因此换台前必须显式调用，否则旧频道的音轨/字幕/比例等偏好永远存不下来。
+        """
+        self._save_current()
+
+    def clear_settings_for_url(self, url: str):
+        """删除频道时清掉该 URL 的播放设置，避免重新添加同名/同地址频道时继承旧偏好。"""
+        if not url:
+            return
+        try:
+            self._store.clear_settings(url)
+            logger.debug(f"已清除播放设置: {url[:60]}")
+        except Exception as e:
+            logger.debug(f"清除播放设置失败: {e}")
+
     def _capture_current_settings(self) -> dict:
         """读取当前 mpv 的播放设置"""
         settings = {}

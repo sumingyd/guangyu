@@ -534,6 +534,10 @@ class FavoritesController:
                 QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
         removed = channels.pop(idx)
+        # 删除频道时清掉该 URL 的按频道播放设置，避免以后重新添加同地址频道时继承旧偏好
+        ctrl = getattr(w, 'playback_settings_ctrl', None)
+        if ctrl is not None:
+            ctrl.clear_settings_for_url(removed.get('url', ''))
         w._local_channels_dirty = True
         w._update_groups_for('local')
         w._populate_channel_list_for(

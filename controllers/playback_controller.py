@@ -346,6 +346,17 @@ class PlaybackController:
             self.window.player_controller._fcc_notifier = self.fcc
         except Exception as e:
             logger.debug(f"挂载FCC通知器失败: {e}")
+
+        # 换台前保存旧频道的按频道播放设置（音轨/字幕/比例/音量等）。
+        # play() 内部直接 loadfile，不经过 stop()，网络频道也不会发断点信号，
+        # 不在这里保存的话，切走再切回来这些偏好就丢了。
+        settings_ctrl = getattr(self.window, 'playback_settings_ctrl', None)
+        if settings_ctrl is not None:
+            try:
+                settings_ctrl.save_current_settings()
+            except Exception as e:
+                logger.debug(f"换台前保存播放设置失败: {e}")
+
         self.window.player_controller.play(url)
 
         if not self._aspect_ratio_restored:
