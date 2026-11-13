@@ -80,6 +80,12 @@ def _open_path_from_os(player, file_path):
     """按扩展名打开命令行/访达传入的文件。返回是否已处理。"""
     if not file_path or not os.path.isfile(file_path):
         return False
+    # 双击文件/命令行传入文件时，以该文件为准：清掉待恢复的上次频道，
+    # 否则异步加载完播放列表后会把刚打开的文件覆盖成上次频道。
+    try:
+        player._pending_last_channel = None
+    except Exception:
+        pass
     lower = file_path.lower()
     if lower.endswith(('.m3u', '.m3u8', '.txt')):
         QTimer.singleShot(

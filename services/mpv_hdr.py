@@ -1,6 +1,7 @@
 """MpvHdr — 从 MpvPlayerController 提取的子控制器。"""
 
 from core.log_manager import global_logger as logger
+from utils.platform_utils import is_windows, is_macos, is_android, is_linux
 
 
 class MpvHdr:
@@ -69,7 +70,9 @@ class MpvHdr:
                 try:
                     if is_windows():
                         from utils.hdr_detect import is_windows_hdr_enabled
-                        return is_windows_hdr_enabled()
+                        enabled = is_windows_hdr_enabled()
+                        logger.info(f"系统HDR状态: {'已启用' if enabled else '未启用'}")
+                        return enabled
                     elif is_macos():
                         from utils.hdr_detect import is_macos_hdr_enabled
                         return is_macos_hdr_enabled()
