@@ -151,8 +151,11 @@ class ChannelController:
         from ui.styles import AppStyles
         from ui.elided_label import ElidedLabel
         from utils.platform_utils import get_effective_ui_scale
+        from ui.typography import text_factor
         name_style = AppStyles.player_channel_list_name_style()
         ui_scale = get_effective_ui_scale()
+        # 行高必须跟文字一起放大：只按界面缩放放大时「特大」字号会挤爆两行内容
+        row_h = int(round(46 * ui_scale * max(1.0, text_factor())))
 
         # 同名多路流（同一频道的不同分辨率/码流）在列表名称后追加分辨率后缀，
         # 让用户能区分两条同名频道；不影响频道数据本身
@@ -202,6 +205,11 @@ class ChannelController:
                         logo_label.setStyleSheet(AppStyles.transparent_style())
                         logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                         logo_label.setObjectName("channel_logo_label")
+                        # 台标兜底文字只允许单行：字号档位放大后 44×32 放不下两行中文
+                        logo_label.setWordWrap(False)
+                        _logo_font = logo_label.font()
+                        _logo_font.setPointSizeF(max(6.0, min(_logo_font.pointSizeF(), 8.0 * ui_scale)))
+                        logo_label.setFont(_logo_font)
 
                         name_label = ElidedLabel(display_name)
                         name_label.setStyleSheet(name_style)
@@ -232,7 +240,7 @@ class ChannelController:
                         outer_layout.addWidget(quality_bar, 0)
 
                         item = QListWidgetItem()
-                        item.setSizeHint(QSize(0, int(round(46 * ui_scale))))
+                        item.setSizeHint(QSize(0, row_h))
                         item.setData(Qt.ItemDataRole.UserRole, idx)
 
                         list_widget.addItem(item)
@@ -288,6 +296,7 @@ class ChannelController:
         if list_widget is None:
             return
         from utils.platform_utils import get_effective_ui_scale
+        from ui.typography import text_factor
         scale = get_effective_ui_scale()
         is_grid = list_widget.viewMode() == QListWidget.ViewMode.IconMode
         for index in range(list_widget.count()):
@@ -297,7 +306,7 @@ class ChannelController:
             if is_grid:
                 item.setSizeHint(QSize(int(round(220 * scale)), int(round(150 * scale))))
                 continue
-            item.setSizeHint(QSize(0, int(round(46 * scale))))
+            item.setSizeHint(QSize(0, int(round(46 * scale * max(1.0, text_factor())))))
             item_widget = list_widget.itemWidget(item)
             if item_widget is None:
                 continue

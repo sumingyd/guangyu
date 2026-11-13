@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import QDialog
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QEvent
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QCheckBox, QMessageBox, QToolButton
 
@@ -13,7 +13,27 @@ class WindowMixin:
     """从 IPTVPlayer 提取的窗口事件/定位/全屏/覆盖层职责"""
 
     def eventFilter(self, obj, event):
+        # 底栏实际高度会随字号/内容异步变化（布局在首帧后才定型）；
+        # 只在启动时算一次会让左右浮层压住底栏，这里按 resize 触发重排。
+        try:
+            if event.type() == QEvent.Type.Resize and obj is getattr(self, 'floating_dock', None):
+                self._schedule_dock_reposition()
+        except Exception:
+            pass
         return self.event_handler.eventFilter(obj, event)
+
+    def _schedule_dock_reposition(self):
+        if getattr(self, '_dock_reposition_pending', False):
+            return
+        self._dock_reposition_pending = True
+        safe_single_shot(60, self, self._deferred_dock_reposition)
+
+    def _deferred_dock_reposition(self):
+        self._dock_reposition_pending = False
+        try:
+            self._position_floating_docks()
+        except Exception as e:
+            logger.debug(f"底栏尺寸变化后重排浮层失败: {e}")
 
     def update_floating_position(self):
         if not hasattr(self, 'video_frame') or self.video_frame is None:
@@ -161,8 +181,12 @@ class WindowMixin:
             else:
                 fl_w = max(int(round(720 * scale)), int(mw_w * 0.7))
             fl_w = min(avail_w, fl_w)
-            if fl_w > 0:
+            if fl_w > 0 and self.floating_dock.minimumWidth() != fl_w:
                 self.floating_dock.setMinimumWidth(fl_w)
+            # 用户之前拖宽过 / 全屏留下的宽度可能超过窗口，必须先收回来，
+            # 否则底栏会伸出窗口右侧，文字看起来被硬裁。
+            if self.floating_dock.width() > avail_w and avail_w > 0:
+                self.floating_dock.resize(avail_w, self.floating_dock.height())
             fl_x = mw_x + (mw_w - self.floating_dock.width()) // 2
             fl_y = mw_y + mw_h - control_panel_h - status_bar_h - gap
             wayland_move(self.floating_dock, fl_x, fl_y)

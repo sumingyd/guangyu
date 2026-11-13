@@ -26,14 +26,24 @@ class UIController:
         self._osd_timer.setInterval(1000)
         self._osd_timer.timeout.connect(self._refresh_osd)
 
-    @staticmethod
-    def _truncate_to_lines(text: str, max_lines: int = 3) -> str:
+    def _truncate_to_lines(self, text: str, max_lines: int = 2) -> str:
+        """按当前控件宽度与字体把简介截到 max_lines 行，避免固定高度下半行被裁。"""
         if not text:
             return text
-        lines = text.split('\n')
-        if len(lines) <= max_lines:
+        text = text.replace('\n', ' ')
+        try:
+            label = getattr(self.window, 'program_desc', None)
+            fm = label.fontMetrics() if label is not None else None
+            if fm is None:
+                return text
+            avail = max(200, (label.width() or 600) - 8)
+            char_w = max(6, fm.horizontalAdvance('中'))
+            limit = max(20, int(avail / char_w) * max_lines)
+            if len(text) <= limit:
+                return text
+            return text[:max(1, limit - 1)] + '…'
+        except Exception:
             return text
-        return '\n'.join(lines[:max_lines]) + '...'
 
     @property
     def osd_visible(self) -> bool:
@@ -681,6 +691,9 @@ class UIController:
                                                 continue
                             if not desc or desc.strip() == '':
                                 desc = self.window.language_manager.tr('no_program_desc', 'No program description')
+                        # 部分源的简介字段直接等于节目名，会和上一行节目名重复叠字
+                        if title and desc.strip() == title.strip():
+                            desc = ''
                         self.window.program_desc.setText(self._truncate_to_lines(desc))
                         self.window.current_program.setText(f"· {title}" if title else "")
                         if start_time and end_time:
@@ -715,7 +728,11 @@ class UIController:
                     elif channel_name:
                         current_program = self.window.epg_parser.get_current_program(channel_name, tvg_id, tvg_name=tvg_name, comma_name=comma_name)
                         if current_program:
-                            self.window.program_desc.setText(self._truncate_to_lines(current_program.get("desc", self.window.language_manager.tr("no_program_desc", "No program description"))))
+                            _title = current_program.get('title', '') or ''
+                            _desc = current_program.get("desc", self.window.language_manager.tr("no_program_desc", "No program description"))
+                            if _title and _desc.strip() == _title.strip():
+                                _desc = ''
+                            self.window.program_desc.setText(self._truncate_to_lines(_desc))
                             try:
                                 start_time = datetime.fromisoformat(current_program.get('start', ''))
                                 end_time = datetime.fromisoformat(current_program.get('end', ''))

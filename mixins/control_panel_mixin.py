@@ -99,10 +99,19 @@ class ControlPanelMixin:
         slider = getattr(self, 'volume_slider', None)
         if slider is not None:
             slider.setFixedWidth(metrics['volume_w'])
-        for name in ('video_info', 'audio_info', 'network_info', 'buffer_info', 'hdr_badge'):
+        for name in ('video_info', 'audio_info', 'network_info', 'buffer_info'):
             label = getattr(self, name, None)
             if label is not None:
+                # 给信息行各段一个随面板宽度走的上限，超出部分由 ElidedLabel 省略，
+                # 避免「特大」字号 + 高 DPI 时文字被面板右边界硬裁。
+                label.setMaximumWidth(max(80, int(self.width() * 0.32)))
                 label.setFixedHeight(metrics['info_h'])
+        hdr_badge = getattr(self, 'hdr_badge', None)
+        if hdr_badge is not None:
+            hdr_badge.setFixedHeight(metrics['info_h'])
+        desc = getattr(self, 'program_desc', None)
+        if desc is not None:
+            desc.setFixedHeight(self._scaled_program_desc_height())
         for name in ('video_info_icon', 'audio_info_icon', 'network_info_icon'):
             icon_label = getattr(self, name, None)
             if icon_label is not None:
@@ -139,7 +148,7 @@ class ControlPanelMixin:
         self._set_info_label_icon(self.video_info_icon, 'tv')
         self.media_row.addWidget(self.video_info_icon)
 
-        self.video_info = QLabel()
+        self.video_info = ElidedLabel(full_text_hint=True)
         self.video_info.setStyleSheet(AppStyles.player_media_badge_style())
         self.video_info.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.video_info.setFixedHeight(info_h)
@@ -162,7 +171,7 @@ class ControlPanelMixin:
         self._set_info_label_icon(self.audio_info_icon, 'speaker')
         self.media_row.addWidget(self.audio_info_icon)
 
-        self.audio_info = QLabel()
+        self.audio_info = ElidedLabel(full_text_hint=True)
         self.audio_info.setStyleSheet(AppStyles.player_media_badge_style())
         self.audio_info.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.audio_info.setFixedHeight(info_h)
@@ -177,7 +186,7 @@ class ControlPanelMixin:
         self._set_info_label_icon(self.network_info_icon, 'signal')
         self.media_row.addWidget(self.network_info_icon)
 
-        self.network_info = QLabel()
+        self.network_info = ElidedLabel(full_text_hint=True)
         self.network_info.setStyleSheet(AppStyles.player_media_badge_style())
         self.network_info.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.network_info.setFixedHeight(info_h)
@@ -185,7 +194,7 @@ class ControlPanelMixin:
         self.network_info.setText("--")
         self.media_row.addWidget(self.network_info)
 
-        self.buffer_info = QLabel("")
+        self.buffer_info = ElidedLabel("", full_text_hint=True)
         self.buffer_info.setStyleSheet(AppStyles.player_media_badge_style())
         self.buffer_info.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.buffer_info.setFixedHeight(info_h)
@@ -203,6 +212,14 @@ class ControlPanelMixin:
 
         self._create_info_row()
 
+
+    def _scaled_program_desc_height(self):
+        """简介行高度按两行实际行高计算，随字号档位放大，避免第二行被裁。"""
+        try:
+            line_h = self.fontMetrics().lineSpacing()
+            return max(self.PROGRAM_DESC_HEIGHT, line_h * 2 + 4)
+        except Exception:
+            return self.PROGRAM_DESC_HEIGHT
 
     def _create_info_row(self):
         """创建节目信息行"""
@@ -269,7 +286,7 @@ class ControlPanelMixin:
         self.program_desc.setStyleSheet(AppStyles.player_program_desc_style())
         self.program_desc.setWordWrap(True)
         self.program_desc.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        self.program_desc.setMaximumHeight(self.PROGRAM_DESC_HEIGHT)
+        self.program_desc.setFixedHeight(self._scaled_program_desc_height())
         self.program_desc.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         # 空态引导 CTA：文案为引导语时可点击打开订阅；业务描述更新无需感知
         self.program_desc.setCursor(Qt.CursorShape.PointingHandCursor)

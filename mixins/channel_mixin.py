@@ -163,6 +163,8 @@ class ChannelMixin:
                 item = list_widget.item(i)
                 if item:
                     item.setHidden(False)
+            # 清空搜索回到完整列表时，滚动位置应回到顶部，而不是停在搜索结果处
+            list_widget.scrollToTop()
             return
         for i in range(list_widget.count()):
             item = list_widget.item(i)
