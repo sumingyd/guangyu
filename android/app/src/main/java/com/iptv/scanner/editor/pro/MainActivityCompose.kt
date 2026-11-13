@@ -116,6 +116,12 @@ class MainActivityCompose : ComponentActivity() {
     private fun isTvMode(): Boolean = viewModel.uiMode.value == UiMode.TV
 
     /**
+     * 平板模式判断：强制平板（含电视上手动切到平板）。
+     * 平板上遥控器/方向键要走 Compose 焦点系统，但保留触摸布局语义（底栏可点、首页有独立页）。
+     */
+    private fun isTabletMode(): Boolean = viewModel.uiMode.value == UiMode.TABLET
+
+    /**
      * 全屏播放页判断：左右侧边栏与全屏底栏仅在全屏布局可呼出。
      * 分屏模式（分屏首页/分屏播放页）下返回 false；多画面布局属于全屏形态，返回 true。
      * 与 TvPlayerLayout 的 useSplit = splitModePref && !multiActive 对齐。
@@ -547,9 +553,11 @@ class MainActivityCompose : ComponentActivity() {
             Log.i(TAG, "dispatchKeyEvent: OSD hidden, wake + pass through by ${KeyEvent.keyCodeToString(event.keyCode)}")
             viewModel.showControlsAutoHide()
             // controlsVisible 已在上一步同步置位，同一按键不会再次进入唤醒分支。
-            // 触摸布局（手机/平板横屏）底栏按钮可聚焦，保留"先唤醒、再操作"两步，避免误触按钮；
-            // TV 模式底栏只读，没有可聚焦节点，放行后由 onKeyDown 执行原动作。
-            if (!isTvMode()) return true
+            // 平板模式底栏按钮可聚焦：这一下唤醒后继续下发给 Compose 焦点系统，
+            // 不能吞键（否则遥控器每按一下有效操作前都要多按一次）。
+            // 手机触摸布局没有可聚焦节点，保持"先唤醒、再操作"两步，避免误触按钮。
+            // TV 模式底栏只读，放行后由 onKeyDown 执行原动作。
+            if (!isTvMode() && !isTabletMode()) return true
         }
         if (isTvMode()) {
             val kc = event.keyCode
@@ -598,6 +606,36 @@ class MainActivityCompose : ComponentActivity() {
                     }
                     return onKeyDown(kc, event)
                 }
+            }
+        }
+        // 平板模式：DPAD/OK 一律交给 Compose 焦点系统（首页宫格/EPG 网格/抽屉页签/分屏面板/底栏按钮），
+        // 只有 Compose 明确没消费时才兜底把焦点请求回当前页面主入口，避免"焦点丢了以后整页无响应"。
+        if (isTabletMode() && event.action == KeyEvent.ACTION_DOWN) {
+            val kc = event.keyCode
+            val isDpad = kc == KeyEvent.KEYCODE_DPAD_UP || kc == KeyEvent.KEYCODE_DPAD_DOWN ||
+                    kc == KeyEvent.KEYCODE_DPAD_LEFT || kc == KeyEvent.KEYCODE_DPAD_RIGHT ||
+                    kc == KeyEvent.KEYCODE_DPAD_CENTER || kc == KeyEvent.KEYCODE_ENTER
+            if (isDpad) {
+                val handled = super.dispatchKeyEvent(event)
+                if (!handled) {
+                    Log.i(TAG, "dispatchKeyEvent: tablet DPAD unhandled, request focus reset by ${KeyEvent.keyCodeToString(kc)}")
+                    viewModel.requestTabletFocusReset()
+                }
+                return handled
+            }
+            // BACK 走 Compose 的 BackHandler（MainPlayerScreen 内已按
+            // 详情面板 → 弹窗/抽屉/EPG 面板 → 多画面 → 回看 → 返回首页 → 退出确认 分层实现）；
+            // 没有可用回调时退回 Activity 的兜底链，避免按键被吞。
+            if (kc == KeyEvent.KEYCODE_BACK) {
+                if (onBackPressedDispatcher.hasEnabledCallbacks()) {
+                    onBackPressedDispatcher.onBackPressed()
+                    return true
+                }
+                return onKeyDown(kc, event)
+            }
+            // MENU 由 Activity 统一打开主菜单（分屏播放页也允许，见 onKeyDown）
+            if (kc == KeyEvent.KEYCODE_MENU) {
+                return onKeyDown(kc, event)
             }
         }
         return super.dispatchKeyEvent(event)
@@ -702,8 +740,9 @@ class MainActivityCompose : ComponentActivity() {
 
         // MENU 键：侧边栏风格 — TV/PHONE 都打开右侧设置菜单
         if (keyCode == KeyEvent.KEYCODE_MENU) {
-            // 主菜单仅全屏布局可呼出：分屏模式（分屏首页/分屏播放页）下 MENU 键不响应
-            if (isLandscapeMode() && !isFullscreenPlayback()) return true
+            // 主菜单仅全屏布局可呼出：分屏模式（分屏首页/分屏播放页）下 MENU 键不响应。
+            // 平板模式例外：分屏播放页的右侧是常驻面板，需要一个能打开主菜单（设置/工具）的入口。
+            if (isLandscapeMode() && !isFullscreenPlayback() && !isTabletMode()) return true
             when {
                 viewModel.menuPanelOpen.value -> {
                     viewModel.closeAllPanels()

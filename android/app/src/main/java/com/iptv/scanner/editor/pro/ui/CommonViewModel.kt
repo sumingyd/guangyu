@@ -870,6 +870,8 @@ internal fun AppViewModel.togglePlayerSettings() {
 }
 
 internal fun AppViewModel.setPlayerVo(vo: String) {
+    // 用户手动改过渲染方式：后续默认值迁移不得覆盖
+    userPrefs.markRenderPathUserChosen()
     // arm32 电视/盒子：运行中把 vo 切到 mediacodec_embed 会让 mpv 在 video-reconfig
     // 阶段直接结束进程（exit(1)，无 Java 异常）。这里只落盘选择，等重启播放器后
     // 以 init option 的形式建立直写 Surface（该路径实测可用）。
@@ -916,6 +918,7 @@ internal fun AppViewModel.setPlayerVo(vo: String) {
 }
 
 internal fun AppViewModel.setPlayerHwdec(hwdec: String, byUser: Boolean = true) {
+    if (byUser) userPrefs.markRenderPathUserChosen()
     // arm32 电视/盒子：硬解只允许 mediacodec 直写 Surface；用户点「重试硬件解码」时
     // 必须带上 mediacodec_embed，不能停在 gpu + mediacodec（AImageReader 路径）。
     var vo = _currentVo.value
@@ -965,6 +968,7 @@ internal fun AppViewModel.setHardwareDecode(enabled: Boolean) {
             // 软解时 mediacodec_embed 没有解码器直渲，vo 退回 gpu。
             val newVo = userPrefs.voForHardwareDecode(enabled, _currentVo.value)
             val newHwdec = userPrefs.hwdecForHardwareDecode(enabled, _currentHwdec.value)
+            userPrefs.markRenderPathUserChosen()
             if (newVo != _currentVo.value) {
                 userPrefs.setVo(newVo)
                 _currentVo.value = newVo

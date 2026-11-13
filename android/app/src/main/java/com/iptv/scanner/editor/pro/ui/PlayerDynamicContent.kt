@@ -81,6 +81,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.rotate
@@ -571,7 +573,11 @@ internal fun PortraitLocalFileInfo(
 // -----------------------------------------------------------------
 // 分类列表（竖屏 Tab — 全屏分组选择）
 @Composable
-internal fun PortraitCategoryContent(viewModel: AppViewModel, onGroupSelected: () -> Unit = {}) {
+internal fun PortraitCategoryContent(
+    viewModel: AppViewModel,
+    onGroupSelected: () -> Unit = {},
+    firstItemFocus: FocusRequester? = null
+) {
     val allGroups by viewModel.groups.collectAsState()
     val selectedGroup by viewModel.selectedGroup.collectAsState()
     val channels by viewModel.channels.collectAsState()
@@ -615,6 +621,8 @@ internal fun PortraitCategoryContent(viewModel: AppViewModel, onGroupSelected: (
                         .fillMaxWidth()
                         .then(if (isSelected) Modifier.background(AptvAccent.copy(alpha = 0.12f), RoundedCornerShape(8.dp)) else Modifier)
                         .tvFocusBorder(cornerRadius = 8)
+                        // 平板遥控器：从页签 DOWN 进来时直接落在「全部」这一行
+                        .then(if (firstItemFocus != null) Modifier.focusRequester(firstItemFocus) else Modifier)
                         .clickable { viewModel.setSelectedGroup(""); onGroupSelected() }
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -668,7 +676,7 @@ internal fun PortraitCategoryContent(viewModel: AppViewModel, onGroupSelected: (
 // -----------------------------------------------------------------
 // 频道列表（竖屏 Tab — 仅频道，无分组列）
 @Composable
-internal fun PortraitChannelOnlyList(viewModel: AppViewModel) {
+internal fun PortraitChannelOnlyList(viewModel: AppViewModel, firstItemFocus: FocusRequester? = null) {
     val channels by viewModel.channels.collectAsState()
     val currentIdx by viewModel.currentIdx.collectAsState()
     val selectedGroup by viewModel.selectedGroup.collectAsState()
@@ -721,7 +729,7 @@ internal fun PortraitChannelOnlyList(viewModel: AppViewModel) {
                 itemsIndexed(
                     items = filteredChannels,
                     key = { index, _ -> channelItemKeys[index] }
-                ) { _, (channel, idx) ->
+                ) { index, (channel, idx) ->
                     PortraitChannelListItem(
                         channel = channel,
                         channelIdx = idx,
@@ -729,6 +737,8 @@ internal fun PortraitChannelOnlyList(viewModel: AppViewModel) {
 
                         viewModel = viewModel,
                         epgCacheVersion = epgCacheVersion,
+                        // 平板遥控器：从页签 DOWN 进来时直接落在第一条频道
+                        focusRequester = if (index == 0) firstItemFocus else null,
                         onPlay = { viewModel.playChannel(idx) },
                         onEpg = { viewModel.playChannelAndShowEpg(idx) }
                     )
@@ -741,7 +751,7 @@ internal fun PortraitChannelOnlyList(viewModel: AppViewModel) {
 // -----------------------------------------------------------------
 // EPG 节目单内容（竖屏 Tab — 日期选择 + 节目列表 + 状态标识）
 @Composable
-internal fun PortraitEpgContent(viewModel: AppViewModel) {
+internal fun PortraitEpgContent(viewModel: AppViewModel, firstItemFocus: FocusRequester? = null) {
     val loading by viewModel.epgLoading.collectAsState()
     val currentChannel by viewModel.currentChannel.collectAsState()
     val currentIdx by viewModel.currentIdx.collectAsState()
@@ -921,6 +931,8 @@ internal fun PortraitEpgContent(viewModel: AppViewModel) {
                                 isPast = isPast,
                                 isUpcoming = isUpcoming,
                                 oc = oc,
+                                // 平板遥控器：从页签 DOWN 进来时直接落在第一条节目
+                                focusRequester = if (programIdx == 0) firstItemFocus else null,
                                 onClick = {
                                     if (isPast && !isCurrent) {
                                         viewModel.startCatchup(program)
@@ -943,6 +955,7 @@ private fun PortraitEpgItem(
     isPast: Boolean,
     isUpcoming: Boolean,
     oc: PlayerOverlayColors,
+    focusRequester: FocusRequester? = null,
     onClick: () -> Unit
 ) {
     val bg = if (isCurrent) oc.accent.copy(alpha = 0.15f) else Color.Transparent
@@ -952,6 +965,7 @@ private fun PortraitEpgItem(
             .fillMaxWidth()
             .background(bg)
             .tvFocusBorder(cornerRadius = 8)
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically

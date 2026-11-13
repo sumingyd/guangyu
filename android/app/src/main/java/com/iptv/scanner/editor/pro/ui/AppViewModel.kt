@@ -1489,6 +1489,18 @@ internal var currentIsLocalFile: Boolean
      */
     var splitTreeHasFocus: Boolean = false
 
+    /**
+     * 平板模式焦点归零兜底：DPAD 一路落到 Activity 的 super.dispatchKeyEvent 仍未被消费，
+     * 说明当前焦点树没有活跃焦点节点（初焦被重组清掉、或从别的页面返回后焦点丢失）。
+     * 页面监听到该 tick 后把焦点重新请求到自己的主入口，避免"整页按键无响应"。
+     */
+    internal val _tabletFocusResetTick = MutableStateFlow(0L)
+    val tabletFocusResetTick: StateFlow<Long> = _tabletFocusResetTick.asStateFlow()
+
+    fun requestTabletFocusReset() {
+        _tabletFocusResetTick.value++
+    }
+
     /** 设置横屏分屏模式（TV 端禁止进入分屏，直接保持全屏页面） */
     fun setLandscapeSplitMode(value: Boolean) {
         if (_uiMode.value == UiMode.TV && value) return

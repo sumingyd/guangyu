@@ -593,6 +593,9 @@ internal fun AppViewModel.playChannel(idx: Int, silent: Boolean = false) {
         com.iptv.scanner.editor.pro.mpv.SwitchPerf.markBeforeLoad(
             userPrefs.getVo(), userPrefs.getHwdec()
         )
+        // 新一次换台重新获得一次完整探测预算：4K↔1080 反复切回同一个 URL 时，
+        // 不能因为第一轮已经重探过就永久失去“探测失败自动重探”的机会
+        (_player.value as? MpvController)?.resetProbeBudgetForSwitch()
         mpv.playFile(channel.url)
         (_player.value as? MpvController)?.releaseVoReloadSuppression()
         // 超时换源必须在等待加载前启动：加载成功后定时器到点检查

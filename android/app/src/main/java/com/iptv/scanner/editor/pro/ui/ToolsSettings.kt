@@ -846,6 +846,17 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
                     viewModel.setThemeMode(next)
                 }
                 // 界面模式：自动沿用设备判定，或强制按手机/平板/TV 形态渲染
+                var showUiModePicker by remember { mutableStateOf(false) }
+                if (showUiModePicker) {
+                    UiModePickerDialog(
+                        current = uiModePref,
+                        onPick = { pref ->
+                            showUiModePicker = false
+                            if (pref != uiModePref) viewModel.setUiModePreference(pref)
+                        },
+                        onDismiss = { showUiModePicker = false }
+                    )
+                }
                 AptvRow(
                     Icons.Default.Devices,
                     "界面模式",
@@ -854,7 +865,7 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
                     else "手动 · 强制${uiModePref.label.removePrefix("强制")}",
                     modifier = rowModifier(1)
                 ) {
-                    viewModel.setUiModePreference(UiModePreference.next(uiModePref))
+                    showUiModePicker = true
                 }
                 AptvRow(Icons.Default.Replay, stringResource(R.string.settings_auto_resume), value = if (autoResume) stringResource(R.string.settings_enabled) else stringResource(R.string.settings_disabled), modifier = rowModifier(2)) {
                     viewModel.setAutoResume(!autoResume)

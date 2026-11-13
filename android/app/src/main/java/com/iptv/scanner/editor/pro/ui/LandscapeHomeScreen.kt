@@ -53,6 +53,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.res.stringResource
@@ -87,6 +92,24 @@ internal fun LandscapeHomeScreen(
     hazeState: HazeState
 ) {
     val liquidGlass by viewModel.liquidGlass.collectAsState()
+
+    // 平板/电视遥控器：每次回到首页（含从播放页 BACK 回来）以及 Activity 判定焦点归零时，
+    // 把焦点请求到当前页签的内容入口（宫格首卡 / 工具首行 / 设置首行）。
+    // 之前只在「首次进入且频道非空」请求一次，返回首页后焦点树为空，方向键整页无响应。
+    val homeVisible by viewModel.showHome.collectAsState()
+    val homeTabState by viewModel.portraitTab.collectAsState()
+    val tabletFocusTick by viewModel.tabletFocusResetTick.collectAsState()
+    LaunchedEffect(homeVisible, tabletFocusTick) {
+        if (!homeVisible) return@LaunchedEffect
+        // 频道列表/EPG 异步加载会重组成新的焦点树，单次 requestFocus 容易落空：
+        // 小步重试到注册的入口真正接受焦点为止。
+        repeat(10) { attempt ->
+            if (attempt > 0) kotlinx.coroutines.delay(150)
+            if (HomeContentFocusEntry.request(homeTabState)) return@LaunchedEffect
+        }
+        // 收藏页暂未注册入口：退回频道页首卡，至少保证方向键有落点
+        HomeContentFocusEntry.request(PortraitTab.CHANNELS)
+    }
 
     Box(
         modifier = Modifier
@@ -331,6 +354,12 @@ private fun LandscapeChannelSplitContent(viewModel: AppViewModel) {
         }
     }
     var searchQuery by remember { mutableStateOf("") }
+    // 无触屏设备（电视/盒子切到平板模式）：搜索框默认只读，避免平台输入框吞掉方向键
+    val homeCtx = androidx.compose.ui.platform.LocalContext.current
+    val homeRemoteOnly = remember(homeCtx) {
+        !homeCtx.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_TOUCHSCREEN)
+    }
+    var searchTyping by remember { mutableStateOf(false) }
     val searchedChannels = remember(displayChannels, searchQuery) {
         if (searchQuery.isBlank()) displayChannels
         else displayChannels.filter { it.name.contains(searchQuery.trim(), ignoreCase = true) }
@@ -423,6 +452,10 @@ private fun LandscapeChannelSplitContent(viewModel: AppViewModel) {
                     TextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
+                        // 无触屏设备（电视上切平板）：搜索框默认只读，方向键交给 Compose 焦点系统；
+                        // 按 OK 才进入输入态。可编辑的输入框会由平台 EditText 直接吃掉方向键，
+                        // 遥控器会一直卡在搜索框里出不来。
+                        readOnly = homeRemoteOnly && !searchTyping,
                         placeholder = { Text("搜索频道", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp) },
                         singleLine = true,
                         colors = TextFieldDefaults.colors(
@@ -434,7 +467,28 @@ private fun LandscapeChannelSplitContent(viewModel: AppViewModel) {
                         ),
                         textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp),
                         // TV 焦点导航：搜索框内按 UP/DOWN 直接移出焦点（否则方向键被输入框吞掉，遥控器切不出来）
-                        modifier = Modifier.fillMaxWidth().tvTextField()
+                        // 平板/电视上 DOWN 显式落到宫格首卡：几何搜索在输入框内会失败，
+                        // 之前焦点会一直卡在搜索框，整页方向键看起来"没反应"。
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onFocusChanged { if (!it.isFocused) searchTyping = false }
+                            // 预览键事件由外层先收到：显式 DOWN 必须先于 tvTextField 的 moveFocus(Down)，
+                            // 否则焦点的几何搜索在输入框内失败，事件被吞在搜索框里出不来。
+                            .onPreviewKeyEvent { e ->
+                                if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                                when (e.key) {
+                                    Key.DirectionDown -> {
+                                        kotlin.runCatching { firstCardFocus.requestFocus() }
+                                        true
+                                    }
+                                    Key.DirectionCenter, Key.Enter -> {
+                                        // 只读态按 OK 进入输入（仅无触屏设备需要）
+                                        if (homeRemoteOnly) { searchTyping = true; true } else false
+                                    }
+                                    else -> false
+                                }
+                            }
+                            .tvTextField()
                     )
                 }
             }

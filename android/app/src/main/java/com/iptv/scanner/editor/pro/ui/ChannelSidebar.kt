@@ -1224,6 +1224,7 @@ internal fun PortraitChannelListItem(
     isPlaying: Boolean,
     viewModel: AppViewModel,
     epgCacheVersion: Int,
+    focusRequester: FocusRequester? = null,
     onPlay: () -> Unit,
     onEpg: () -> Unit
 ) {
@@ -1241,10 +1242,14 @@ internal fun PortraitChannelListItem(
     }
 
     // APTV 风格：播放中用 AptvAccent 浅红底 + 红字 + 圆角，非播放透明
+    // 遥控器焦点：tvFocusBorder 放在 clickable 之前（外层）才能收到焦点事件；
+    // 平板分屏右栏「频道」页签里这张卡是最主要的可聚焦项，没有描边时焦点是隐形的。
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .then(if (isPlaying) Modifier.background(AptvAccent.copy(alpha = 0.12f), RoundedCornerShape(8.dp)) else Modifier)
+            .tvFocusBorder(cornerRadius = 8)
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .clickable(onClick = onPlay)
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically

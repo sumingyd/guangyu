@@ -159,6 +159,22 @@ fun MainMenuPanel(viewModel: AppViewModel) {
     // 焦点会漂移到全屏遮罩的 clickable 上，导致 OK 键误触发 onDismiss 关闭弹窗）
     var stylePickerIdx by remember { mutableStateOf(bottomBarStyle) }
 
+    // 界面模式：点击弹出单选列表，不再点一下循环一格
+    var showUiModePicker by remember { mutableStateOf(false) }
+    if (showUiModePicker) {
+        UiModePickerDialog(
+            current = uiModePref,
+            onPick = { pref ->
+                showUiModePicker = false
+                if (pref != uiModePref) {
+                    viewModel.setUiModePreference(pref)
+                    viewModel.toggleMenuPanel()
+                }
+            },
+            onDismiss = { showUiModePicker = false }
+        )
+    }
+
     // SAF 文件选择器
     val playlistLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -178,7 +194,7 @@ fun MainMenuPanel(viewModel: AppViewModel) {
             themeMode = themeMode,
             uiModeLabel = uiModePref.label,
             onCycleUiMode = {
-                viewModel.setUiModePreference(UiModePreference.next(uiModePref))
+                showUiModePicker = true
             },
             onOpenPlaylist = {
                 if (!viewModel.isSafAvailable()) {
@@ -378,7 +394,15 @@ fun MainMenuPanel(viewModel: AppViewModel) {
         var activeColumn by remember { mutableStateOf(0) } // 0=左列(分组), 1=右列(条目)
         val safeLeftIdx = if (currentSection != null) leftSelectedIdx.coerceIn(0, currentSection.entries.lastIndex) else 0
         val menuFocusRequester = remember { FocusRequester() }
-        LaunchedEffect(Unit) { menuFocusRequester.requestFocus() }
+        // 平板模式：菜单是从分屏页/首页叠上来的，底下的 EPG 网格/频道宫格仍持有焦点，
+        // 单次 requestFocus 常被时序吃掉 → 方向键全被下层消费，菜单看起来"按了没反应"。
+        // 小步重试直到菜单真正拿到焦点。
+        LaunchedEffect(Unit) {
+            repeat(12) { attempt ->
+                if (attempt > 0) kotlinx.coroutines.delay(80)
+                if (kotlin.runCatching { menuFocusRequester.requestFocus() }.isSuccess) return@LaunchedEffect
+            }
+        }
 
         CompositionLocalProvider(LocalDensity provides scaledDensity) {
         Box(
@@ -495,6 +519,15 @@ fun MainMenuPanel(viewModel: AppViewModel) {
                                                 else -> Modifier
                                             }
                                         )
+                                        // 遥控焦点描边：与其余页面一致（2dp 主题色），
+                                        // 选中底色之外再给一圈明确的焦点框
+                                        .then(
+                                            if (isRightSelected) Modifier.border(
+                                                2.dp,
+                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
+                                                RoundedCornerShape(6.dp)
+                                            ) else Modifier
+                                        )
                                         .alpha(if (entry.enabled) 1f else 0.38f)
                                         .clickable(enabled = entry.enabled) {
                                             activeColumn = 1
@@ -552,6 +585,14 @@ fun MainMenuPanel(viewModel: AppViewModel) {
                                     .then(
                                         if (isSelected) Modifier.tvGlassSelected(6)
                                         else Modifier.background(Color.Transparent)
+                                    )
+                                    // 一级分组列：当前列有遥控焦点时给描边（与左列一致）
+                                    .then(
+                                        if (isLeftActive) Modifier.border(
+                                            2.dp,
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
+                                            RoundedCornerShape(6.dp)
+                                        ) else Modifier
                                     )
                                     .clickable {
                                         activeColumn = 0
@@ -980,7 +1021,7 @@ private fun buildMenuSections(
             MenuEntry(
                 Icons.Default.Devices,
                 "界面模式",
-                "当前：$uiModeLabel · 点击切换",
+                "当前：$uiModeLabel · 点击选择",
                 onCycleUiMode
             )
         )

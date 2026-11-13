@@ -24,6 +24,7 @@ class PlayerSettingsStore(
 
     /** 获取持久化的 video output，未持久化时按设备类型给默认值 */
     fun getVo(): String {
+        migrateRenderPathIfNeeded()
         val vo = requestedVo()
         // 软解（含崩溃黑名单）时 mediacodec_embed 没有解码器直渲，必须退回 gpu
         if (vo == VO_MEDIACODEC_EMBED && getHwdec() == HWDEC_SOFTWARE) return DEFAULT_VO_VALUE
@@ -72,6 +73,7 @@ class PlayerSettingsStore(
      * 旧的 gpu+auto-copy 崩溃不会继续挡住 mediacodec_embed+mediacodec 直写路径。
      */
     fun getHwdec(): String {
+        migrateRenderPathIfNeeded()
         val requested = resolveRequestedHwdec()
         if (isHwdecComboBlacklisted(requestedVo(), requested)) return HWDEC_SOFTWARE
         return requested
@@ -112,6 +114,73 @@ class PlayerSettingsStore(
         // 用户显式选择硬解即视为认可该设置，解除崩溃黑名单
         if (hwdec != HWDEC_SOFTWARE) setHwdecBlacklisted(false)
         prefs.edit().putString(KEY_HWDEC, hwdec).apply()
+    }
+
+    /**
+     * 旧默认一次性迁移。
+     *
+     * 旧版本存在「用户没手动选过，也会被自动落盘 gpu + 软解」的链路
+     * （直写 Surface 起播失败回退、运行中 3s 无帧收口）。升级后不能把这种
+     * 旧默认当成用户显式选择，否则新默认永远不生效；但用户真选过就必须尊重。
+     *
+     * 判据：没有 [KEY_RENDER_USER_CHOSEN] 标记，且存的值等于旧默认才改写：
+     * - arm32 TV：gpu + no → 按芯片规则（非 MTK/Sony 改成 embed + mediacodec）
+     * - arm64 手机：auto-copy/auto → mediacodec
+     * - arm64 车机/平板大屏：auto-copy/auto → 软解（该类设备硬解实测不可用）
+     *
+     * 同时清掉升级前留下的崩溃黑名单，让新默认真正跑一次；真崩了启动检测会重新拉黑。
+     */
+    @Synchronized
+    private fun migrateRenderPathIfNeeded() {
+        if (prefs.getBoolean(KEY_RENDER_MIGRATED, false)) return
+        prefs.edit().putBoolean(KEY_RENDER_MIGRATED, true).apply()
+        if (prefs.getBoolean(KEY_RENDER_USER_CHOSEN, false)) return
+
+        val savedVo = prefs.getString(KEY_VO, null)?.takeIf { it.isNotEmpty() }
+        val savedHwdec = prefs.getString(KEY_HWDEC, null)?.takeIf { it.isNotEmpty() }
+
+        val oldDefaultArm32 = isArm32Tv() &&
+            (savedVo == null || savedVo == DEFAULT_VO_VALUE) && savedHwdec == HWDEC_SOFTWARE
+        // 只有手机（arm64 手持）迁移到 mediacodec；车机/平板大屏硬解实测不可用，迁移到软解
+        val oldDefaultArm64 = isArm64Handheld() && (savedHwdec == "auto-copy" || savedHwdec == "auto")
+        val oldDefaultArm64Car = isArm64NonTv() && !isArm64Handheld() &&
+            (savedHwdec == "auto-copy" || savedHwdec == "auto")
+        val clearBlacklist = isArm64Handheld() || (isArm32Tv() && !isEmbedUnstableSoc())
+
+        if (!oldDefaultArm32 && !oldDefaultArm64 && !oldDefaultArm64Car) {
+            if (clearBlacklist) clearRenderBlacklist()
+            return
+        }
+
+        val targetVo = if (oldDefaultArm32) defaultVo() else savedVo
+        val targetHwdec = when {
+            oldDefaultArm32 || oldDefaultArm64Car -> defaultHwdec()
+            else -> HWDEC_MEDIACODEC
+        }
+        prefs.edit().apply {
+            if (!targetVo.isNullOrEmpty()) putString(KEY_VO, targetVo)
+            if (!targetHwdec.isNullOrEmpty()) putString(KEY_HWDEC, targetHwdec)
+            putBoolean(KEY_VO_AUTO_FALLBACK, false)
+            if (clearBlacklist) {
+                putBoolean(KEY_HWDEC_CRASH_BLACKLIST, false)
+                remove(KEY_HWDEC_CRASH_COMBO)
+            }
+        }.apply()
+        android.util.Log.i(
+            "PlayerSettingsStore",
+            "render path migrated: vo=$targetVo hwdec=$targetHwdec " +
+                "(old: vo=$savedVo hwdec=$savedHwdec, arm32=$oldDefaultArm32, arm64=$oldDefaultArm64)"
+        )
+    }
+
+    /** 用户手动改过渲染方式：之后的默认值迁移不再覆盖 */
+    fun markRenderPathUserChosen() {
+        prefs.edit().putBoolean(KEY_RENDER_USER_CHOSEN, true).apply()
+    }
+
+    private fun clearRenderBlacklist() {
+        if (!isHwdecBlacklisted() && !prefs.contains(KEY_HWDEC_CRASH_COMBO)) return
+        prefs.edit().putBoolean(KEY_HWDEC_CRASH_BLACKLIST, false).remove(KEY_HWDEC_CRASH_COMBO).apply()
     }
 
     /** 是否处于「硬解导致崩溃」的设备黑名单（强制软解） */
@@ -174,13 +243,30 @@ class PlayerSettingsStore(
     /** 启动时调用：清理上次遗留的 embed pending 标记，并判定该组合不可用 */
     fun recoverPendingEmbedSession() {
         if (!prefs.getBoolean(KEY_EMBED_PENDING, false)) return
+        markEmbedComboUnusable()
+    }
+
+    /**
+     * 判定 mediacodec_embed + mediacodec 组合在本次设备上不可用：
+     * 清 pending 标记、写入崩溃黑名单组合、落盘 gpu + 软解，并置自动回退标记
+     * （下次以 gpu + 软解起播）。
+     *
+     * 由两处共用：启动时发现上次 embed 起播未出帧（recoverPendingEmbedSession），
+     * 以及运行中延迟初始化 configure 失败（首帧超时）时立即回退。
+     *
+     * 用 commit() 同步落盘：回退过程紧接着会做 VO 重组，若进程在此间退出，
+     * apply() 的异步写可能丢失，导致下次启动又选中已失败的组合。
+     */
+    fun markEmbedComboUnusable(): Boolean {
         val combo = "$VO_MEDIACODEC_EMBED|$HWDEC_MEDIACODEC"
-        prefs.edit()
+        return prefs.edit()
             .putBoolean(KEY_EMBED_PENDING, false)
             .putBoolean(KEY_HWDEC_CRASH_BLACKLIST, true)
             .putString(KEY_HWDEC_CRASH_COMBO, combo)
             .putBoolean(KEY_VO_AUTO_FALLBACK, true)
-            .apply()
+            .putString(KEY_HWDEC, HWDEC_SOFTWARE)
+            .putString(KEY_VO, DEFAULT_VO_VALUE)
+            .commit()
     }
 
     // -----------------------------------------------------------------
@@ -377,6 +463,8 @@ class PlayerSettingsStore(
             .remove(KEY_VO_AUTO_FALLBACK)
             .remove(KEY_HWDEC_CRASH_COMBO)
             .remove(KEY_HWDEC_MIGRATED)
+            .remove(KEY_RENDER_MIGRATED)
+            .remove(KEY_RENDER_USER_CHOSEN)
             .remove(KEY_PLAYER_TYPE)
             .remove(KEY_HDR_MODE)
             .remove(KEY_RTSP_TRANSPORT)
@@ -447,6 +535,12 @@ class PlayerSettingsStore(
 
         /** 手机端 auto-copy → mediacodec 的一次性迁移标记 */
         private const val KEY_HWDEC_MIGRATED = "player_hwdec_handheld_migrated"
+
+        /** 旧默认渲染路径（auto-copy / gpu+软解）已按新规则迁移过一次 */
+        private const val KEY_RENDER_MIGRATED = "player_render_path_migrated"
+
+        /** 用户在设置页/频道级设置里手动选过 vo 或 hwdec（迁移不得覆盖） */
+        private const val KEY_RENDER_USER_CHOSEN = "player_render_path_user_chosen"
     }
 
     /** 是否为 arm32 TV 设备（仅 armeabi-v7a 主 ABI 的电视/盒子） */
@@ -512,21 +606,48 @@ class PlayerSettingsStore(
     }
 
     private fun defaultVo(): String = when {
-        // arm32 电视/盒子：默认 gpu + 软解。mediacodec_embed 起播在部分设备上会随机
-        // 静默退出，改为设置页可选（标注实验性、重启后生效），不再作默认值。
-        isArm32Tv() -> DEFAULT_VO_VALUE
+        // arm32 电视/盒子：非 MTK/Sony 芯片默认直写 Surface（盒子实测出画且流畅）；
+        // MTK/Sony 上 mediacodec_embed 有随机静默退出历史，保持 gpu + 软解。
+        isArm32Tv() -> if (isEmbedUnstableSoc()) DEFAULT_VO_VALUE else VO_MEDIACODEC_EMBED
         isArm64Tv() -> VO_MEDIACODEC_EMBED
         isArm64Handheld() -> VO_GPU_NEXT
         else -> DEFAULT_VO_VALUE
     }
 
     private fun defaultHwdec(): String = when {
-        // arm32 TV：默认软解，硬解由用户显式开启（届时 vo 切到 mediacodec_embed）
-        isArm32Tv() -> HWDEC_SOFTWARE
+        // arm32 TV：新默认 vo 是直写 Surface，必须配 mediacodec；MTK/Sony 仍默认软解
+        isArm32Tv() -> if (isEmbedUnstableSoc()) HWDEC_SOFTWARE else HWDEC_MEDIACODEC
         // 默认 vo 是 mediacodec_embed 时，hwdec 必须配对 mediacodec（零拷贝直渲）
         hasExplicitVo().not() && defaultVo() == VO_MEDIACODEC_EMBED -> HWDEC_MEDIACODEC
-        // 手机：MediaCodec 直通 GPU，避免 copy-back 回读 CPU
+        // arm64 手机：硬解更省电更流畅，失败由崩溃黑名单回退 gpu + 软解。
+        // 车机/平板大屏（非手持）实测硬解不可用：mediacodec_embed 起播 SIGSEGV、
+        // gpu-next + mediacodec 进程退出，保持软解默认，不再每次启动崩一次。
         isArm64Handheld() -> HWDEC_MEDIACODEC
+        // arm64 非手持（车机/平板大屏）：硬解在该类 U 上实测不可用
+        // （mediacodec_embed 起播 SIGSEGV、gpu-next + mediacodec 进程退出），
+        // 直接默认软解，不再靠崩溃黑名单在首启时崩一次才降级。
+        isArm64NonTv() -> HWDEC_SOFTWARE
         else -> DEFAULT_HWDEC_VALUE
+    }
+
+    /** arm64 且非 TV 布局（手机 / 平板 / 车机） */
+    private fun isArm64NonTv(): Boolean {
+        if (appContext == null) return false
+        if (android.os.Build.SUPPORTED_ABIS.none { it == "arm64-v8a" }) return false
+        return !isArm64Tv()
+    }
+
+    /**
+     * arm32 电视上 mediacodec_embed 已知不稳的芯片（MTK / Sony）。
+     * 判定沿用既有排除条件：厂商/品牌含 sony、型号含 bravia、
+     * HARDWARE/BOARD 含 mtk 或命中 mt\d{3,5}。
+     */
+    private fun isEmbedUnstableSoc(): Boolean {
+        val vendor = (android.os.Build.MANUFACTURER + " " + android.os.Build.BRAND).lowercase()
+        if (vendor.contains("sony")) return true
+        if (android.os.Build.MODEL.lowercase().contains("bravia")) return true
+        val board = (android.os.Build.HARDWARE + " " + android.os.Build.BOARD).lowercase()
+        if (board.contains("mtk")) return true
+        return Regex("mt\\d{3,5}").containsMatchIn(board)
     }
 }

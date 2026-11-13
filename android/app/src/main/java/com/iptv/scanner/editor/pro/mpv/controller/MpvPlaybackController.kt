@@ -322,6 +322,16 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
         return true
     }
 
+    /**
+     * 换台开始（T0）调用：清掉「这一路已经用完整预算重探过」的记忆。
+     *
+     * 原来 fullProbeBudgetUrl 只在同一 URL 上永久生效，4K↔1080 来回切回同一个
+     * 4K 频道时，第二轮就不会再重探，只能停在“只有声音没有画面”。
+     */
+    fun resetProbeBudgetForSwitch() {
+        fullProbeBudgetUrl = ""
+    }
+
     /** 是否是使用 1MB/0.5s 探测预算的直播流（TS / RTSP / RTP / FCC），排除 VOD/HLS */
     private fun isLiveProbeBudgetUrl(url: String): Boolean {
         val u = url.lowercase()

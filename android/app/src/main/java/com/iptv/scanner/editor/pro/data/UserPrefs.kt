@@ -126,6 +126,8 @@ class UserPrefs private constructor() {
     fun setVoAutoFallback(fallback: Boolean) = playerSettingsStore.setVoAutoFallback(fallback)
     fun getHwdec(): String = playerSettingsStore.getHwdec()
     fun setHwdec(hwdec: String) = playerSettingsStore.setHwdec(hwdec)
+    /** 用户手动改过渲染方式：默认值迁移不得覆盖 */
+    fun markRenderPathUserChosen() = playerSettingsStore.markRenderPathUserChosen()
 
     /** 是否为 arm32 TV 设备（硬解只走 mediacodec_embed） */
     fun isArm32TvDevice(): Boolean = playerSettingsStore.isArm32TvDevice()
@@ -162,6 +164,8 @@ class UserPrefs private constructor() {
     fun beginEmbedSession() = playerSettingsStore.beginEmbedSession()
     fun endEmbedSession() = playerSettingsStore.endEmbedSession()
     fun recoverPendingEmbedSession() = playerSettingsStore.recoverPendingEmbedSession()
+    /** 判定 mediacodec_embed + mediacodec 不可用：写黑名单组合并置自动回退 */
+    fun markEmbedComboUnusable() = playerSettingsStore.markEmbedComboUnusable()
     fun getHdrMode(): String = playerSettingsStore.getHdrMode()
     fun setHdrMode(mode: String) = playerSettingsStore.setHdrMode(mode)
 

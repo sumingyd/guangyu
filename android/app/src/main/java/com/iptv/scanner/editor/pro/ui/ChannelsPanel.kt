@@ -45,9 +45,18 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -56,7 +65,6 @@ import com.iptv.scanner.editor.pro.data.IptvChannel
 import com.iptv.scanner.editor.pro.player.ProgressHelper
 import com.iptv.scanner.editor.pro.ui.ChannelTab
 import com.iptv.scanner.editor.pro.ui.theme.tvFocusBorder
-import com.iptv.scanner.editor.pro.ui.theme.tvTextField
 
 /**
  * 频道列表面板：4 个 tab + 搜索 + 分组过滤 + LazyColumn。
@@ -91,6 +99,18 @@ fun ChannelsPanel(viewModel: AppViewModel, inline: Boolean = false, compact: Boo
         kotlinx.coroutines.delay(50)
         kotlin.runCatching { closeFocusRequester.requestFocus() }
     }
+
+    // 搜索框与频道列表之间的焦点桥：
+    // 电视端搜索框一旦聚焦就弹软键盘，而软键盘窗口会抢走方向键（按 下/右 焦点跑到键盘格栅里），
+    // 所以 TV 上搜索框默认只读（不弹键盘）：方向键正常在面板内导航，
+    // 需要输入时按 OK 才切成可编辑并唤出键盘；列表按 BACK 把焦点交回搜索框。
+    val searchFocusRequester = remember { FocusRequester() }
+    var listFocusSignal by remember { mutableStateOf(0) }
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val uiMode by viewModel.uiMode.collectAsState()
+    // 仅 TV 且用户按过 OK 时才允许输入，避免聚焦即弹键盘
+    var searchTyping by remember { mutableStateOf(false) }
 
     // 根据 tab 过滤分组（与 TvUnifiedPanel 对齐）：
     // - LOCAL tab：只显示本地频道的分组，避免显示订阅分组误导用户
@@ -159,6 +179,7 @@ fun ChannelsPanel(viewModel: AppViewModel, inline: Boolean = false, compact: Boo
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { viewModel.setSearchQuery(it) },
+                    readOnly = uiMode == UiMode.TV && !searchTyping,
                     placeholder = { Text("搜索频道...", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp) },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
                     trailingIcon = {
@@ -171,7 +192,47 @@ fun ChannelsPanel(viewModel: AppViewModel, inline: Boolean = false, compact: Boo
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp, vertical = 6.dp)
-                        .tvTextField(),
+                        .focusRequester(searchFocusRequester)
+                        .onFocusChanged { if (!it.isFocused) searchTyping = false }
+                        // 搜索框自己会消费方向键，这里显式接管：
+                        // 下/右进右侧列表、上回上一行、OK 切成可编辑并唤出软键盘
+                        .onPreviewKeyEvent { event ->
+                            if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                            when (event.key) {
+                                Key.DirectionDown, Key.DirectionRight -> {
+                                    // 输入态下键盘窗口会吃掉方向键，能走到这里的按键一定不在输入态，
+                                    // 直接退出输入态并把焦点交给列表
+                                    searchTyping = false
+                                    // 不能依赖 moveFocus 的几何搜索：搜索框横跨整行，
+                                    // 右/下会先命中上方的 tab 行，而不是右侧频道列表
+                                    if (filteredChannels.isNotEmpty()) {
+                                        listFocusSignal++
+                                        true
+                                    } else {
+                                        val direction =
+                                            if (event.key == Key.DirectionDown) FocusDirection.Down
+                                            else FocusDirection.Right
+                                        focusManager.moveFocus(direction)
+                                        true
+                                    }
+                                }
+                                Key.DirectionUp -> {
+                                    searchTyping = false
+                                    focusManager.moveFocus(FocusDirection.Up)
+                                    true
+                                }
+                                Key.DirectionCenter, Key.Enter -> {
+                                    if (uiMode == UiMode.TV && !searchTyping) {
+                                        searchTyping = true
+                                        keyboardController?.show()
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                }
+                                else -> false
+                            }
+                        },
                     shape = RoundedCornerShape(8.dp),
                     singleLine = true
                 )
@@ -213,6 +274,8 @@ fun ChannelsPanel(viewModel: AppViewModel, inline: Boolean = false, compact: Boo
                         onAddSource = { viewModel.toggleSourceManager() },
                         onRefresh = { viewModel.reloadSources() },
                         onPlay = { viewModel.playChannel(it) },
+                        focusSignal = listFocusSignal,
+                        backToSearchFocus = if (!compact && !noSearch) searchFocusRequester else null,
                         modifier = Modifier.weight(0.62f)
                     )
                 }
@@ -227,7 +290,9 @@ fun ChannelsPanel(viewModel: AppViewModel, inline: Boolean = false, compact: Boo
                     sourceWarning = iptvStatus?.sourceWarning.orEmpty(),
                     onAddSource = { viewModel.toggleSourceManager() },
                     onRefresh = { viewModel.reloadSources() },
-                    onPlay = { viewModel.playChannel(it) }
+                    onPlay = { viewModel.playChannel(it) },
+                    focusSignal = listFocusSignal,
+                    backToSearchFocus = if (!compact && !noSearch) searchFocusRequester else null
                 )
             }
         }
@@ -264,6 +329,10 @@ private fun ChannelListContent(
     onAddSource: () -> Unit,
     onRefresh: () -> Unit,
     onPlay: (Int) -> Unit,
+    /** 搜索框按 下/右 时递增：把焦点落到当前可见的第一条频道 */
+    focusSignal: Int = 0,
+    /** 非空时列表按 BACK 把焦点交回搜索框（面板不关闭） */
+    backToSearchFocus: FocusRequester? = null,
     modifier: Modifier = Modifier
 ) {
     if (filteredChannels.isEmpty()) {
@@ -311,22 +380,49 @@ private fun ChannelListContent(
             duplicateChannelNames(filteredChannels.map { it.first })
         }
 
+        // 搜索框把焦点交进来时，落在“当前可见的第一条”上，而不是每次跳回列表顶部
+        val rowFocusRequester = remember { FocusRequester() }
+        var focusRowIndex by remember { mutableStateOf(-1) }
+        LaunchedEffect(focusSignal) {
+            if (focusSignal > 0 && displayedChannels.isNotEmpty()) {
+                focusRowIndex = listState.firstVisibleItemIndex
+                    .coerceIn(0, displayedChannels.lastIndex)
+                // 等这一帧重组把 focusRequester 挂到目标行上，否则 requestFocus 会抛
+                // "FocusRequester is not initialized" 且焦点留在原处
+                androidx.compose.runtime.withFrameNanos { }
+                kotlin.runCatching { rowFocusRequester.requestFocus() }
+            }
+        }
+
         LazyColumn(
-            state = if (usePagination) listState else rememberLazyListState(),
-            modifier = modifier.fillMaxSize(),
+            state = listState,
+            modifier = modifier
+                .fillMaxSize()
+                .onPreviewKeyEvent { event ->
+                    // BACK 从列表回到搜索框（消费掉事件，Activity 就不会关面板）
+                    if (backToSearchFocus != null &&
+                        event.type == KeyEventType.KeyDown && event.key == Key.Back
+                    ) {
+                        kotlin.runCatching { backToSearchFocus.requestFocus() }
+                        true
+                    } else {
+                        false
+                    }
+                },
             contentPadding = PaddingValues(vertical = 4.dp)
         ) {
             itemsIndexed(
                 items = displayedChannels,
                 key = { index, _ -> channelItemKeys[index] }
-            ) { _, (channel, idx) ->
+            ) { index, (channel, idx) ->
                 ChannelListItem(
                     channel = channel,
                     displayName = channelDisplayName(channel, duplicateNames),
                     isPlaying = idx == currentIdx,
                     isFavorite = favorites.contains(idx),
                     showGroupMeta = tab == ChannelTab.SUB || tab == ChannelTab.LOCAL,
-                    onClick = { onPlay(idx) }
+                    onClick = { onPlay(idx) },
+                    modifier = if (index == focusRowIndex) Modifier.focusRequester(rowFocusRequester) else Modifier
                 )
             }
             // 分页加载指示器
@@ -512,11 +608,13 @@ private fun ChannelListItem(
     isPlaying: Boolean,
     isFavorite: Boolean,
     showGroupMeta: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .then(modifier)
             .tvFocusBorder()
             .clickable { onClick() }
             .padding(horizontal = 12.dp, vertical = 8.dp),

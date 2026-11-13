@@ -129,6 +129,9 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     /** VO 弱判定（无视频轨/无渲染帧）延时任务 */
     private var voWeakCheckRunnable: Runnable? = null
 
+    /** 「只有音频轨、没有视频」独立判定任务（与 vo-configured 无关） */
+    private var noVideoCheckRunnable: Runnable? = null
+
     /** 换台首帧耗时打点任务 */
     private var firstFramePerfRunnable: Runnable? = null
 
@@ -219,6 +222,13 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
         try {
             _hwdecBlacklisted.value = UserPrefs.getInstance().isHwdecBlacklisted()
             _voAutoFallback.value = UserPrefs.getInstance().isVoAutoFallback()
+            // 冷启动时 MPVView 直接用持久化的 vo/hwdec 初始化，_voCache/_hwdecCache 还是
+            // 字段默认值（gpu/auto-copy）。不同步的话，超时回退与默认路径回退的门禁
+            // （_voCache == "mediacodec_embed"、_voCache != prefs.getVo()）会把整条链路挡掉。
+            val prefs = UserPrefs.getInstance()
+            _voCache = prefs.getVo()
+            _hwdecCache = prefs.getHwdec()
+            Log.i(TAG, "attach: synced render path vo=$_voCache hwdec=$_hwdecCache")
         } catch (e: Throwable) {
             Log.w(TAG, "attach: read hwdec blacklist failed: ${e.message}")
         }
@@ -334,6 +344,14 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     fun resetVoFallbackForUser() {
         voFallbackDone = false
         _voAutoFallback.value = false
+    }
+
+    /**
+     * 换台开始（T0）调用：本路重新获得一次「完整探测预算重探」的机会。
+     * 4K↔1080 反复切回同一个 URL 时，旧实现只在第一轮重探，之后只能停在只有音频。
+     */
+    fun resetProbeBudgetForSwitch() {
+        playbackController.resetProbeBudgetForSwitch()
     }
 
     fun setVoAndHwdec(vo: String, hwdec: String): String? {
@@ -540,9 +558,17 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     private fun scheduleFirstFramePerf() {
         firstFramePerfRunnable?.let { mpvView?.asView()?.removeCallbacks(it) }
         val view = mpvView?.asView() ?: return
+        val gen = playbackController.switchGeneration
         val deadline = android.os.SystemClock.elapsedRealtime() + 3_000L
         val runnable = object : Runnable {
             override fun run() {
+                // 已经在重探新一路（代次变化）：这一次的判定作废，
+                // 否则会拿重载在途的空白状态去误判「无视频轨」并把硬解拉黑
+                if (playbackController.switchGeneration != gen) {
+                    firstFramePerfRunnable = null
+                    Log.i(TAG, "first-frame perf: superseded by newer switch (gen=$gen)")
+                    return
+                }
                 val frames = try {
                     MPVLib.getPropertyInt("estimated-frame-number") ?: 0
                 } catch (_: Throwable) {
@@ -557,7 +583,57 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 }
                 if (android.os.SystemClock.elapsedRealtime() >= deadline) {
                     firstFramePerfRunnable = null
-                    Log.w(TAG, "first-frame perf: timeout after 3s")
+                    val videoFormat = try {
+                        MPVLib.getPropertyString("video-format") ?: ""
+                    } catch (_: Throwable) {
+                        ""
+                    }
+                    val audioChannels = try {
+                        MPVLib.getPropertyInt("audio-params/channel-count") ?: 0
+                    } catch (_: Throwable) {
+                        0
+                    }
+                    // 该 mpv 的 video-codec 恒为空（正常出帧时也为空），不能当判据；
+                    // 这里用 width/height 判断视频链是否真的建起来（探测失败时为 0）。
+                    val sizeKnown = videoSizeKnown()
+                    val audioBitrate = try {
+                        MPVLib.getPropertyDouble("audio-bitrate") ?: 0.0
+                    } catch (_: Throwable) {
+                        0.0
+                    }
+                    val pausedForCache = try {
+                        MPVLib.getPropertyBoolean("paused-for-cache") ?: false
+                    } catch (_: Throwable) {
+                        false
+                    }
+                    Log.w(TAG, "first-frame perf: timeout after 3s " +
+                        "(vo=$_voCache, video-format='$videoFormat', size-known=$sizeKnown, " +
+                        "audio-channels=$audioChannels, audio-bitrate=${audioBitrate.toInt()}, " +
+                        "paused-for-cache=$pausedForCache, tracks=${trackTypeSummary()})")
+                    // 直写 Surface 路径下硬解 configure 失败不会崩，但会停在“有声音没画面”：
+                    // 解码链没建起来（宽高为 0、一帧未出）。
+                    // 判据必须同时满足“流里有视频 + 音频真的在解码”（audio-bitrate>0）：
+                    // - 纯音频电台没有视频轨/视频编解码器，不降级；
+                    // - 死流/无包时音频也没有码率，交给既有断流/错误处理，不能把硬解拉黑。
+                    // video-format 在探测失败时仍会显示 h264/hevc，不能当依据。
+                    val audioAlive = audioBitrate > 0
+                    val hasVideoSignal = hasVideoTrack()
+                    if (_voCache == "mediacodec_embed" && !sizeKnown &&
+                        hasVideoSignal && audioAlive
+                    ) {
+                        // 先补一次完整探测预算：SPS/PPS 没探到时会表现成同一种黑屏，
+                        // 重新 loadfile 往往就能出画，不必急着把硬解组合拉黑。
+                        val activeUrl = playbackController.lastLoadedUrl
+                            .ifEmpty { playbackController.loadingUrl }
+                        if (playbackController.retryWithFullProbeBudget(activeUrl)) {
+                            Log.w(TAG, "first-frame timeout: video size unknown on embed path, " +
+                                "retry with full probe budget url=$activeUrl")
+                            return
+                        }
+                        triggerEmbedHwdecFailure(
+                            "no frames in 3s (video size unknown, tracks=${trackTypeSummary()})"
+                        )
+                    }
                     return
                 }
                 view.postDelayed(this, 16L)
@@ -575,10 +651,13 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
      */
     private fun scheduleVoHealthCheck() {
         cancelVoHealthCheck()
+        val gen = playbackController.switchGeneration
         val runnable = Runnable {
             voHealthCheckRunnable = null
+            if (playbackController.switchGeneration != gen) return@Runnable
             try {
                 val videoFormat = MPVLib.getPropertyString("video-format") ?: ""
+                val sizeKnown = videoSizeKnown()
                 val configured = try {
                     MPVLib.getPropertyBoolean("vo-configured")
                 } catch (_: Throwable) {
@@ -587,7 +666,7 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 val currentVo = try { MPVLib.getPropertyString("vo") } catch (_: Throwable) { null }
                 if (!currentVo.isNullOrEmpty()) _actualVo.value = currentVo
                 if (configured == true) {
-                    Log.i(TAG, "vo health check: ok (vo=$currentVo, video-format=$videoFormat)")
+                    Log.i(TAG, "vo health check: ok (vo=$currentVo, video-format=$videoFormat, size-known=$sizeKnown)")
                     return@Runnable
                 }
                 // VO 没接管时，先排除“探测预算太小导致编码没识别出来”：
@@ -601,14 +680,14 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 if (configured == false && maybeFallbackFromDefaultPath("vo-configured=false, video-format=$videoFormat")) {
                     return@Runnable
                 }
-                if (videoFormat.isEmpty()) {
-                    // 无 video track 无法判断是「纯音频流」还是「VO 没起来」，
+                if (!sizeKnown) {
+                    // 视频链还没建起来，无法判断是「纯音频流」还是「VO 没起来」，
                     // 延时再取一次帧计数（弱判定），只有确实一帧都没出且 vo 未配置才回退。
-                    Log.i(TAG, "vo health check: no video track yet, scheduling weak check")
+                    Log.i(TAG, "vo health check: video size unknown, scheduling weak check")
                     scheduleVoWeakFailureCheck()
                     return@Runnable
                 }
-                Log.w(TAG, "vo health check: video-format=$videoFormat but vo-configured=$configured, rebuilding VO once")
+                Log.w(TAG, "vo health check: size-known=$sizeKnown but vo-configured=$configured, rebuilding VO once")
                 suppressFileError()
                 mpvView?.reattachSurfaceWithVo(_voCache)
                 val path = try { MPVLib.getPropertyString("path") } catch (_: Throwable) { null }
@@ -630,25 +709,35 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
      */
     private fun scheduleVoWeakFailureCheck() {
         voWeakCheckRunnable?.let { mpvView?.asView()?.removeCallbacks(it) }
+        val gen = playbackController.switchGeneration
         val runnable = Runnable {
             voWeakCheckRunnable = null
+            if (playbackController.switchGeneration != gen) return@Runnable
             try {
                 val configured = try { MPVLib.getPropertyBoolean("vo-configured") } catch (_: Throwable) { null }
                 if (configured == true) return@Runnable
-                val videoFormat = MPVLib.getPropertyString("video-format") ?: ""
+                val sizeKnown = videoSizeKnown()
                 val frames = try { MPVLib.getPropertyInt("estimated-frame-number") ?: 0 } catch (_: Throwable) { 0 }
-                if (videoFormat.isEmpty() || frames <= 0) {
+                // 有视频轨却建不出尺寸、或一帧都没出，才判定异常；
+                // 纯音频频道（没有视频轨）不算故障，避免误回退/误提示。
+                if (hasVideoTrack() && (frames <= 0 || !sizeKnown)) {
                     // 也可能只是 1MB/0.5s 没探到编码：先按完整预算重载一次，再判定 VO 故障
                     val activeUrl = playbackController.lastLoadedUrl.ifEmpty { playbackController.loadingUrl }
                     if (playbackController.retryWithFullProbeBudget(activeUrl)) {
                         Log.w(TAG, "vo weak check: no frames, retry '$activeUrl' with full probe budget")
                         return@Runnable
                     }
-                    Log.w(TAG, "vo weak check failed: video-format='$videoFormat', frames=$frames, vo-configured=$configured")
-                    maybeFallbackFromDefaultPath(
+                    Log.w(TAG, "vo weak check failed: size-known=$sizeKnown, frames=$frames, vo-configured=$configured")
+                    val fellBack = maybeFallbackFromDefaultPath(
                         "no frames after ${(VO_HEALTH_CHECK_DELAY_MS + VO_WEAK_CHECK_DELAY_MS) / 1000}s " +
-                            "(video-format='$videoFormat', frames=$frames, vo-configured=$configured)"
+                            "(size-known=$sizeKnown, frames=$frames, vo-configured=$configured)"
                     )
+                    if (!fellBack) {
+                        // 回退链已经走完（或用户手选了 vo）仍然没画面：给明确提示，
+                        // 不允许用户只看到一块黑屏。
+                        Log.w(TAG, "vo weak check: no fallback available, notify user")
+                        playbackController.showOsd("当前渲染方式无法出画，已尝试全部可用方式", 5000)
+                    }
                 }
             } catch (e: Throwable) {
                 Log.w(TAG, "vo weak check failed: ${e.message}")
@@ -656,6 +745,69 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
         }
         voWeakCheckRunnable = runnable
         mpvView?.asView()?.postDelayed(runnable, VO_WEAK_CHECK_DELAY_MS)
+    }
+
+    /**
+     * 「只有音频轨」独立判定（FILE_LOADED 后 2s）。
+     *
+     * 4K 流码率约 27Mbps，1MB/0.5s 的探测预算只覆盖约 0.3s，很可能是从 GOP 中间
+     * 起播、探不到带 SPS/PPS 的关键帧，mpegts 直接把视频流丢掉，mpv 只剩音频轨
+     * （日志 `mpegts: probed stream 0 failed`，tracks=audio:aac）。
+     *
+     * 这个判定刻意不看 vo-configured：gpu 路径上 VO 会因为上一路视频仍保持 configured，
+     * 原有健康检查第一行就 return，于是永远不重探，停在“有声音没画面”。
+     * 每次换台最多重探一次（由 fullProbeBudgetUrl 兜底，切台时复位）。
+     */
+    private fun scheduleNoVideoTrackCheck() {
+        cancelNoVideoTrackCheck()
+        val view = mpvView?.asView() ?: return
+        val gen = playbackController.switchGeneration
+        val runnable = Runnable {
+            noVideoCheckRunnable = null
+            if (playbackController.switchGeneration != gen) return@Runnable
+            try {
+                val frames = try { MPVLib.getPropertyInt("estimated-frame-number") ?: 0 } catch (_: Throwable) { 0 }
+                if (frames > 0) return@Runnable
+                val videoFormat = try { MPVLib.getPropertyString("video-format") ?: "" } catch (_: Throwable) { "" }
+                val audioBitrate = try { MPVLib.getPropertyDouble("audio-bitrate") ?: 0.0 } catch (_: Throwable) { 0.0 }
+                val pausedForCache = try { MPVLib.getPropertyBoolean("paused-for-cache") ?: false } catch (_: Throwable) { false }
+                val activeUrl = playbackController.lastLoadedUrl.ifEmpty { playbackController.loadingUrl }
+                // 情况 1：解码链完全没起来（0 帧、音频也没码率、且不是等缓冲）。
+                // 对应 mpegts 探测没拿到 SPS/PPS、codecpar 尺寸未知，播放根本没启动。
+                if (audioBitrate <= 0 && !pausedForCache) {
+                    Log.w(TAG, "no-video check: nothing decoding after ${NO_VIDEO_CHECK_DELAY_MS}ms " +
+                        "(frames=0, video-format='$videoFormat', size-known=${videoSizeKnown()}, " +
+                        "audio-bitrate=0, paused-for-cache=false, tracks=${trackTypeSummary()}, url=$activeUrl)")
+                    if (playbackController.retryWithFullProbeBudget(activeUrl)) {
+                        Log.w(TAG, "no-video check: reload with 5M/5s probe budget")
+                    } else {
+                        Log.w(TAG, "no-video check: full budget unavailable or already used, keep current playback")
+                    }
+                    return@Runnable
+                }
+                // 情况 2：只有音频在解码，视频尺寸始终是 0（视频链没建起来）。
+                // 不再看 video-format：探测失败时它仍会显示 h264/hevc。
+                if (!videoSizeKnown()) {
+                    Log.w(TAG, "no-video check: no usable video chain after ${NO_VIDEO_CHECK_DELAY_MS}ms " +
+                        "(video-format='$videoFormat', size-known=false, " +
+                        "audio-bitrate=${audioBitrate.toInt()}, tracks=${trackTypeSummary()}, url=$activeUrl)")
+                    if (playbackController.retryWithFullProbeBudget(activeUrl)) {
+                        Log.w(TAG, "no-video check: reload with 5M/5s probe budget")
+                    } else {
+                        Log.w(TAG, "no-video check: full budget unavailable or already used, keep current playback")
+                    }
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "no-video check failed: ${e.message}")
+            }
+        }
+        noVideoCheckRunnable = runnable
+        view.postDelayed(runnable, NO_VIDEO_CHECK_DELAY_MS)
+    }
+
+    private fun cancelNoVideoTrackCheck() {
+        noVideoCheckRunnable?.let { mpvView?.asView()?.removeCallbacks(it) }
+        noVideoCheckRunnable = null
     }
 
     /**
@@ -723,11 +875,91 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
         return true
     }
 
+    /** 容器里是否存在视频轨（区分纯音频电台与解码链没起来） */
+    private fun hasVideoTrack(): Boolean = try {
+        val count = MPVLib.getPropertyInt("track-list/count") ?: 0
+        (0 until count).any { i ->
+            MPVLib.getPropertyString("track-list/$i/type") == "video"
+        }
+    } catch (_: Throwable) {
+        false
+    }
+
+    /**
+     * 视频尺寸是否已知。
+     *
+     * 用它判断“视频链是否真的建起来”：探测没拿到 SPS/PPS 时，mpv 仍会报告
+     * video-format=h264/hevc，但 width/height 是 0、一帧都解不出来。
+     * 注：这个 mpv 版本的 video-codec 属性实测恒为空，不能用作判据。
+     */
+    private fun videoSizeKnown(): Boolean = try {
+        val w = MPVLib.getPropertyInt("width") ?: 0
+        val h = MPVLib.getPropertyInt("height") ?: 0
+        w > 0 && h > 0
+    } catch (_: Throwable) {
+        false
+    }
+
+    /** 轨道摘要（仅日志/取证用） */
+    private fun trackTypeSummary(): String = try {
+        val count = MPVLib.getPropertyInt("track-list/count") ?: 0
+        (0 until count).joinToString(",") { i ->
+            "${MPVLib.getPropertyString("track-list/$i/type")}:${MPVLib.getPropertyString("track-list/$i/codec")}"
+        }
+    } catch (_: Throwable) {
+        "?"
+    }
+
+    /**
+     * 直写 Surface 硬解初始化失败（MediaCodec configure 失败 / 解码链未建立）的收口：
+     * 与 native 崩溃走同一条黑名单——记录 mediacodec_embed + mediacodec 不可用，
+     * 落盘 gpu + 软解，并在本次会话内重建播放器立即出画。
+     *
+     * 触发时机：首帧 3s 超时且视频尺寸始终未知（延迟初始化 configure 失败后
+     * mpv 会停在 “Could not initialize video chain”，音频正常但永远没有画面）。
+     */
+    private fun triggerEmbedHwdecFailure(reason: String) {
+        if (voFallbackDone) return
+        voFallbackDone = true
+        val prefs = try { UserPrefs.getInstance() } catch (_: Throwable) { return }
+        Log.w(TAG, "embed hwdec failure: $reason, blacklist mediacodec_embed|mediacodec -> gpu + software")
+        try {
+            // 一次原子落盘：黑名单组合 + gpu + 软解 + 自动回退标记
+            prefs.markEmbedComboUnusable()
+        } catch (e: Throwable) {
+            Log.w(TAG, "embed hwdec failure: persist failed: ${e.message}")
+        }
+        _hwdecBlacklisted.value = true
+        _voAutoFallback.value = true
+        _renderPathReason.value = "fallback"
+        _voCache = "gpu"
+        _hwdecCache = "no"
+        _actualVo.value = "gpu"
+        suppressFileError()
+        postOnUiThread {
+            try {
+                MPVLib.setPropertyString("hwdec", "no")
+                // 不在运行中重建 MPVView：销毁旧 View 会在 MTK/arm32 上触发
+                // vo_mediacodec_embed preinit 断言（WinID=0）直接 SIGABRT。
+                // 改用“原地 detach → vo=null → attach → vo=gpu”并重放当前 URL。
+                mpvView?.reattachSurfaceWithVo("gpu")
+                val path = try { MPVLib.getPropertyString("path") } catch (_: Throwable) { null }
+                if (!path.isNullOrEmpty()) mpvView?.playFile(path)
+                Log.i(TAG, "embed hwdec failure: fallback applied, vo=gpu, hwdec=no, replay=$path")
+            } catch (e: Throwable) {
+                Log.e(TAG, "embed hwdec failure: apply failed", e)
+            }
+            onVoAutoFallback?.invoke("gpu")
+        }
+        clearSuppressFileError(1500)
+    }
+
     private fun cancelVoHealthCheck() {
         voHealthCheckRunnable?.let { mpvView?.asView()?.removeCallbacks(it) }
         voHealthCheckRunnable = null
         voWeakCheckRunnable?.let { mpvView?.asView()?.removeCallbacks(it) }
         voWeakCheckRunnable = null
+        cancelNoVideoTrackCheck()
     }
 
     // -----------------------------------------------------------------
@@ -1371,6 +1603,9 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
                 }
 
                 scheduleVoHealthCheck()
+                // 与 vo 无关的「只有音频轨」判定：必须独立于健康检查，
+                // 否则 gpu 路径 vo-configured=true 时永远不会重探
+                scheduleNoVideoTrackCheck()
 
                 mpvView?.let { v ->
                     val pos = v.pendingResumePos
@@ -1504,6 +1739,9 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
 
         /** VO 弱判定（无视频轨/无帧）在健康检查之后再等多久 */
         private const val VO_WEAK_CHECK_DELAY_MS = 2500L
+
+        /** 「只有音频轨」判定在 FILE_LOADED 之后多久触发（比首帧 3s 超时更早，留出重探时间） */
+        private const val NO_VIDEO_CHECK_DELAY_MS = 2000L
 
         /** 进程内允许的“会话级软解降级”恢复重试次数 */
         private const val MAX_HWDEC_RETRIES_PER_SESSION = 3

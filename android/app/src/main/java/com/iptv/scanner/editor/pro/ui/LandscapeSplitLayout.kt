@@ -148,6 +148,9 @@ internal fun TvSplitLayout(
     // 没有初焦时 Compose 焦点系统无活跃焦点节点，方向键会落到 Activity 兜底
     // （全局切台/seek），右侧面板与控制栏（含全屏按钮）永远无法用遥控器到达。
     val videoFocusRequester = remember { FocusRequester() }
+    // 右侧面板首个页签的焦点入口：视频区按 RIGHT 直接落到「分类」页签，
+    // 不依赖几何搜索（平板/电视上右侧面板内容密集，几何搜索容易落到无高亮的行上）。
+    val sideFirstTabFocus = remember { FocusRequester() }
     // 注意：MainPlayerScreen 是常驻组合（首页只是覆盖层），TvSplitLayout 不会 dispose，
     // LaunchedEffect(Unit) 只在首次进入时执行——BACK 回首页再进分屏不会再触发。
     // 因此 key 用 showHome/landscapeSplitMode：每次真正"进入分屏播放页"都重新请求初焦。
@@ -179,6 +182,21 @@ internal fun TvSplitLayout(
                     return@LaunchedEffect
                 } catch (_: Exception) {
                 }
+            }
+        }
+    }
+
+    // 平板模式焦点归零兜底（Activity 判定 DPAD 未被任何节点消费）：同样把焦点拉回视频区，
+    // 用户随后 RIGHT/OK 即可进入右侧面板与控制栏。
+    val tabletFocusTick by viewModel.tabletFocusResetTick.collectAsState()
+    androidx.compose.runtime.LaunchedEffect(tabletFocusTick) {
+        if (tabletFocusTick <= 0L) return@LaunchedEffect
+        repeat(6) { attempt ->
+            if (attempt > 0) delay(100)
+            try {
+                videoFocusRequester.requestFocus()
+                return@LaunchedEffect
+            } catch (_: Exception) {
             }
         }
     }
@@ -317,6 +335,10 @@ internal fun TvSplitLayout(
                     .fillMaxWidth()
                     .weight(1f)
                     .focusRequester(videoFocusRequester)
+                    // focusProperties 必须放在 focusable 之前才生效：
+                    // RIGHT 显式交给右侧面板首个页签，保证方向键一定落到有焦点框的控件上
+                    // （几何搜索在右侧面板密集区域会落到无描边的节点，看起来像"焦点消失"）。
+                    .focusProperties { right = sideFirstTabFocus }
                     // TV 遥控器：视频区可聚焦。UP/DOWN 永不拦截（焦点导航到控制栏/上方）；
                     // 仅回看/本地文件时 LEFT/RIGHT 拦截为 seek，直播时放行给焦点导航（RIGHT 进右列面板）；
                     // OK = 焦点移到正下方控制栏
@@ -526,7 +548,11 @@ internal fun TvSplitLayout(
                 .weight(0.42f)
                 .fillMaxHeight()
         ) {
-            SplitSidePanel(viewModel = viewModel)
+            SplitSidePanel(
+                viewModel = viewModel,
+                firstTabFocus = sideFirstTabFocus,
+                videoFocus = videoFocusRequester
+            )
         }
     }
 }
@@ -536,7 +562,11 @@ internal fun TvSplitLayout(
  * GlassPanel(overlayDark) 内部已是 DarkOverlayTheme 白系作用域。
  */
 @Composable
-private fun SplitSidePanel(viewModel: AppViewModel) {
+private fun SplitSidePanel(
+    viewModel: AppViewModel,
+    firstTabFocus: FocusRequester? = null,
+    videoFocus: FocusRequester? = null
+) {
     val oc = rememberPlayerOverlayColors()
     val currentIdx by viewModel.currentIdx.collectAsState()
     val currentChannel by viewModel.currentChannel.collectAsState()
@@ -565,6 +595,24 @@ private fun SplitSidePanel(viewModel: AppViewModel) {
     androidx.compose.runtime.LaunchedEffect(tabs.size) {
         if (selectedTab >= tabs.size) selectedTab = 0
     }
+    // 页签焦点入口：第 1 个页签接管「视频区 RIGHT」的落点，其余页签按索引从左往右排布；
+    // 页签 LEFT 回视频区（避免遥控器在左侧控制栏与页签之间乱跳）。
+    val tabFocusRequesters = remember(tabs.size) { List(tabs.size) { FocusRequester() } }
+    // 每个页签内容区的首项焦点入口：页签 DOWN 直接进入对应列表第一项，
+    // 不做几何搜索（否则 DOWN 会跳回左边的视频区，遥控器"往下怎么都进不去列表"）。
+    val contentFocusRequesters = remember(tabs.size) { List(tabs.size) { FocusRequester() } }
+    // 页签 DOWN 后内容区是下一帧才重组出来的，直接 requestFocus 会抛「未 attach」；
+    // 记下待聚焦页签，等重组完成后再请求。
+    var pendingContentFocus by remember { androidx.compose.runtime.mutableStateOf<Int?>(null) }
+    androidx.compose.runtime.LaunchedEffect(selectedTab, pendingContentFocus) {
+        val target = pendingContentFocus ?: return@LaunchedEffect
+        if (target != selectedTab) return@LaunchedEffect
+        kotlinx.coroutines.delay(80)
+        kotlin.runCatching { contentFocusRequesters.getOrNull(target)?.requestFocus() }
+        pendingContentFocus = null
+    }
+    val firstTabRequester = firstTabFocus
+    val videoRequester = videoFocus
 
     Column(modifier = Modifier.fillMaxSize()) {
         // 顶行：收藏 / 投屏 / 信息（右侧对齐，图2右上角按钮组）
@@ -641,6 +689,21 @@ private fun SplitSidePanel(viewModel: AppViewModel) {
                                 else Modifier
                             )
                             .tvFocusBorder(cornerRadius = 8)
+                            .focusRequester(if (index == 0 && firstTabRequester != null) firstTabRequester else tabFocusRequesters[index])
+                            // focusProperties 需在 clickable/focusable 之前；仅第 1 个页签 LEFT 回视频区
+                            .then(
+                                if (index == 0 && videoRequester != null) {
+                                    Modifier.focusProperties { left = videoRequester }
+                                } else Modifier
+                            )
+                            // DOWN：先切到该页签，再把焦点送进列表首项
+                            .onPreviewKeyEvent { e ->
+                                if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown) {
+                                    selectedTab = index
+                                    pendingContentFocus = index
+                                    true
+                                } else false
+                            }
                             .clickable { selectedTab = index }
                             .padding(vertical = 7.dp),
                         contentAlignment = Alignment.Center
@@ -693,9 +756,19 @@ private fun SplitSidePanel(viewModel: AppViewModel) {
                         }
                     } else {
                         when (tab) {
-                            0 -> PortraitCategoryContent(viewModel = viewModel, onGroupSelected = { selectedTab = 1 })
-                            1 -> PortraitChannelOnlyList(viewModel = viewModel)
-                            2 -> PortraitEpgContent(viewModel = viewModel)
+                            0 -> PortraitCategoryContent(
+                                viewModel = viewModel,
+                                onGroupSelected = { selectedTab = 1 },
+                                firstItemFocus = contentFocusRequesters.getOrNull(0)
+                            )
+                            1 -> PortraitChannelOnlyList(
+                                viewModel = viewModel,
+                                firstItemFocus = contentFocusRequesters.getOrNull(1)
+                            )
+                            2 -> PortraitEpgContent(
+                                viewModel = viewModel,
+                                firstItemFocus = contentFocusRequesters.getOrNull(2)
+                            )
                             else -> {
                                 val duration by player.duration.collectAsState()
                                 val timePos by player.timePos.collectAsState()

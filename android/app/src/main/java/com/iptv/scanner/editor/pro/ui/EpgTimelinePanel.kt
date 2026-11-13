@@ -298,7 +298,9 @@ maxLines = 1
                         },
                         onProgramClick = { program ->
                             handleTimelineProgramClick(program, viewModel)
-                        }
+                        },
+                        // 平板（含电视切平板）：打开 EPG 时间线即把焦点交给网格
+                        autoFocusOnShow = viewModel.uiMode.collectAsState().value == UiMode.TABLET
                     )
                 }            }
         }
@@ -395,7 +397,8 @@ private fun EpgTimelinePanelAptvInner(viewModel: AppViewModel, glassContainer: B
                 actions = {
                     // 日期切换
                     IconButton(
-                        onClick = { viewModel.setEpgTimelineDateOffset(dateOffset - 1) }
+                        onClick = { viewModel.setEpgTimelineDateOffset(dateOffset - 1) },
+                        modifier = Modifier.tvFocusBorder(cornerRadius = 20, focusedScale = 1.18f)
                     ) {
                         Text("◀", color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp)
                     }
@@ -411,13 +414,17 @@ private fun EpgTimelinePanelAptvInner(viewModel: AppViewModel, glassContainer: B
                         modifier = Modifier.padding(horizontal = 6.dp)
                     )
                     IconButton(
-                        onClick = { viewModel.setEpgTimelineDateOffset(dateOffset + 1) }
+                        onClick = { viewModel.setEpgTimelineDateOffset(dateOffset + 1) },
+                        modifier = Modifier.tvFocusBorder(cornerRadius = 20, focusedScale = 1.18f)
                     ) {
                         Text("▶", color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp)
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     // 刷新
-                    IconButton(onClick = { viewModel.loadEpgTimeline() }) {
+                    IconButton(
+                        onClick = { viewModel.loadEpgTimeline() },
+                        modifier = Modifier.tvFocusBorder(cornerRadius = 20, focusedScale = 1.18f)
+                    ) {
                         Icon(Icons.Default.Refresh, contentDescription = "刷新", tint = MaterialTheme.colorScheme.onSurface)
                     }
                 }
@@ -437,17 +444,20 @@ private fun EpgTimelinePanelAptvInner(viewModel: AppViewModel, glassContainer: B
                 FilterChip(
                     selected = range == EpgTimelineRange.ALL,
                     onClick = { viewModel.setEpgTimelineRange(EpgTimelineRange.ALL) },
-                    label = { Text("全部频道", fontSize = 11.sp) }
+                    label = { Text("全部频道", fontSize = 11.sp) },
+                    modifier = Modifier.tvFocusBorder(cornerRadius = 8, focusedScale = 1.15f)
                 )
                 FilterChip(
                     selected = range == EpgTimelineRange.FAVORITES,
                     onClick = { viewModel.setEpgTimelineRange(EpgTimelineRange.FAVORITES) },
-                    label = { Text("仅收藏", fontSize = 11.sp) }
+                    label = { Text("仅收藏", fontSize = 11.sp) },
+                    modifier = Modifier.tvFocusBorder(cornerRadius = 8, focusedScale = 1.15f)
                 )
                 FilterChip(
                     selected = range == EpgTimelineRange.CURRENT_GROUP,
                     onClick = { viewModel.setEpgTimelineRange(EpgTimelineRange.CURRENT_GROUP) },
-                    label = { Text("当前分组", fontSize = 11.sp) }
+                    label = { Text("当前分组", fontSize = 11.sp) },
+                    modifier = Modifier.tvFocusBorder(cornerRadius = 8, focusedScale = 1.15f)
                 )
             }
 
@@ -498,7 +508,9 @@ private fun EpgTimelinePanelAptvInner(viewModel: AppViewModel, glassContainer: B
                         },
                         onProgramClick = { program ->
                             handleTimelineProgramClick(program, viewModel)
-                        }
+                        },
+                        // 平板（含电视切平板）：打开 EPG 时间线即把焦点交给网格
+                        autoFocusOnShow = viewModel.uiMode.collectAsState().value == UiMode.TABLET
                     )
                 }            }
         }
@@ -544,6 +556,7 @@ private fun TimelineGrid(
     channels: List<com.iptv.scanner.editor.pro.data.IptvChannel> = emptyList(),
     onVisibleRows: (Int, Int) -> Unit = { _, _ -> },
     onProgramClick: (IptvEpgProgram) -> Unit,
+    autoFocusOnShow: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
@@ -563,6 +576,13 @@ private fun TimelineGrid(
     var selectedRow by selectedRowState
     var selectedProgramIdx by selectedProgramIdxState
     val gridFocusRequester = remember { FocusRequester() }
+    // 平板模式：面板打开后把焦点直接放进网格，遥控器上来就能左右跨时间、上下跨频道
+    // （TV 模式仍落在右上角关闭按钮，保持原有行为）。
+    LaunchedEffect(autoFocusOnShow) {
+        if (!autoFocusOnShow) return@LaunchedEffect
+        kotlinx.coroutines.delay(180)
+        kotlin.runCatching { gridFocusRequester.requestFocus() }
+    }
 
     // 选中日期的 0:00 时间戳（毫秒）
     val dayStartMs = remember(dateOffset) {
