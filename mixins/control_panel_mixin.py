@@ -409,6 +409,7 @@ class ControlPanelMixin:
         self.volume_slider.setFixedWidth(metrics['volume_w'])
         self.volume_slider.setStyleSheet(AppStyles.player_volume_slider_style())
         self.volume_slider.setToolTip(tr("panel_volume_slider", "音量调节"))
+        self.volume_slider.set_bubble_parent(getattr(self, 'floating_panel', None))
         self.volume_slider.valueChanged.connect(self.set_volume)
         self.control_row.addWidget(self.volume_slider)
 
