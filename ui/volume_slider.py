@@ -1,4 +1,5 @@
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, Qt, QTimer
+from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QLabel, QSlider
 
 from ui.styles import AppStyles
@@ -17,16 +18,25 @@ class VolumeSlider(QSlider):
         self.setToolTip('')
         self._bubble = None
         self._bubble_parent = None
+        # 菜单弹出等场景可能收不到 leaveEvent，定时兜底隐藏，避免残留百分比
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setInterval(300)
+        self._hide_timer.timeout.connect(self._check_hover)
 
     def set_bubble_parent(self, widget):
         self._bubble_parent = widget
 
     def _ensure_bubble(self) -> bool:
-        if self._bubble is not None and self._bubble_parent is not None:
-            return True
         parent = self._bubble_parent or self.window()
         if parent is None:
             return False
+        # 父面板可能在控件创建后才就绪，父变了要重建，避免叠出多个残留标签
+        if self._bubble is not None and self._bubble.parentWidget() is parent:
+            return True
+        if self._bubble is not None:
+            self._bubble.deleteLater()
+            self._bubble = None
+        self._bubble_parent = parent
         bubble = QLabel(parent)
         bubble.setObjectName('volumePercentBubble')
         bubble.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -67,10 +77,23 @@ class VolumeSlider(QSlider):
         self._bubble.move(x, y)
         self._bubble.show()
         self._bubble.raise_()
+        if not self._hide_timer.isActive():
+            self._hide_timer.start()
+
+    def _check_hover(self):
+        if self._bubble is None or not self._bubble.isVisible():
+            self._hide_timer.stop()
+            return
+        # 独立工具窗口里 underMouse() 可能因收不到 Leave 而一直为真，用全局坐标判断
+        inside = self.rect().contains(self.mapFromGlobal(QCursor.pos()))
+        if not self.isSliderDown() and not inside:
+            self._bubble.hide()
+            self._hide_timer.stop()
 
     def _hide_bubble(self):
         if self._bubble is not None and not self.isSliderDown():
             self._bubble.hide()
+            self._hide_timer.stop()
 
     def enterEvent(self, event):
         self._show_bubble()
