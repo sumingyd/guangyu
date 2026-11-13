@@ -46,6 +46,10 @@ class PanelMixin:
             return
         if getattr(self, '_pip_mode', False):
             return
+        # 多画面期间浮层会遮挡网格，鼠标移入也不自动唤出
+        ms = getattr(self, 'multi_screen_ctrl', None)
+        if ms is not None and getattr(ms, 'is_active', False):
+            return
         if not self.panel_vis.is_auto_hidden:
             return
         # 主窗口不是活动窗口时不显示悬浮面板：

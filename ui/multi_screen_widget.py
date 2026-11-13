@@ -134,7 +134,7 @@ class MultiScreenCell(QWidget):
         self._placeholder = QLabel(self._video_frame)
         self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._placeholder.setStyleSheet(self._placeholder_style())
-        self._placeholder.setText(f"{self._index + 1}")
+        self._placeholder.setText(self._placeholder_text())
 
         self._volume_bar = QHBoxLayout()
         self._volume_bar.setContentsMargins(4, 1, 4, 1)
@@ -218,11 +218,23 @@ class MultiScreenCell(QWidget):
         self._channel = None
         self._is_playing = False
         self._channel_label.setText('')
-        self._placeholder.setText(f"{self._index + 1}")
+        self._placeholder.setText(self._placeholder_text())
         self._placeholder.show()
         self._close_btn.hide()
         self._audio_combo.hide()
         self._audio_combo.clear()
+
+    def _placeholder_text(self) -> str:
+        """空单元格给出编号与添加频道的引导，避免进入后只看到一片黑。"""
+        try:
+            from core.language_manager import LanguageManager
+            hint = LanguageManager().tr('multi_screen_cell_hint', '拖入频道，或双击频道列表')
+        except Exception:
+            hint = '拖入频道，或双击频道列表'
+        return (
+            f'<div style="font-size:44px;font-weight:bold;">{self._index + 1}</div>'
+            f'<div style="font-size:12px;">{hint}</div>'
+        )
 
     def set_volume(self, vol: int):
         self._volume_slider.blockSignals(True)

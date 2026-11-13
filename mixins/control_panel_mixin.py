@@ -382,6 +382,7 @@ class ControlPanelMixin:
         self.program_progress.set_tooltip_formatter(self._format_preview_text)
         self.program_progress.sliderReleased.connect(self.on_progress_slider_released)
         self.program_progress.sliderPressed.connect(self._on_progress_slider_pressed)
+        self.program_progress.seek_blocked.connect(self._on_progress_seek_blocked)
         self.program_progress.preview_position_changed.connect(self._on_progress_preview)
         self._progress_total_seconds = 3600
         self.progress_group.addWidget(self.program_progress, 1)

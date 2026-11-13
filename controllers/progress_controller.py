@@ -11,6 +11,8 @@ class ProgressController:
         w = self.window
         play_state = w.play_state
 
+        self._sync_seek_interaction()
+
         if play_state.is_catchup and not play_state.is_timeshift:
             self._update_catchup_progress(current_time_ms, total_time_ms, position)
         elif play_state.is_timeshift:
@@ -21,6 +23,30 @@ class ProgressController:
                 self._update_epg_progress(current_program, current_time_ms, total_time_ms, position)
             else:
                 self._update_default_progress(current_time_ms, total_time_ms, position)
+
+    def _sync_seek_interaction(self):
+        """直播且缓冲不可回退时禁用进度条拖动，避免出现可拖但无反应的假交互。"""
+        w = self.window
+        slider = getattr(w, 'program_progress', None)
+        if not slider or not hasattr(slider, 'set_seekable'):
+            return
+        seekable = True
+        try:
+            if not w.play_state.is_catchup_or_timeshift and getattr(w, '_progress_time_mode', None) != 'vod':
+                if hasattr(w, '_is_live_seek_unavailable'):
+                    seekable = not w._is_live_seek_unavailable()
+        except Exception:
+            seekable = True
+        if slider.set_seekable(seekable):
+            if seekable:
+                slider.setToolTip('')
+            else:
+                slider.setToolTip(
+                    w.language_manager.tr(
+                        "live_seek_disabled",
+                        "直播状态下进度条不可拖动，可在节目单中选择「可回看」节目回看"
+                    )
+                )
 
     def _update_catchup_progress(self, current_time_ms, total_time_ms, position):
         w = self.window

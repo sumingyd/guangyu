@@ -118,6 +118,16 @@ class ProgressMixin:
             return
         self._disable_progress_auto_update = True
 
+    def _on_progress_seek_blocked(self):
+        """直播态进度条已禁用拖动，点击时给出明确说明而不是静默无响应。"""
+        self._stop_auto_hide_timer()
+        self.status_bar_show_message(
+            self.language_manager.tr(
+                "live_seek_disabled",
+                "直播状态下进度条不可拖动，可在节目单中选择「可回看」节目回看"
+            )
+        )
+
     def _is_live_seek_unavailable(self):
         """直播态且当前缓冲不可回退时，进度条不应进入拖动逻辑。"""
         try:

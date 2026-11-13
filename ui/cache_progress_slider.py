@@ -7,6 +7,8 @@ class CacheProgressSlider(QSlider):
     """带缓存区间可视化与拖动时间预览（控件内自绘，避免顶层窗口闪烁）的进度条"""
 
     preview_position_changed = Signal(int)
+    # 直播等不可拖动场景下被点击时发出，用于给出「不可拖动」的说明
+    seek_blocked = Signal()
 
     def __init__(self, orientation=Qt.Orientation.Horizontal, parent=None):
         super().__init__(orientation, parent)
@@ -16,6 +18,7 @@ class CacheProgressSlider(QSlider):
         self._update_cache_color_from_theme()
         self._preview_text = ''
         self._is_dragging = False
+        self._seekable = True
         self._tooltip_formatter = None
         self.setMouseTracking(True)
         self._update_preview_style()
@@ -85,6 +88,24 @@ class CacheProgressSlider(QSlider):
         self._preview_text = text or ''
         self.update()
 
+    def set_seekable(self, seekable: bool) -> bool:
+        """设置是否允许点击/拖动进度条，返回状态是否发生变化。"""
+        changed = self._seekable != seekable
+        self._seekable = seekable
+        if not seekable and self._is_dragging:
+            self._is_dragging = False
+            self.setSliderDown(False)
+            self.update()
+        if changed:
+            self.setCursor(
+                Qt.CursorShape.PointingHandCursor if seekable else Qt.CursorShape.ArrowCursor
+            )
+        return changed
+
+    @property
+    def is_seekable(self) -> bool:
+        return self._seekable
+
     def set_tooltip_formatter(self, formatter):
         self._tooltip_formatter = formatter
 
@@ -107,6 +128,11 @@ class CacheProgressSlider(QSlider):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            if not self._seekable:
+                # 直播等无缓冲场景不改变进度，仅给出说明
+                self.seek_blocked.emit()
+                event.accept()
+                return
             self._is_dragging = True
             self.setSliderDown(True)
             new_value = self._pos_to_value(event.position().toPoint().x())
@@ -118,6 +144,9 @@ class CacheProgressSlider(QSlider):
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        if not self._seekable:
+            super().mouseMoveEvent(event)
+            return
         if self._is_dragging:
             new_value = self._pos_to_value(event.position().toPoint().x())
             self.setValue(new_value)
@@ -139,6 +168,9 @@ class CacheProgressSlider(QSlider):
         super().leaveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if not self._seekable:
+            super().mouseReleaseEvent(event)
+            return
         if event.button() == Qt.MouseButton.LeftButton and self._is_dragging:
             self._is_dragging = False
             self.setSliderDown(False)

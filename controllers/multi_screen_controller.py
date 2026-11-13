@@ -57,6 +57,8 @@ class MultiScreenController(QObject):
         self._widget.set_layout(count)
 
         self._replace_video_frame(w, self._widget)
+        # 左右浮层与底栏会压在网格上，进入多画面时统一收起，退出时还原
+        self._collapse_floating_panels()
 
         self._active = True
         # 主播放器被遮挡且仍在出声，先静音避免多路音频串音
@@ -121,10 +123,31 @@ class MultiScreenController(QObject):
 
         self._active = False
         self._restore_main_player_volume()
+        self._restore_floating_panels()
 
         if hasattr(w, 'status_bar_show_message'):
             tr = w.language_manager.tr
             w.status_bar_show_message(tr('multi_screen_exited', '已退出多画面模式'))
+
+    def _collapse_floating_panels(self):
+        panel_vis = getattr(self.window, 'panel_vis', None)
+        if not panel_vis:
+            return
+        try:
+            panel_vis.save_context('multi_screen')
+            for panel in panel_vis.PANELS:
+                panel_vis.set_visible(panel, False)
+        except Exception as e:
+            logger.debug(f"多画面收起浮层失败: {e}")
+
+    def _restore_floating_panels(self):
+        panel_vis = getattr(self.window, 'panel_vis', None)
+        if not panel_vis:
+            return
+        try:
+            panel_vis.restore_context('multi_screen')
+        except Exception as e:
+            logger.debug(f"多画面恢复浮层失败: {e}")
 
     def _restore_video_frame(self, w, old_widget, video_frame):
         parent = old_widget.parent()
