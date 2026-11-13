@@ -9,6 +9,12 @@ from aiohttp import web
 logger = logging.getLogger('server')
 
 _main_window_ref = None
+# 退出流程中置位：新请求一律快速拒绝，避免与主线程销毁 mpv/窗口并发
+_shutting_down = False
+
+
+def is_shutting_down() -> bool:
+    return _shutting_down
 
 
 def set_main_window(main_window):
@@ -57,9 +63,11 @@ class IPTVServer:
         self._start_time = 0.0
 
     def start(self):
+        global _shutting_down
         if self._running:
             logger.warning("Server已在运行中")
             return
+        _shutting_down = False
         self._thread = threading.Thread(target=self._run_loop, name="IPTVServer", daemon=True)
         self._thread.start()
         self._running = True
@@ -67,8 +75,11 @@ class IPTVServer:
         logger.info(f"IPTV Server 启动于 http://{self.host}:{self.port}")
 
     def stop(self):
+        global _shutting_down
         if not self._running:
+            _shutting_down = True
             return
+        _shutting_down = True
         self._running = False
         if self._loop and self._loop.is_running():
             try:

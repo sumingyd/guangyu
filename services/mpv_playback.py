@@ -578,6 +578,11 @@ class MpvPlayback:
                 _mpv_observe_property(self._facade.mpv_handle, 1, 'pause', MPV_FORMAT_FLAG)
             except Exception as e:
                 self._facade.logger.warning(f"订阅pause属性失败: {str(e)}")
+            try:
+                # keep-open=yes 下直播 EOF 不产生 END_FILE，只能靠该属性感知断流
+                _mpv_observe_property(self._facade.mpv_handle, 2, 'eof-reached', MPV_FORMAT_FLAG)
+            except Exception as e:
+                self._facade.logger.warning(f"订阅eof-reached属性失败: {str(e)}")
 
             self._facade.logger.info("mpv播放器初始化成功")
 
@@ -820,13 +825,24 @@ class MpvPlayback:
                                             if new_paused != self._facade.is_paused:
                                                 self._facade.is_paused = new_paused
                                                 self._facade._safe_emit(self._facade.play_state_changed, not new_paused)
+                                elif name and name.decode('utf-8', errors='ignore') == 'eof-reached':
+                                    if prop.format == MPV_FORMAT_FLAG and prop.data:
+                                        val_ptr = _ctypes.cast(prop.data, _ctypes.POINTER(_ctypes.c_int)).contents
+                                        if bool(val_ptr.value):
+                                            self._on_live_eof()
                         except Exception as _e:
                             self._facade.logger.debug(f"处理 pause 属性变更事件失败: {_e}")
 
                 elif event.event_id == MPV_EVENT_FILE_LOADED:
                     self._facade._reconnect_count = 0
+                    self._facade._reconnect_exhausted = False
+                    self._facade._reconnect_in_progress = False
+                    self._facade.is_connecting = False
+                    self._facade._eof_notified_url = None
                     self._facade._switching_channel = False
                     self._facade.is_playing = True
+                    # 只有真正 FILE_LOADED 才切到"正在播放"，避免 loadfile 后假播放
+                    self._facade._safe_emit(self._facade.play_state_changed, True)
                     # 新文件加载成功后重置位置日志计数，否则计数器只增不减，
                     # 后续频道的前几次位置日志会被吞掉
                     self._facade._pos_log_count = 0
@@ -901,14 +917,17 @@ class MpvPlayback:
                                     self._facade.is_playing = False
                                     self._facade.is_paused = False
                                     self._facade._safe_emit(self._facade.play_state_changed, False)
-                                    if self._facade._reconnect_count < self._facade._max_reconnect:
+                                    if self._facade._reconnect_exhausted:
+                                        self._facade.logger.warning(
+                                            "重连已耗尽，忽略新的 END_FILE 错误（等待用户重试/换台）")
+                                    elif self._facade._reconnect_count < self._facade._max_reconnect:
                                         self._facade._reconnect_count += 1
                                         self._facade.logger.info(f"断线自动重连 ({self._facade._reconnect_count}/{self._facade._max_reconnect})")
                                         self._facade._safe_emit(self._facade.reconnect_requested, self._facade.current_url)
                                     else:
                                         self._facade.logger.error("已达最大重连次数，停止重连")
-                                        self._facade._reconnect_count = 0
-                                        # 重连耗尽必须让用户看到明确错误，否则界面只会停在"已暂停"
+                                        # 进入终态：保留计数供 UI 显示，不再自动重置成 0
+                                        self._facade._reconnect_exhausted = True
                                         self._facade._safe_emit(
                                             self._facade.play_error,
                                             "重连失败，请检查网络或更换频道")
@@ -940,6 +959,29 @@ class MpvPlayback:
 
         except Exception as e:
             self._facade.logger.error(f"处理 mpv 事件失败：{str(e)}")
+
+    def _on_live_eof(self):
+        """直播流 EOF（keep-open=yes 下不会产生 END_FILE）的统一入口。
+
+        只在"网络直播流"上触发断流重连；网络点播（有明确时长）与本地文件
+        视为正常结束，不能重连，否则会从头循环播放。
+        """
+        facade = self._facade
+        url = facade.current_url or ''
+        if facade._terminated or facade._user_stopped or not url:
+            return
+        if getattr(facade, '_eof_notified_url', None) == url:
+            return
+        is_network_url = url.lower().startswith(
+            ('http://', 'https://', 'rtsp://', 'rtp://', 'udp://', 'rtmp://'))
+        if not is_network_url:
+            return
+        facade._eof_notified_url = url
+        facade.logger.info("检测到 eof-reached（播放到达流末尾），交由上层按直播/回看/点播分别处理")
+        facade.is_playing = False
+        facade.is_paused = True
+        facade._safe_emit(facade.play_state_changed, False)
+        facade._safe_emit(facade.timeshift_continue_requested)
 
     # GPU 上下文/ D3D11 设备初始化失败的 mpv 日志特征（小写匹配）
     _GPU_INIT_FAILURE_MARKERS = (
@@ -1827,6 +1869,14 @@ class MpvPlayback:
             self._facade.current_url = url
             self._facade._user_stopped = False
             self._facade._switching_channel = True
+            self._facade._eof_notified_url = None
+            # 用户主动换台/重试才清除重连终态；重连自身发起的 play 必须保留计数，
+            # 否则耗尽后会被重置成 0 再次进入无限循环
+            if not self._facade._reconnect_in_progress:
+                self._facade._reconnect_count = 0
+                self._facade._reconnect_exhausted = False
+            self._facade.is_connecting = True
+            self._facade.is_playing = False
 
             if not self._facade.mpv_handle:
                 self._facade.logger.error("mpv播放器未初始化")
@@ -1913,7 +1963,9 @@ class MpvPlayback:
 
             self._facade.is_paused = False
 
-            self._facade._safe_emit(self._facade.play_state_changed, True)
+            # loadfile 只代表"已发出请求"，真正出流由 FILE_LOADED 事件驱动；
+            # 这里必须显示"正在连接"，不能提前显示"正在播放"（假播放）。
+            self._facade._safe_emit(self._facade.source_connecting, url)
 
             self._facade._schedule_media_info_start()
 

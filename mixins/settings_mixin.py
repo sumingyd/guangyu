@@ -67,7 +67,12 @@ class SettingsMixin:
             return
 
         logger.warning(f"源超时：loadfile 后超过网络超时仍未出流，按失败重连: {name} url={url}")
-        # 与 mpv END_FILE(ERROR) 的失败分支保持一致：先切到停止态，再按次数重连
+        # 与 END_FILE(ERROR)/直播 EOF 使用同一断流入口，保证计数与终态一致
+        playback_ctrl = getattr(self, 'playback_ctrl', None)
+        if playback_ctrl is not None and hasattr(playback_ctrl, 'on_live_disconnect'):
+            playback_ctrl.on_live_disconnect(url, reason='source_timeout')
+            return
+        # 兜底：无控制器时保持原行为
         pc.is_playing = False
         pc.is_paused = False
         pc._safe_emit(pc.play_state_changed, False)
@@ -77,8 +82,7 @@ class SettingsMixin:
             pc._safe_emit(pc.reconnect_requested, url)
         else:
             logger.error("已达最大重连次数，停止重连")
-            pc._reconnect_count = 0
-            # 重连耗尽必须给出可见错误，否则界面只会显示成"已暂停"
+            pc._reconnect_exhausted = True
             tr = getattr(getattr(self, 'language_manager', None), 'tr', None)
             message = (tr('reconnect_failed', '重连失败，请检查网络或更换频道')
                        if tr else '重连失败，请检查网络或更换频道')

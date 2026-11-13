@@ -920,6 +920,7 @@ class IPTVPlayer(
 
             self._audio_visual_widget._pc = self.player_controller
         self.player_controller.play_state_changed.connect(self.playback_ctrl.handle_play_state_change)
+        self.player_controller.source_connecting.connect(self.on_source_connecting)
         self.player_controller.live_media_info_updated.connect(self.on_live_media_info_updated)
         self.player_controller.play_error.connect(self.on_play_error)
         self.player_controller.reconnect_requested.connect(self._on_reconnect_requested)

@@ -605,6 +605,12 @@ def _is_localhost_origin(origin: str) -> bool:
 @web.middleware
 async def error_middleware(request, handler):
     try:
+        from server.app import is_shutting_down
+        if is_shutting_down():
+            return web.json_response({'error': '服务正在关闭'}, status=503)
+    except Exception:
+        pass
+    try:
         return await handler(request)
     except web.HTTPException:
         raise

@@ -128,6 +128,8 @@ class MpvPlayerController(QObject):
     play_state_changed = Signal(bool)
     play_error = Signal(str)
     reconnect_requested = Signal(str)
+    # loadfile 已发出、尚未收到 FILE_LOADED：界面应显示"正在连接"而不是"正在播放"
+    source_connecting = Signal(str)
     timeshift_continue_requested = Signal()
     live_media_info_updated = Signal(dict)
     playback_position_updated = Signal(int, int, float)
@@ -169,6 +171,9 @@ class MpvPlayerController(QObject):
 
     _STATIC_INFO_REFRESH_TICKS = 10
 
+    # 10 段均衡器频段标签，与 mpv equalizer 滤镜的固定 10 段一一对应
+    EQ_LABELS = ('31', '63', '125', '250', '500', '1k', '2k', '4k', '8k', '16k')
+
     def __init__(self, video_widget, channel_model=None):
         super().__init__()
         self.logger = global_logger
@@ -190,6 +195,12 @@ class MpvPlayerController(QObject):
         self._last_volume = 80
         self._reconnect_count = 0
         self._max_reconnect = 3
+        # 重连次数耗尽后置位：必须落到终态，等待用户重试/换台，不能自动重置再循环
+        self._reconnect_exhausted = False
+        # 重连发起的 play() 不重置计数，只有用户主动换台才重置
+        self._reconnect_in_progress = False
+        self.is_connecting = False
+        self._eof_notified_url = None
         self._user_stopped = False
         self._switching_channel = False
         self._mpv_initialized = False

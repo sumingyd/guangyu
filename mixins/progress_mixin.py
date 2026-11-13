@@ -105,7 +105,34 @@ class ProgressMixin:
 
     def _on_progress_slider_pressed(self):
         self._stop_auto_hide_timer()
+        self._live_seek_unavailable = False
+        if self._is_live_seek_unavailable():
+            # 直播链路没有可回退缓冲：不要冻结进度更新/吞掉拖动，直接给出说明
+            self._live_seek_unavailable = True
+            self.status_bar_show_message(
+                self.language_manager.tr(
+                    "live_seek_unavailable",
+                    "直播流暂不支持拖动，可在节目单中选择「可回看」节目回看"
+                )
+            )
+            return
         self._disable_progress_auto_update = True
+
+    def _is_live_seek_unavailable(self):
+        """直播态且当前缓冲不可回退时，进度条不应进入拖动逻辑。"""
+        try:
+            if self.play_state.is_catchup_or_timeshift:
+                return False
+            if getattr(self, '_progress_time_mode', None) == 'vod':
+                return False
+            pc = getattr(self, 'player_controller', None)
+            if not pc:
+                return False
+            seek_range = pc.get_available_seek_range() or {}
+            return (seek_range.get('max_back', 0) == 0
+                    and seek_range.get('cache_duration', 0) < 5)
+        except Exception:
+            return False
 
     def _format_preview_text(self, seconds):
         mode = getattr(self, '_progress_time_mode', None)
@@ -156,6 +183,10 @@ class ProgressMixin:
 
     def _do_progress_slider_released(self):
         self._disable_progress_auto_update = False
+        if getattr(self, '_live_seek_unavailable', False):
+            # 拖动被判定为不可用：恢复自动更新，下一拍进度刷新会把滑块拉回直播位置
+            self._live_seek_unavailable = False
+            return
         is_catchup = self.play_state.is_catchup_or_timeshift
         if getattr(self, '_progress_time_mode', None) == 'vod' and not is_catchup:
             self._seek_vod(self._get_progress_seconds())

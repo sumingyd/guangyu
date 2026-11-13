@@ -118,12 +118,19 @@ class WindowMixin:
 
         side_top = mw_y + title_bar_h + menu_bar_h + gap
         side_h = mw_h - title_bar_h - menu_bar_h - control_panel_h - status_bar_h - gap * 2
+        side_h = max(0, side_h)
+
+        def _sync_side_height(dock):
+            """最小高度只增不减，退出全屏时必须显式 resize 才会缩回窗口高度。"""
+            dock.setMinimumHeight(side_h)
+            if dock.height() > side_h:
+                dock.resize(dock.width(), side_h)
 
         if hasattr(self, 'epg_dock') and self.epg_dock:
             if not self.epg_dock.isFloating():
                 self.epg_dock.setFloating(True)
             wayland_move(self.epg_dock, mw_x + gap, side_top)
-            self.epg_dock.setMinimumHeight(max(0, side_h))
+            _sync_side_height(self.epg_dock)
 
             # 宽度以当前值为基准固定：用户拖宽/拖窄后不被重置回首次捕获值
             epg_w = self.epg_dock.width()
@@ -140,7 +147,7 @@ class WindowMixin:
             if pl_w > 0:
                 self._playlist_dock_w = pl_w
                 wayland_move(self.playlist_dock, mw_x + mw_w - pl_w - gap, side_top)
-                self.playlist_dock.setMinimumHeight(max(0, side_h))
+                _sync_side_height(self.playlist_dock)
                 self.playlist_dock.setFixedWidth(pl_w)
 
         if hasattr(self, 'floating_dock') and self.floating_dock:
@@ -379,7 +386,11 @@ class WindowMixin:
             logger.error(f"打开频道映射管理器失败: {str(ex)}")
 
     def _clamp_window_position(self, x, y, width, height):
-        """校正保存的窗口位置：显示器被拔掉或分辨率变化后窗口可能完全落在屏幕外。"""
+        """校正保存的窗口位置：显示器被拔掉或分辨率变化后窗口可能完全落在屏幕外。
+
+        要求窗口尽量完整落在某块屏幕的可用区内（含标题栏与关闭按钮），
+        多屏时优先选重叠面积最大的一块，再钳制 x/y；窗口比屏幕还大时贴左上。
+        """
         try:
             from PySide6.QtCore import QRect
             from PySide6.QtWidgets import QApplication
@@ -390,13 +401,30 @@ class WindowMixin:
             if not screens:
                 return x, y
             rect = QRect(x, y, width, height)
+            best = None
+            best_area = -1
             for screen in screens:
-                if screen.availableGeometry().intersected(rect).isValid():
-                    return x, y
-            primary = app.primaryScreen() or screens[0]
-            avail = primary.availableGeometry()
-            logger.warning(f"保存的窗口位置({x},{y})不在任何屏幕内，已回到主屏")
-            return avail.x() + 40, avail.y() + 40
+                avail = screen.availableGeometry()
+                inter = avail.intersected(rect)
+                area = inter.width() * inter.height() if inter.isValid() else 0
+                if area > best_area:
+                    best_area = area
+                    best = screen
+            if best is None:
+                return x, y
+            avail = best.availableGeometry()
+            if avail.contains(rect):
+                return x, y
+
+            max_x = max(avail.x(), avail.x() + avail.width() - width)
+            max_y = max(avail.y(), avail.y() + avail.height() - height)
+            new_x = min(max(x, avail.x()), max_x)
+            new_y = min(max(y, avail.y()), max_y)
+            if (new_x, new_y) != (x, y):
+                logger.warning(
+                    f"保存的窗口位置({x},{y},{width}x{height})超出屏幕可用区，"
+                    f"已钳制为({new_x},{new_y})，屏幕={avail.getRect()}")
+            return new_x, new_y
         except Exception as e:
             logger.debug(f"校正窗口位置失败: {e}")
             return x, y

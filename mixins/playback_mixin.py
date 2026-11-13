@@ -56,8 +56,23 @@ class PlaybackMixin:
         else:
             self.status_bar_show_message(f"{tr('play_error', 'Play Error')}: {error_msg}")
 
+    def on_source_connecting(self, url):
+        """loadfile 已发出但尚未出流：明确显示"正在连接"，避免假"正在播放"。"""
+        tr = self.language_manager.tr
+        name = ''
+        if self.current_channel:
+            name = self.current_channel.get('name', '')
+        text = f"{tr('connecting', '正在连接')}: {name or url}"
+        self.status_bar_show_message(text)
+        if hasattr(self, 'remain_label') and self.remain_label:
+            self.remain_label.setText(tr('connecting_label', '连接中…'))
+
     def _on_reconnect_requested(self, url):
         tr = self.language_manager.tr
+        pc = self.player_controller
+        if getattr(pc, '_reconnect_exhausted', False):
+            logger.debug("重连已耗尽，忽略 reconnect_requested")
+            return
         if self.current_channel:
             channel_name = self.current_channel.get('name', '')
             self.status_bar_show_message(
@@ -118,22 +133,20 @@ class PlaybackMixin:
             # 注意：网络点播（有已知时长）播完不应重连，否则会从头循环播放。
             pc = getattr(self, 'player_controller', None)
             if pc and not getattr(pc, '_user_stopped', False) and self.current_channel:
-                duration = 0
-                try:
-                    duration = pc.get_total_time() or 0
-                except Exception:
-                    duration = 0
-                if duration and duration > 0:
-                    logger.info("网络点播播放结束，不自动重连")
+                # 直播 TS 的 duration 可能被服务端关闭连接后估出非 0 值，不能据此判断点播；
+                # 只认显式的点播模式（打开视频文件走 'vod'）。
+                if getattr(self, '_progress_time_mode', None) == 'vod':
+                    logger.info("点播文件播放结束，不自动重连")
                     return
                 logger.info("直播流播放到终点，触发重连续播")
-                self._do_reconnect(pc.current_url)
+                self.playback_ctrl.on_live_disconnect(pc.current_url, reason='live_eof')
 
     def _do_reconnect(self, url):
-        if self.player_controller._user_stopped:
+        pc = self.player_controller
+        if pc._user_stopped or pc._reconnect_exhausted:
             return
         # 重连延迟期间若新流已经成功加载，就不要再次重启播放（会造成闪断）
-        if getattr(self.player_controller, 'is_playing', False):
+        if getattr(pc, 'is_playing', False):
             logger.debug("重连跳过：播放已恢复")
             return
         if self.current_channel:
@@ -144,7 +157,12 @@ class PlaybackMixin:
                 self.status_bar_show_message(
                     f"{tr('timeshift_failed_back_to_live', '时移播放失败，退回直播')}: {channel_name}"
                 )
-            self.playback_ctrl.play_channel(self.current_channel)
+            # 标记这是重连发起的 play：play() 不能重置重连计数，否则会无限循环
+            pc._reconnect_in_progress = True
+            try:
+                self.playback_ctrl.play_channel(self.current_channel)
+            finally:
+                pc._reconnect_in_progress = False
 
     def on_live_media_info_updated(self, info: Dict[str, Any]):
         self.ui_ctrl.on_live_media_info_updated(info)

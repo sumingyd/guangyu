@@ -50,6 +50,14 @@ class PlaybackController:
         self._is_switching = False
         self._switch_token += 1
 
+        pc = getattr(self.window, 'player_controller', None)
+        if pc is not None:
+            # 用户主动停止：复位重连终态/连接中标记，下次播放从干净状态开始
+            pc._reconnect_exhausted = False
+            pc._reconnect_count = 0
+            pc._reconnect_in_progress = False
+            pc.is_connecting = False
+
         if hasattr(self.window, 'player_controller') and self.window.player_controller:
             self.window.player_controller.stop()
 
@@ -249,6 +257,48 @@ class PlaybackController:
             except Exception:
                 # 最后兜底：直接重置，避免标志永久锁定
                 self._is_switching = False
+
+    def on_live_disconnect(self, url=None, reason='live_eof'):
+        """直播断流统一入口：计数重连，耗尽后进入终态（不再自动循环）。"""
+        pc = getattr(self.window, 'player_controller', None)
+        if pc is None or getattr(pc, '_user_stopped', False):
+            return
+        if getattr(pc, '_reconnect_exhausted', False):
+            logger.debug(f"直播断流({reason})：重连已耗尽，等待用户重试/换台")
+            return
+        url = url or getattr(pc, 'current_url', '') or ''
+        if not url:
+            return
+        text = url.lower()
+        if not text.startswith(('http://', 'https://', 'rtsp://', 'rtp://', 'udp://', 'rtmp://')):
+            return
+        channel = self.current_channel or getattr(self.window, 'current_channel', None)
+        if not channel:
+            return
+        name = channel.get('name', '')
+        tr = getattr(self.window.language_manager, 'tr', lambda k, d=None: d or k)
+
+        pc.is_playing = False
+        pc.is_connecting = False
+        pc.is_paused = False
+        pc._safe_emit(pc.play_state_changed, False)
+
+        if pc._reconnect_count < pc._max_reconnect:
+            pc._reconnect_count += 1
+            logger.info(f"直播断流({reason})，自动重连 ({pc._reconnect_count}/{pc._max_reconnect}): {name}")
+            self.window.status_bar_show_message(
+                f"{tr('stream_interrupted', '流已中断，正在重连')} "
+                f"({pc._reconnect_count}/{pc._max_reconnect}): {name}")
+            if hasattr(self.window, 'remain_label') and self.window.remain_label:
+                self.window.remain_label.setText(tr('reconnecting_label', '重连中…'))
+            pc._safe_emit(pc.reconnect_requested, url)
+        else:
+            # 终态：保留计数、置位 exhausted，等用户重试/换台；不再自动重连
+            pc._reconnect_exhausted = True
+            logger.error(f"直播断流({reason})：重连次数耗尽，停止重连: {name}")
+            pc._safe_emit(pc.play_error, tr('reconnect_failed', '重连失败，请检查网络或更换频道'))
+            if hasattr(self.window, 'remain_label') and self.window.remain_label:
+                self.window.remain_label.setText(tr('play_failed_label', '播放失败'))
 
     def _do_play_channel(self, channel: Dict[str, Any]):
         if not (hasattr(self.window, 'player_controller') and self.window.player_controller and channel):

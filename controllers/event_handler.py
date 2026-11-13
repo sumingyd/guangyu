@@ -772,6 +772,17 @@ class EventHandler:
         if hasattr(self.window, '_stop_auto_hide_timer'):
             self.window._stop_auto_hide_timer()
 
+        # 0. 先停内置 HTTP 服务并等待线程退出：服务线程会读主窗口/播放器状态，
+        # 与后面的 mpv 销毁并发是退出崩溃（0xC0000005）的主要时序风险。
+        try:
+            import server.app as _server_app
+            srv = _server_app._server_instance
+            if srv is not None and srv.is_running():
+                logger.info("退出前停止 HTTP 服务")
+                _server_app.stop_server()
+        except Exception as e:
+            logger.debug(f"停止 HTTP 服务失败: {e}")
+
         try:
             from ui.theme_manager import get_theme_manager
             tm = get_theme_manager()
