@@ -5,7 +5,7 @@
 
 from core.log_manager import global_logger as logger
 from PySide6.QtCore import Qt, QEvent, QTimer
-from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QDockWidget, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPlainTextEdit, QSpinBox, QTextEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QDockWidget, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenuBar, QPlainTextEdit, QSpinBox, QTextEdit, QVBoxLayout, QWidget
 from controllers.main_window_protocol import MainWindowProtocol
 from utils.thread_safety import safe_single_shot
 
@@ -69,7 +69,30 @@ class EventHandler:
         focus_widget = QApplication.focusWidget()
         if focus_widget is None:
             return self.window.isActiveWindow()
+        # 菜单栏被 Alt 激活后，方向键属于菜单导航，不能当作切台/快进
+        widget = focus_widget
+        while widget is not None:
+            if isinstance(widget, QMenuBar):
+                return False
+            widget = widget.parent()
         return focus_widget.window() is self.window
+
+    def _is_menu_bar_focused(self) -> bool:
+        """菜单栏是否持有键盘焦点（Alt 激活或菜单展开）。"""
+        if QApplication.activePopupWidget() is not None:
+            return True
+        mb = getattr(self.window, '_custom_menu_bar', None)
+        focus_widget = QApplication.focusWidget()
+        if mb is None or focus_widget is None:
+            return False
+        return focus_widget is mb or mb.isAncestorOf(focus_widget)
+
+    def _any_floating_panel_visible(self) -> bool:
+        for attr in ('epg_panel', 'playlist_panel', 'floating_panel'):
+            widget = getattr(self.window, attr, None)
+            if widget is not None and widget.isVisible():
+                return True
+        return False
 
     def _is_multi_screen_active(self) -> bool:
         """多画面是否激活（激活时方向键/空格由网格单元格处理）"""
@@ -203,6 +226,9 @@ class EventHandler:
             if key in (Qt.Key.Key_Left, Qt.Key.Key_Right) and self._is_player_focus() and not self._is_multi_screen_active():
                 return True
             return False
+        elif modifiers == Qt.KeyboardModifier.ShiftModifier:
+            # Shift+Esc：停止播放（Esc 本身已改为退出全屏 / 收起浮层）
+            return key == Qt.Key.Key_Escape
         return False
 
     def _handle_global_shortcut(self, key, modifiers) -> bool:
@@ -224,6 +250,12 @@ class EventHandler:
                 overlay.close()
                 w._shortcut_overlay = None
 
+            if key == Qt.Key.Key_Escape and modifiers == Qt.KeyboardModifier.ShiftModifier:
+                # 停止播放改为 Shift+Esc，Esc 让位给「退出全屏 / 收起浮层」
+                if hasattr(w, 'playback_ctrl'):
+                    w.playback_ctrl.stop_playback()
+                return True
+
             if modifiers == Qt.KeyboardModifier.NoModifier:
                 if key == Qt.Key.Key_Space:
                     # 多画面激活时由获得焦点的单元格处理，主播放器不响应
@@ -236,6 +268,9 @@ class EventHandler:
                         w.playback_ctrl.toggle_play()
                     return True
                 elif key == Qt.Key.Key_Escape:
+                    # 菜单栏激活时 Esc 交回菜单，用于关闭菜单导航
+                    if self._is_menu_bar_focused():
+                        return False
                     # 多画面激活时先退出多画面
                     if self._is_multi_screen_active():
                         ms = getattr(w, 'multi_screen_ctrl', None)
@@ -247,8 +282,10 @@ class EventHandler:
                         return False
                     if hasattr(w, 'isFullScreen') and w.isFullScreen():
                         w.toggle_fullscreen()
-                    elif hasattr(w, 'playback_ctrl'):
-                        w.playback_ctrl.stop_playback()
+                    elif self._any_floating_panel_visible():
+                        # 非全屏：Esc 优先收起三块浮层，不再直接停止播放
+                        if hasattr(w, 'toggle_hide_floating'):
+                            w.toggle_hide_floating(None)
                     return True
                 elif key in (Qt.Key.Key_Up, Qt.Key.Key_Down,
                              Qt.Key.Key_Left, Qt.Key.Key_Right):
@@ -525,7 +562,8 @@ class EventHandler:
             ("← / →", tr("sc_seek_10s", "快退 / 快进 10 秒")),
             ("Backspace", tr("sc_prev_channel", "上一个频道")),
             ("F / F11", tr("sc_fullscreen", "全屏切换")),
-            ("Esc", tr("sc_exit_or_stop", "退出全屏 / 停止播放")),
+            ("Esc", tr("sc_exit_or_stop", "退出全屏 / 收起浮层")),
+            ("Shift+Esc", tr("sc_stop_playback", "停止播放")),
             ("E", tr("sc_epg", "节目单")),
             ("L", tr("sc_playlist", "频道列表")),
             ("M", tr("sc_control_panel", "控制面板")),
