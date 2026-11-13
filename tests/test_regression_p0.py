@@ -225,7 +225,40 @@ class TestBatch2PlaybackChain:
 
         playback = MpvPlayback(facade)
         assert playback.set_track('sub', 'no') is True
-        facade._set_mpv_string.assert_called_once_with('sub-track', 'no')
+        facade._set_mpv_string.assert_called_once_with('sid', 'no')
+
+    def test_get_current_track_uses_valid_mpv_properties(self):
+        """mpv 没有 audio-track/sub-track 属性，读取必须走 aid/sid/vid"""
+        from services.mpv_playback import MpvPlayback
+        facade = MagicMock()
+        facade._terminated = False
+        facade.mpv_handle = object()
+        facade._get_mpv_property_int.return_value = 2
+
+        playback = MpvPlayback(facade)
+        assert playback.get_current_track('audio') == 2
+        assert playback.get_current_track('sub') == 2
+        assert playback.get_current_track('video') == 2
+        assert [c.args[0] for c in facade._get_mpv_property_int.call_args_list] == ['aid', 'sid', 'vid']
+
+    def test_set_track_numeric_uses_valid_property(self):
+        """数字轨号也写 aid/sid，而不是不存在的 audio-track/sub-track"""
+        from services import mpv_playback
+        facade = MagicMock()
+        facade._terminated = False
+        facade.mpv_handle = object()
+        facade.get_current_track.return_value = 1
+
+        playback = mpv_playback.MpvPlayback(facade)
+        original = mpv_playback._mpv_set_property_int64
+        calls = []
+        mpv_playback._mpv_set_property_int64 = lambda handle, prop, value: calls.append((prop, value)) or 0
+        try:
+            assert playback.set_track('audio', 2) is True
+            assert playback.set_track('sub', 2) is True
+        finally:
+            mpv_playback._mpv_set_property_int64 = original
+        assert calls == [('aid', 2), ('sid', 2)]
 
     def test_source_timeout_uses_network_timeout(self):
         """看门狗超时取真实网络超时配置"""
