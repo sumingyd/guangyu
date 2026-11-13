@@ -1545,7 +1545,8 @@ class MpvPlayback:
         try:
             if not self._facade.mpv_handle:
                 return None
-            prop = f'{track_type}-track' if track_type in ('audio', 'sub') else track_type
+            # mpv 没有 "audio-track"/"sub-track" 属性（读取恒失败），轨道属性名是 aid/sid/vid
+            prop = {'audio': 'aid', 'sub': 'sid', 'video': 'vid'}.get(track_type, track_type)
             result = self._facade._get_mpv_property_int(prop)
             if result is not None:
                 return result
@@ -2239,8 +2240,9 @@ class MpvPlayback:
         try:
             if not self._facade.mpv_handle or self._facade._terminated:
                 return False
-            prop = f'{track_type}-track' if track_type in ('audio', 'sub') else track_type
-            cmd_prop = 'aid' if track_type == 'audio' else ('sid' if track_type == 'sub' else prop)
+            # mpv 轨道属性名是 aid/sid/vid，"audio-track"/"sub-track" 并不存在
+            prop = {'audio': 'aid', 'sub': 'sid', 'video': 'vid'}.get(track_type, track_type)
+            cmd_prop = prop
             track_str = str(track_id)
             current = self._facade.get_current_track(track_type)
             if current is not None and str(current) == track_str:

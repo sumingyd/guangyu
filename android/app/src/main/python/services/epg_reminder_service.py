@@ -57,6 +57,15 @@ class EpgReminderService:
                      start_time: str, end_time: str,
                      tvg_id: str = '', auto_switch: bool = False) -> bool:
         reminder_id = f"{channel_name}_{program_title}_{start_time}"
+        # 已经开始播出的节目再加提醒永远不会触发（检查条件是 0 < diff <= 60），
+        # 直接拒绝并让调用方给出明确提示，避免状态栏显示“已设置提醒”却毫无反应
+        try:
+            if datetime.fromisoformat(start_time) <= datetime.now():
+                logger.info(f"忽略已开播节目的提醒: {channel_name} - {program_title} @ {start_time}")
+                return False
+        except (ValueError, TypeError):
+            logger.warning(f"提醒时间格式非法，忽略: {channel_name} - {program_title} @ {start_time}")
+            return False
         with self._lock:
             for r in self._reminders:
                 if r.get('id') == reminder_id:
