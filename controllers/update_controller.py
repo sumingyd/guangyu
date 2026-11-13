@@ -489,8 +489,11 @@ class UpdateController:
         self._extract_thread = None
         self._update_available = False
 
-    def check_for_updates(self):
-        """异步检查新版本"""
+    def check_for_updates(self, force=False):
+        """异步检查新版本；force=True 时忽略"本次已检查过"的短路。"""
+        if force:
+            self._update_checked = False
+        self._manual_check = bool(force)
         if self._update_checking:
             return
         if self._update_checked:
@@ -860,6 +863,21 @@ class UpdateController:
             logger.info(f"版本检查完成: {message}")
         else:
             logger.warning(f"版本检查失败: {message}")
+
+        # 手动检查必须给出可见结果，否则用户点了没有任何反馈
+        if getattr(self, '_manual_check', False):
+            self._manual_check = False
+            try:
+                tr = self.window.language_manager.tr
+                if not success:
+                    text = tr('update_check_failed', '检查更新失败，请检查网络')
+                elif getattr(self, '_update_available', False):
+                    text = message
+                else:
+                    text = tr('update_is_latest', '当前已是最新版本')
+                self.window.status_bar_show_message(text, 5000)
+            except Exception as e:
+                logger.debug(f"显示更新检查结果失败: {e}")
 
         # 如果用户请求了下载但未发现新版本
         if self._pending_download:

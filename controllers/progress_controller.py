@@ -25,6 +25,9 @@ class ProgressController:
     def _update_catchup_progress(self, current_time_ms, total_time_ms, position):
         w = self.window
         catchup_program = getattr(w, 'catchup_program', None)
+        if hasattr(w, 'remain_label') and w.remain_label:
+            # 回看时底栏状态要与直播区分，避免停在「播放中…」造成误解
+            w.remain_label.setText(w.language_manager.tr("catchup_label", "回看中"))
         if catchup_program is None:
             return
 

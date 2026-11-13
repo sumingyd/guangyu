@@ -80,11 +80,23 @@ class EpgReminderController:
                     tvg_id = r.get('tvg_id', '')
                     break
             switch_cb = lambda cn=channel_name, tid=tvg_id: self._switch_to_channel(cn, tid)
+
+            def snooze_cb(cn=channel_name, pt=program_title, st=start_time, auto=auto_switch):
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(
+                    5 * 60 * 1000,
+                    lambda: self._show_reminder_popup(cn, pt, st, auto))
+
+            def dismiss_cb(cn=channel_name, pt=program_title, st=start_time):
+                self.remove_reminder(f"{cn}_{pt}_{st}")
+
             popup = ReminderPopup(
                 w, channel_name, program_title,
                 start_time_str=start_time,
                 auto_switch=auto_switch,
-                on_switch_callback=switch_cb
+                on_switch_callback=switch_cb,
+                on_snooze_callback=snooze_cb,
+                on_dismiss_callback=dismiss_cb
             )
             popup.show()
             self._active_popups.append(popup)

@@ -535,12 +535,14 @@ class WindowMixin:
         tr = self.language_manager.tr
         msg_box = QMessageBox(self)
         msg_box.setWindowTitle(tr('close_confirm_title', '关闭确认'))
-        msg_box.setText(tr('close_confirm_text', '关闭后将无法接收节目提醒，是否最小化到系统托盘继续运行提醒功能？'))
+        msg_box.setText(tr('close_confirm_text', '关闭后将无法接收节目提醒。你可以选择最小化到系统托盘，让程序继续在后台运行。'))
         msg_box.setIcon(QMessageBox.Icon.Question)
         min_btn = msg_box.addButton(tr('close_minimize_tray', '最小化到托盘'), QMessageBox.ButtonRole.YesRole)
         close_btn = msg_box.addButton(tr('close_exit', '直接退出'), QMessageBox.ButtonRole.NoRole)
         cancel_btn = msg_box.addButton(tr('cancel', '取消'), QMessageBox.ButtonRole.RejectRole)
-        msg_box.setDefaultButton(min_btn)
+        # 默认落在「取消」：回车不会误触最小化或退出
+        msg_box.setDefaultButton(cancel_btn)
+        msg_box.setEscapeButton(cancel_btn)
 
         remember_cb = QCheckBox(tr('close_remember_choice', '记住选择，不再询问'))
         msg_box.setCheckBox(remember_cb)

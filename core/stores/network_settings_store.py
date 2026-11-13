@@ -76,7 +76,7 @@ class NetworkSettingsStore:
         return {
             'enabled': f._parse_bool(f.get_value('Server', 'enabled', 'False'), False),
             'port': f._parse_int(f.get_value('Server', 'port', '8080'), 8080),
-            'host': f.get_value('Server', 'host', '0.0.0.0') or '0.0.0.0',
+            'host': f.get_value('Server', 'host', '127.0.0.1') or '127.0.0.1',
             'auto_start': f._parse_bool(f.get_value('Server', 'auto_start', 'False'), False)
         }
 

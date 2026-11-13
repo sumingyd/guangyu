@@ -8,12 +8,13 @@ from utils.platform_utils import wayland_move
 
 
 class ReminderPopup(FloatingDialog):
-    _AUTO_CLOSE_MS = 300000
+    _AUTO_CLOSE_MS = 30000
     _PROGRESS_UPDATE_MS = 1000
 
     def __init__(self, main_window, channel_name: str, program_title: str,
                  start_time_str: str = '', auto_switch: bool = False,
-                 on_switch_callback=None, parent=None):
+                 on_switch_callback=None, parent=None,
+                 on_snooze_callback=None, on_dismiss_callback=None):
         super().__init__(parent, frameless=True, stay_on_top=True, tool_window=True)
         self.window = main_window
         self._channel_name = channel_name
@@ -21,6 +22,8 @@ class ReminderPopup(FloatingDialog):
         self._start_time_str = start_time_str
         self._auto_switch = auto_switch
         self._on_switch_callback = on_switch_callback
+        self._on_snooze_callback = on_snooze_callback
+        self._on_dismiss_callback = on_dismiss_callback
         self._elapsed_ms = 0
         self._dragging = False
         self._drag_offset = None
@@ -89,13 +92,27 @@ class ReminderPopup(FloatingDialog):
             self._switch_btn.setToolTip(tr('switch_channel_tooltip', '切换到该频道'))
             btn_layout.addWidget(self._switch_btn)
 
+        if self._on_snooze_callback:
+            self._snooze_btn = QPushButton(tr('reminder_popup_snooze', '稍后提醒'))
+            self._snooze_btn.setToolTip(tr('reminder_popup_snooze_tip', '5 分钟后再提醒'))
+            self._snooze_btn.clicked.connect(self._on_snooze_clicked)
+            btn_layout.addWidget(self._snooze_btn)
+
         self._close_btn = QPushButton(tr('reminder_popup_close', '关闭'))
         self._close_btn.clicked.connect(self.close)
         self._close_btn.setToolTip(tr('close_tooltip', '关闭'))
         btn_layout.addWidget(self._close_btn)
 
         layout.addLayout(btn_layout)
-        self.setFixedSize(320, self.sizeHint().height() + 60)
+
+        if self._on_dismiss_callback:
+            dismiss_btn = QPushButton(tr('reminder_popup_dismiss', '不再提醒此节目'))
+            dismiss_btn.setObjectName('reminderDismissBtn')
+            dismiss_btn.setFlat(True)
+            dismiss_btn.clicked.connect(self._on_dismiss_clicked)
+            layout.addWidget(dismiss_btn)
+
+        self.setFixedSize(360, self.sizeHint().height() + 60)
 
     def _setup_timers(self):
         self._auto_close_timer = QTimer(self)
@@ -116,6 +133,32 @@ class ReminderPopup(FloatingDialog):
         if self._on_switch_callback:
             self._on_switch_callback()
         self.close()
+
+    def _on_snooze_clicked(self):
+        if self._on_snooze_callback:
+            self._on_snooze_callback()
+        self.close()
+
+    def _on_dismiss_clicked(self):
+        if self._on_dismiss_callback:
+            self._on_dismiss_callback()
+        self.close()
+
+    def enterEvent(self, event):
+        # 鼠标悬停时暂停自动关闭，避免正在阅读时被关掉
+        try:
+            self._auto_close_timer.stop()
+        except Exception:
+            pass
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        try:
+            remaining = max(1000, self._AUTO_CLOSE_MS - self._elapsed_ms)
+            self._auto_close_timer.start(remaining)
+        except Exception:
+            pass
+        super().leaveEvent(event)
 
     def _position_bottom_right(self):
         screen = None

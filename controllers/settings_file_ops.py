@@ -254,6 +254,9 @@ class SettingsFileOperations:
         self._connect_subscription_signals(playlist_section, epg_section)
 
         button_layout = QHBoxLayout()
+        reset_button = QPushButton(tr("reset_defaults", "恢复默认"))
+        reset_button.setObjectName("settings_reset_button")
+        reset_button.clicked.connect(lambda: self._reset_settings_defaults(dialog))
         save_button = QPushButton(tr("save_button", "Save"))
         cancel_button = QPushButton(tr("cancel_button", "Cancel"))
         save_button.clicked.connect(lambda: self._save_and_close_settings(dialog))
@@ -262,6 +265,7 @@ class SettingsFileOperations:
         initial_display = typography.current_display()
         cancel_button.clicked.connect(lambda: self._cancel_settings(dialog, initial_display))
         button_layout.addStretch()
+        button_layout.addWidget(reset_button)
         button_layout.addWidget(save_button)
         button_layout.addWidget(cancel_button)
         main_layout.addLayout(button_layout)
@@ -901,6 +905,36 @@ class SettingsFileOperations:
 
     # ==================== 保存与关闭 ====================
 
+    def _reset_settings_defaults(self, dialog):
+        """把当前设置页的控件恢复为默认值（仍需要点「保存」才落盘）。"""
+        from services.mpv_common import DEFAULT_NETWORK_TIMEOUT_SEC
+
+        def pick(name, value):
+            combo = dialog.findChild(QComboBox, name)
+            if combo is not None:
+                idx = combo.findData(value)
+                if idx >= 0:
+                    combo.setCurrentIndex(idx)
+
+        pick('font_size_tier_combo', 'standard')
+        pick('ui_scale_combo', 100)
+        pick('rtsp_transport_combo', 'tcp')
+        pick('hwdec_combo', 'auto-copy')
+        pick('network_timeout_combo', DEFAULT_NETWORK_TIMEOUT_SEC)
+        pick('audio_passthrough_combo', 'never')
+        pick('hdr_output_mode_combo', 'disable')
+        pick('vo_combo', 'auto')
+        pick('video_sync_combo', 'audio')
+        pick('close_behavior_combo', 'ask')
+        pick('screensaver_idle_combo', 5)
+
+        check = dialog.findChild(QCheckBox, "tls_check")
+        if check is not None:
+            check.setChecked(False)
+        check = dialog.findChild(QCheckBox, "screensaver_enabled_check")
+        if check is not None:
+            check.setChecked(True)
+
     def _save_and_close_settings(self, dialog):
         try:
             old_playlist = global_subscription_manager.get_playlist_sources()
@@ -931,6 +965,10 @@ class SettingsFileOperations:
                 epg_thread.start()
 
             dialog.close()
+            try:
+                self.window.status_bar_show_message(self._tr("settings_saved", "设置已保存"), 3000)
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"保存订阅设置失败: {e}")
             dialog.close()
@@ -1853,6 +1891,9 @@ class SettingsFileOperations:
                         '_groups': [tr("temp_stream", "临时串流")],
                     }
                     w._add_to_local_list(channel)
+                    if hasattr(w, 'status_bar_show_message'):
+                        w.status_bar_show_message(
+                            tr("temp_stream_added", "已作为临时串流添加到本地列表"), 4000)
                     return
                 else:
                     try:
@@ -1904,3 +1945,6 @@ class SettingsFileOperations:
             '_groups': [tr("temp_stream", "临时串流")],
         }
         w._add_to_local_list(channel)
+        if hasattr(w, 'status_bar_show_message'):
+            w.status_bar_show_message(
+                tr("temp_stream_added", "已作为临时串流添加到本地列表"), 4000)

@@ -128,11 +128,17 @@ class ServerMixin:
         host_combo = QComboBox()
         host_combo.addItem(f"0.0.0.0 ({tr('all_interfaces', '所有接口')})", '0.0.0.0')
         host_combo.addItem(f"127.0.0.1 ({tr('localhost_only', '仅本机')})", '127.0.0.1')
-        host_idx = host_combo.findData(settings.get('host', '0.0.0.0'))
+        host_idx = host_combo.findData(settings.get('host', '127.0.0.1'))
         if host_idx >= 0:
             host_combo.setCurrentIndex(host_idx)
         host_layout.addWidget(host_combo, 1)
         layout.addLayout(host_layout)
+
+        host_hint = QLabel(tr('server_host_hint',
+                              '仅本机：只有这台电脑能访问；所有接口：同一局域网的其他设备也能访问。'))
+        host_hint.setWordWrap(True)
+        host_hint.setStyleSheet("color: #9aa0a6; font-size: 11px;")
+        layout.addWidget(host_hint)
 
         layout.addSpacing(8)
 
