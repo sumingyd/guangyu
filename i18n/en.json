@@ -782,6 +782,7 @@
   "multi_screen_entered": "Multi screen mode entered",
   "multi_screen_exited": "Multi screen mode exited",
   "multi_screen_cell_hint": "Drag a channel here, or double-click one in the channel list",
+  "multi_screen_hint": "Arrow keys switch cells · Space mutes · Esc exits",
   "live_seek_disabled": "The progress bar cannot be dragged during live playback. Pick a catch-up program in the EPG instead.",
   "muted": "Muted",
   "my_preset": "My Preset",

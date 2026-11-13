@@ -153,8 +153,11 @@ class LanguageManager(Singleton):
                 for i, btn in enumerate(tab_btns):
                     if i < len(tab_keys):
                         text = self.tr(tab_keys[i], btn.text())
+                        btn._gy_base_label = text
                         btn.setText(text)
                         btn.setToolTip(text)
+                if hasattr(main_window, '_update_playlist_tab_counts'):
+                    main_window._update_playlist_tab_counts()
             # 底部"更多"菜单（创建时已记录 (key, fallback)）
             more_menu = getattr(main_window, '_more_menu', None)
             if more_menu:

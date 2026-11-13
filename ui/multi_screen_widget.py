@@ -503,6 +503,22 @@ class MultiScreenWidget(QWidget):
         self._toolbar.addWidget(self._mute_label)
         self._toolbar.addStretch()
 
+        # 操作提示：说明空格/方向键在网格中的含义，避免只看到黑屏不知道怎么用
+        self._hint_label = QLabel()
+        self._hint_label.setStyleSheet(
+            "color: " + AppStyles._get_colors().get('player_panel_secondary', '#aaa')
+            + f"; font-size: {AppStyles.fs('caption')}px; background: transparent;"
+        )
+        self._hint_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        try:
+            from core.language_manager import LanguageManager
+            self._hint_label.setText(
+                LanguageManager().tr('multi_screen_hint', '方向键切换单元格 · 空格静音 · Esc 退出')
+            )
+        except Exception:
+            self._hint_label.setText('方向键切换单元格 · 空格静音 · Esc 退出')
+        self._toolbar.addWidget(self._hint_label)
+
         main_layout.addLayout(self._toolbar)
 
         self._grid_layout = QGridLayout()

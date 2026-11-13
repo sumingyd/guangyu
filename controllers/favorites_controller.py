@@ -27,6 +27,8 @@ class FavoritesController:
             playlist_tab = getattr(self.window, 'playlist_tab', None)
             if playlist_tab and playlist_tab.currentIndex() == 3:
                 self.populate_history_tab()
+            else:
+                self._refresh_tab_counts()
 
     def toggle_favorite(self, channel: Optional[Dict[str, Any]] = None):
         ch = channel or getattr(self.window, 'current_channel', None)
@@ -56,6 +58,14 @@ class FavoritesController:
         if self._service:
             return self._service.get_play_history()
         return []
+
+    def _refresh_tab_counts(self):
+        updater = getattr(self.window, '_update_playlist_tab_counts', None)
+        if updater is not None:
+            try:
+                updater()
+            except Exception as e:
+                logger.debug(f"刷新页签条目数失败: {e}")
 
     def populate_favorites_tab(self):
         list_widget = getattr(self.window, 'fav_channel_list', None)
@@ -119,6 +129,7 @@ class FavoritesController:
                 empty_label.show()
             else:
                 empty_label.hide()
+        self._refresh_tab_counts()
 
     def populate_history_tab(self):
         list_widget = getattr(self.window, 'history_channel_list', None)
@@ -192,6 +203,7 @@ class FavoritesController:
                 empty_label.show()
             else:
                 empty_label.hide()
+        self._refresh_tab_counts()
 
     def on_favorite_item_clicked(self, item):
         if not self._service:

@@ -782,6 +782,7 @@
   "multi_screen_entered": "已进入多画面模式",
   "multi_screen_exited": "已退出多画面模式",
   "multi_screen_cell_hint": "拖入频道，或双击频道列表",
+  "multi_screen_hint": "方向键切换单元格 · 空格静音 · Esc 退出",
   "live_seek_disabled": "直播状态下进度条不可拖动，可在节目单中选择「可回看」节目回看",
   "muted": "已静音",
   "my_preset": "我的预设",

@@ -97,6 +97,8 @@ class PlaylistPanelMixin:
         self.epg_content.setSpacing(2)
         self.epg_content.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.epg_content.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # 悬停才显示「可回看」徽标，需要鼠标跟踪才能收到 hover 状态
+        self.epg_content.setMouseTracking(True)
         from controllers.epg_controller import EPGItemDelegate
         self.epg_content.setItemDelegate(EPGItemDelegate(self.epg_content))
         self.epg_content.addItem(self.language_manager.tr("loading", "Loading..."))
@@ -200,6 +202,7 @@ class PlaylistPanelMixin:
         self._local_channels_dirty = False
         self._sub_groups = [tr("all_channels", "All Channels")]
         self._local_groups = [tr("all_channels", "All Channels")]
+        self._update_playlist_tab_counts()
 
         from ui.floating_dialog import FloatingDockWidget
         self.playlist_dock = FloatingDockWidget(tr("channel_list", "Channel List"), self)
@@ -260,6 +263,7 @@ class PlaylistPanelMixin:
             btn.setCheckable(True)
             btn.setChecked(tab_idx == 0)
             btn.clicked.connect(lambda checked, idx=tab_idx: self._switch_playlist_tab(idx))
+            btn._gy_base_label = tooltip
             tab_switch_row.addWidget(btn)
             self._playlist_tab_btns.append(btn)
         self.playlist_layout.addLayout(tab_switch_row)
@@ -268,6 +272,47 @@ class PlaylistPanelMixin:
         self._playlist_tab_row_min = sum(
             btn.sizeHint().width() for btn in self._playlist_tab_btns
         ) + 3 * tab_switch_row.spacing()
+
+    def _update_playlist_tab_counts(self):
+        """在页签按钮上显示各自条目数，频道多时可一眼判断规模。"""
+        buttons = getattr(self, '_playlist_tab_btns', None)
+        if not buttons:
+            return
+        counts = [
+            len(getattr(self, '_sub_channels', None) or []),
+            len(getattr(self, '_local_channels', None) or []),
+        ]
+        fav_ctrl = getattr(self, 'favorites_ctrl', None)
+        try:
+            counts.append(len(fav_ctrl.get_favorites()) if fav_ctrl else 0)
+        except Exception:
+            counts.append(0)
+        try:
+            counts.append(len(fav_ctrl.get_play_history()) if fav_ctrl else 0)
+        except Exception:
+            counts.append(0)
+
+        for btn, count in zip(buttons, counts):
+            base = getattr(btn, '_gy_base_label', '') or btn.text()
+            text = f"{base} {count}" if count else base
+            if btn.text() != text:
+                btn.setText(text)
+        self._resize_playlist_tab_row(buttons)
+
+    def _resize_playlist_tab_row(self, buttons):
+        """条目数让按钮变宽后，同步抬高面板最小宽度，避免文字被裁。"""
+        try:
+            row_min = sum(btn.sizeHint().width() for btn in buttons) + 3 * 2
+        except Exception:
+            return
+        self._playlist_tab_row_min = row_min
+        dock = getattr(self, 'playlist_dock', None)
+        container = dock.widget() if dock is not None else None
+        if container is None:
+            return
+        min_w = max(container.minimumWidth(), row_min + 16)
+        container.setMinimumWidth(min_w)
+        dock.setMinimumWidth(min_w)
 
     def refresh_playlist_tab_metrics(self):
         """字号/缩放变更后重算频道面板页签按钮与最小宽度。"""

@@ -4,7 +4,7 @@ EPG节目单控制器 - 负责EPG数据管理、显示、交互
 """
 
 from datetime import datetime, timedelta, date
-from PySide6.QtWidgets import QListWidgetItem, QStyledItemDelegate, QStyleOptionViewItem
+from PySide6.QtWidgets import QListWidgetItem, QStyledItemDelegate, QStyleOptionViewItem, QStyle
 from PySide6.QtGui import QPainter, QFontMetrics, QFont, QCursor
 from PySide6.QtCore import Qt, QTimer, QRect
 
@@ -40,8 +40,11 @@ class EPGItemDelegate(QStyledItemDelegate):
         elif data.get('is_past'):
             left_badges.append(('\u2022', 'past'))
 
+        # 回看标签只在鼠标悬停或选中行显示，避免整列徽标干扰阅读
+        is_hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        is_selected = bool(option.state & QStyle.StateFlag.State_Selected)
         right_badge = None
-        if data.get('is_catchup'):
+        if data.get('is_catchup') and (is_hovered or is_selected):
             right_badge = (data.get('catchup_label', '\u21a9'), 'catchup')
 
         if not left_badges and not right_badge:
@@ -114,6 +117,8 @@ class EPGController:
         self.window: EpgProtocol = main_window
         self._current_date = None
         self._last_epg_key = None
+        # 最近一次定位到的节目下标，重新打开节目单时复用
+        self._last_scroll_index = -1
 
     # 无 catchup_source 也能自行生成 catchup URL 的类型
     _CATCHUP_TYPES_WITHOUT_SOURCE = frozenset(
@@ -652,6 +657,7 @@ class EPGController:
     def _do_scroll_to_index(self, index, logger, label=""):
         if index < 0:
             return
+        self._last_scroll_index = index
 
         def do_scroll():
             if hasattr(self.window, 'epg_content') and self.window.epg_content.count() > index:
@@ -669,6 +675,9 @@ class EPGController:
         if hasattr(self.window, 'epg_panel'):
             self.window.epg_visible = checked
             self.window._sync_panel_actions()
+            # 重新打开节目单时回到当前节目，而不是停在面板隐藏前的滚动位置
+            if checked and self._last_scroll_index >= 0:
+                self._do_scroll_to_index(self._last_scroll_index, logger, "重新打开节目单")
 
     @property
     def has_epg_data(self) -> bool:

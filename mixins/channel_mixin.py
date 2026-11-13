@@ -53,6 +53,9 @@ class ChannelMixin:
         if pending:
             self._restore_pending_channel(source)
 
+        if hasattr(self, '_update_playlist_tab_counts'):
+            self._update_playlist_tab_counts()
+
     def _restore_pending_channel(self, populated_source):
         """恢复上次播放频道；频道在哪一页签就切到哪一页签。
 
