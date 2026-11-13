@@ -369,10 +369,13 @@ class ScanChannelDialog(FloatingDialog):
         main_layout.setContentsMargins(12, 12, 12, 12)
         main_layout.setSpacing(0)
 
-        # ========== 左侧边栏：扫描设置 (弹性宽度 240~320px) ==========
+        # ========== 左侧边栏：扫描设置 (弹性宽度随界面缩放) ==========
+        from utils.platform_utils import get_effective_ui_scale
+        from ui.typography import text_factor
+        _scan_scale = get_effective_ui_scale() * max(1.0, text_factor())
         self.left_panel = QtWidgets.QWidget()
-        self.left_panel.setMinimumWidth(240)
-        self.left_panel.setMaximumWidth(320)
+        self.left_panel.setMinimumWidth(max(240, int(round(240 * _scan_scale))))
+        self.left_panel.setMaximumWidth(max(320, int(round(320 * _scan_scale))))
         self.left_panel.setStyleSheet(AppStyles.side_panel_style())
         left_layout = QtWidgets.QVBoxLayout(self.left_panel)
         left_layout.setContentsMargins(12, 12, 12, 12)
@@ -448,10 +451,12 @@ class ScanChannelDialog(FloatingDialog):
         # 中间间隔
         main_layout.addSpacing(12)
 
-        # ========== 右侧边栏：频道编辑 (弹性宽度 200~280px) ==========
+        # ========== 右侧边栏：频道编辑 (弹性宽度随界面缩放) ==========
+        from utils.platform_utils import get_effective_ui_scale
+        _scale = get_effective_ui_scale()
         self.right_panel = QtWidgets.QWidget()
-        self.right_panel.setMinimumWidth(200)
-        self.right_panel.setMaximumWidth(280)
+        self.right_panel.setMinimumWidth(max(200, int(round(200 * _scale))))
+        self.right_panel.setMaximumWidth(max(280, int(round(280 * _scale))))
         self.right_panel.setStyleSheet(AppStyles.side_panel_style())
         right_layout = QtWidgets.QVBoxLayout(self.right_panel)
         right_layout.setContentsMargins(12, 12, 12, 12)
@@ -604,6 +609,10 @@ class ScanChannelDialog(FloatingDialog):
         engine_layout = QtWidgets.QHBoxLayout()
         engine_label = QtWidgets.QLabel(f"{tr('scan_engine', 'Scan Engine')}：")
         engine_label.setStyleSheet(AppStyles.small_label_style())
+        # 标签按内容占宽，避免缩放后与下拉框挤在一起
+        engine_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Preferred
+        )
         self.scan_engine_label = engine_label
         engine_layout.addWidget(engine_label)
 
@@ -839,7 +848,6 @@ class ScanChannelDialog(FloatingDialog):
         self.address_example_label = address_example_label
         address_example_label.setWordWrap(True)
         address_example_label.setStyleSheet(AppStyles.hint_label_style())
-        address_example_label.setMinimumHeight(28)
 
         address_section.addWidget(address_example_label)
         # 地址输入框固定3行高度，内容多时内部滚动

@@ -1,4 +1,5 @@
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QSpinBox, QCheckBox, QPushButton, QComboBox
+from PySide6.QtCore import Qt
 from core.log_manager import global_logger as logger
 
 
@@ -96,13 +97,23 @@ class ServerMixin:
         port = server.port if is_running else settings.get('port', 8080)
 
         status_label = QLabel()
+        token = get_auth_token()
         if is_running:
-            token = get_auth_token()
-            status_label.setText(f"● {tr('server_running', '服务运行中')}  http://localhost:{port}\n  {tr('server_auth_token', '认证码')}: {token}")
+            status_label.setText(
+                f"● {tr('server_running', '服务运行中')}\n"
+                f"  {tr('server_address', '地址')}: http://localhost:{port}\n"
+                f"  {tr('server_auth_token', '认证码')}: {token}"
+            )
             status_label.setStyleSheet(AppStyles.status_label_style(True))
         else:
-            status_label.setText(f"○ {tr('server_not_running', '服务未运行')}")
+            # 未启动时也把地址与认证码显示出来，方便先配置好客户端再启动服务
+            status_label.setText(
+                f"○ {tr('server_not_running', '服务未运行')}\n"
+                f"  {tr('server_address', '地址')}: http://localhost:{port}\n"
+                f"  {tr('server_auth_token', '认证码')}: {token}"
+            )
             status_label.setStyleSheet(AppStyles.status_label_style(False))
+        status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(status_label)
 
         layout.addSpacing(4)

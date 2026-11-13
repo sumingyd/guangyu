@@ -784,6 +784,7 @@
   "multi_screen_cell_hint": "Drag a channel here, or double-click one in the channel list",
   "multi_screen_hint": "Arrow keys switch cells · Space mutes · Esc exits",
   "live_seek_disabled": "The progress bar cannot be dragged during live playback. Pick a catch-up program in the EPG instead.",
+  "video_eq_live_hint": "Adjustments preview instantly; click Done to save them.",
   "muted": "Muted",
   "my_preset": "My Preset",
   "network_enhance_applied": "Network settings applied",

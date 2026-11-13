@@ -364,6 +364,13 @@ class VideoEqualizerDialog(FloatingDialog):
         layout.addLayout(bottom_row)
 
         # ===== 操作按钮（标准设置式：恢复默认 | 应用 + 完成） =====
+        self.live_hint_label = QLabel(
+            tr('video_eq_live_hint', '参数调整会即时预览；点「完成」保存设置。')
+        )
+        self.live_hint_label.setWordWrap(True)
+        self.live_hint_label.setStyleSheet(AppStyles.hint_label_style())
+        layout.addWidget(self.live_hint_label)
+
         def _on_done():
             self._apply_now()
             self._save()
