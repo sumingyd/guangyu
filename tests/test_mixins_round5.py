@@ -123,7 +123,7 @@ class TestControlPanelMixin:
         with patch('mixins.control_panel_mixin.QHBoxLayout', return_value=MagicMock()), \
              patch('mixins.control_panel_mixin.QToolButton') as mock_btn, \
              patch('mixins.control_panel_mixin.QLabel', return_value=MagicMock()), \
-             patch('mixins.control_panel_mixin.QSlider') as mock_slider, \
+             patch('mixins.control_panel_mixin.VolumeSlider') as mock_slider, \
              patch('mixins.control_panel_mixin.QSize'), \
              patch('mixins.control_panel_mixin.QIcon'), \
              patch('ui.cache_progress_slider.CacheProgressSlider') as mock_cps, \

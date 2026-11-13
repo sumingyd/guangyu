@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QToolButton, QSlider, QSizePolicy, QDockWidget,
+    QToolButton, QSizePolicy, QDockWidget,
 )
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QIcon
@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QMenu
 from core.log_manager import global_logger as logger
 from ui.elided_label import ElidedLabel
 from ui.styles import AppStyles
+from ui.volume_slider import VolumeSlider
 from utils.platform_utils import is_android
 
 
@@ -402,7 +403,7 @@ class ControlPanelMixin:
         self.volume_button.setToolTip(tr("panel_volume", "音量"))
         self.control_row.addWidget(self.volume_button)
 
-        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.volume_slider = VolumeSlider(Qt.Orientation.Horizontal)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(80)
         self.volume_slider.setFixedWidth(metrics['volume_w'])

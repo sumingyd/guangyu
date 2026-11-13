@@ -134,6 +134,8 @@ class PipController:
         self._pip_play_btn = None
         self._pip_next_btn = None
         self._pip_close_btn = None
+        self._pip_mute_btn = None
+        self._pip_volume_slider = None
 
     @property
     def is_active(self):
@@ -357,8 +359,23 @@ class PipController:
         self._pip_play_btn = self._create_button("pause", btn_size, self._on_toggle_play)
         self._pip_next_btn = self._create_button("next", btn_size, self._on_next_channel)
         self._pip_close_btn = self._create_button("close", btn_size, self._exit)
+        self._pip_mute_btn = self._create_button("volume", btn_size, self._on_toggle_mute)
 
-        self._pip_buttons = [self._pip_prev_btn, self._pip_play_btn, self._pip_next_btn, self._pip_close_btn]
+        # 画中画里补一个音量滑块，不必回到主界面调音量
+        from PySide6.QtWidgets import QSlider
+        from ui.styles import AppStyles
+        slider = QSlider(Qt.Orientation.Horizontal, self._pip_overlay_widget)
+        slider.setRange(0, 100)
+        slider.setFixedHeight(18)
+        slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        slider.setStyleSheet(AppStyles.player_volume_slider_style())
+        slider.valueChanged.connect(self._on_pip_volume_changed)
+        slider.hide()
+        self._pip_volume_slider = slider
+
+        self._pip_buttons = [self._pip_prev_btn, self._pip_play_btn,
+                             self._pip_next_btn, self._pip_close_btn,
+                             self._pip_mute_btn]
         for btn in self._pip_buttons:
             btn.setParent(self._pip_overlay_widget)
             btn.hide()
@@ -395,6 +412,47 @@ class PipController:
             self._pip_play_btn.set_icon("pause")
         else:
             self._pip_play_btn.set_icon("play")
+
+    def _sync_volume_controls(self):
+        """把主播放器当前音量同步到画中画滑块与静音图标。"""
+        pc = getattr(self.window, 'player_controller', None)
+        volume = 0
+        if pc is not None:
+            try:
+                volume = pc.get_volume()
+            except Exception:
+                volume = 0
+        if self._pip_volume_slider is not None:
+            self._pip_volume_slider.blockSignals(True)
+            self._pip_volume_slider.setValue(int(volume))
+            self._pip_volume_slider.blockSignals(False)
+        if self._pip_mute_btn is not None:
+            self._pip_mute_btn.set_icon("volume_mute" if volume <= 0 else "volume")
+
+    def _on_pip_volume_changed(self, volume: int):
+        pc = getattr(self.window, 'player_controller', None)
+        if pc is not None:
+            try:
+                pc.set_volume(int(volume))
+            except Exception as e:
+                logger.debug(f"画中画设置音量失败: {e}")
+        if self._pip_mute_btn is not None:
+            self._pip_mute_btn.set_icon("volume_mute" if volume <= 0 else "volume")
+        # 同步主界面滑块与音量图标，退出画中画后状态一致
+        window_slider = getattr(self.window, 'volume_slider', None)
+        if window_slider is not None and window_slider.value() != volume:
+            window_slider.blockSignals(True)
+            window_slider.setValue(int(volume))
+            window_slider.blockSignals(False)
+        playback_ctrl = getattr(self.window, 'playback_ctrl', None)
+        if playback_ctrl is not None and hasattr(playback_ctrl, '_update_volume_icon'):
+            playback_ctrl._update_volume_icon(int(volume))
+
+    def _on_toggle_mute(self):
+        playback_ctrl = getattr(self.window, 'playback_ctrl', None)
+        if playback_ctrl is not None and hasattr(playback_ctrl, 'toggle_mute'):
+            playback_ctrl.toggle_mute()
+        self._sync_volume_controls()
 
     def handle_mouse_press(self, event):
         if not self._is_active:
@@ -556,11 +614,26 @@ class PipController:
         if self._pip_close_btn:
             self._pip_close_btn.move(vw.width() - btn_size - close_margin, close_margin)
 
+        # 音量控制固定在左下角：静音按钮 + 音量滑块
+        vol_y = max(0, vw.height() - btn_size - 6)
+        if self._pip_mute_btn:
+            self._pip_mute_btn.move(8, vol_y)
+        slider = self._pip_volume_slider
+        if slider is not None and not slider.isHidden():
+            slider_w = max(60, min(140, vw.width() - btn_size - 32))
+            slider.setGeometry(
+                8 + btn_size + 8,
+                vol_y + (btn_size - slider.height()) // 2,
+                slider_w,
+                slider.height(),
+            )
 
         mask = QRegion()
         for btn in self._pip_buttons:
             if not btn.isHidden():
                 mask = mask.united(QRegion(btn.geometry()))
+        if slider is not None and not slider.isHidden():
+            mask = mask.united(QRegion(slider.geometry()))
         if mask.isEmpty():
             mask = QRegion(QRect(0, 0, 1, 1))
         overlay.setMask(mask)
@@ -577,8 +650,11 @@ class PipController:
         if not self._pip_buttons:
             return
         self._update_play_btn()
+        self._sync_volume_controls()
         for btn in self._pip_buttons:
             btn.show()
+        if self._pip_volume_slider is not None:
+            self._pip_volume_slider.show()
         self._update_overlay_geometry()
         if self._pip_overlay_widget:
             self._pip_overlay_widget.show()
@@ -586,6 +662,8 @@ class PipController:
     def _hide_overlay(self):
         if self._pip_overlay_widget:
             self._pip_overlay_widget.hide()
+        if self._pip_volume_slider is not None:
+            self._pip_volume_slider.hide()
         if not self._pip_buttons:
             return
         for btn in self._pip_buttons:
