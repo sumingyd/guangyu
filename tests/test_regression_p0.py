@@ -306,3 +306,45 @@ class TestBatch2PlaybackChain:
         assert result == str(final_path)
         assert final_path.read_bytes() == payload
         assert not (tmp_path / 'movie.srt.gz').exists()
+class TestEpgReminderBoundary:
+    """EPG 提醒边界：已开播节目不应假装设置成功，临近开播应正常触发。"""
+
+    def _svc(self):
+        from services.epg_reminder_service import EpgReminderService
+        return EpgReminderService(None)
+
+    def test_reject_already_started_program(self):
+        from datetime import datetime, timedelta
+        svc = self._svc()
+        now = datetime.now()
+        added = svc.add_reminder(
+            'CCTV1', '新闻联播',
+            (now - timedelta(minutes=1)).isoformat(),
+            (now + timedelta(minutes=29)).isoformat())
+        assert added is False
+        assert svc.get_reminders() == []
+
+    def test_accept_upcoming_program(self):
+        from datetime import datetime, timedelta
+        svc = self._svc()
+        now = datetime.now()
+        added = svc.add_reminder(
+            'CCTV1', '新闻联播',
+            (now + timedelta(minutes=5)).isoformat(),
+            (now + timedelta(minutes=35)).isoformat())
+        assert added is True
+        assert len(svc.get_reminders()) == 1
+
+    def test_notify_within_early_window(self):
+        from datetime import datetime, timedelta
+        svc = self._svc()
+        now = datetime.now()
+        svc.add_reminder(
+            'CCTV1', '新闻联播',
+            (now + timedelta(seconds=30)).isoformat(),
+            (now + timedelta(minutes=30)).isoformat())
+        fired = []
+        svc.set_callback(lambda r: fired.append(r))
+        svc._check_reminders()
+        assert len(fired) == 1
+        assert fired[0]['program_title'] == '新闻联播'

@@ -138,6 +138,10 @@ class EpgReminderController:
             tr = self.window.language_manager.tr
             self.window.status_bar_show_message(tr('reminder_removed', '已取消提醒'))
         else:
-            self.add_reminder(channel_name, program_title, start_time, end_time, tvg_id)
+            added = self.add_reminder(channel_name, program_title, start_time, end_time, tvg_id)
             tr = self.window.language_manager.tr
-            self.window.status_bar_show_message(tr('reminder_added', '已设置提醒'))
+            if added:
+                self.window.status_bar_show_message(tr('reminder_added', '已设置提醒'))
+            else:
+                self.window.status_bar_show_message(
+                    tr('reminder_program_started', '节目已开始，无法设置提醒'))
