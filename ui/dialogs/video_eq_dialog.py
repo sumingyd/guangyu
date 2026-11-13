@@ -3,6 +3,7 @@ import os
 from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QPushButton,
     QSlider, QCheckBox, QComboBox, QGroupBox, QWidget,
+    QScrollArea, QFrame, QApplication,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QInputDialog
@@ -30,7 +31,8 @@ class VideoEqualizerDialog(FloatingDialog):
         self.window = main_window
         tr = main_window.language_manager.tr
         self.setWindowTitle(tr('video_eq_title', '视频图像调整'))
-        self.setMinimumSize(760, 520)
+        # 高度交给屏幕可用区约束（showEvent 里按屏幕计算），内容超出时内部滚动
+        self.setMinimumSize(760, 420)
         self._loading = False
         self._setup_ui()
         self._apply_theme()
@@ -41,6 +43,25 @@ class VideoEqualizerDialog(FloatingDialog):
 
     def reapply_styles(self):
         self._apply_theme()
+
+    def showEvent(self, event):
+        # 必须在基类 adjustSize() 之前限制最大尺寸，否则首次显示会按内容撑出屏幕
+        self._apply_screen_limits()
+        super().showEvent(event)
+
+    def _apply_screen_limits(self):
+        screen = self.screen()
+        if screen is None:
+            app = QApplication.instance()
+            screen = app.primaryScreen() if app else None
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        max_w = max(640, int(avail.width() * 0.95))
+        max_h = max(360, int(avail.height() * 0.92))
+        self.setMaximumSize(max_w, max_h)
+        # 最小尺寸不能超过最大尺寸，否则小高度屏上窗口无法收缩
+        self.setMinimumSize(min(760, max_w), min(420, max_h))
 
     def _apply_theme(self):
         c = AppStyles._get_colors()
@@ -74,6 +95,22 @@ class VideoEqualizerDialog(FloatingDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
+
+        # 可滚动内容区：小高度屏 / 特大字号下窗口不会被撑出屏幕，底部提示与按钮始终可见
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(8)
+        content_scroll = QScrollArea()
+        content_scroll.setObjectName('video_eq_content_scroll')
+        content_scroll.setWidgetResizable(True)
+        content_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content_scroll.setWidget(content)
+        content_scroll.setStyleSheet(
+            "QScrollArea#video_eq_content_scroll { background: transparent; border: none; }"
+        )
+        content_scroll.viewport().setAutoFillBackground(False)
 
         # ===== 上半部分：三列水平排列 =====
         top_row = QHBoxLayout()
@@ -251,7 +288,7 @@ class VideoEqualizerDialog(FloatingDialog):
         enhance_form.addRow(tr('shader_preset_label', 'AI 着色器'), self.shader_combo)
 
         top_row.addWidget(enhance_group, 1)
-        layout.addLayout(top_row)
+        content_layout.addLayout(top_row)
 
         # ===== 第三阶段：智能场景检测 + 预设管理 =====
         phase3_row = QHBoxLayout()
@@ -293,7 +330,7 @@ class VideoEqualizerDialog(FloatingDialog):
         self.btn_delete_preset.clicked.connect(self._on_delete_custom_preset)
         preset_mgr_layout.addWidget(self.btn_delete_preset)
         phase3_row.addWidget(preset_mgr_box, 2)
-        layout.addLayout(phase3_row)
+        content_layout.addLayout(phase3_row)
 
         # ===== GPU API 选择 =====
         gpu_row = QHBoxLayout()
@@ -319,7 +356,7 @@ class VideoEqualizerDialog(FloatingDialog):
             )
         gpu_row.addWidget(self.gpu_api_combo)
         gpu_row.addStretch()
-        layout.addLayout(gpu_row)
+        content_layout.addLayout(gpu_row)
 
         # ===== 智能预设 + 硬件信息（合并为一行） =====
         bottom_row = QHBoxLayout()
@@ -361,7 +398,9 @@ class VideoEqualizerDialog(FloatingDialog):
             logger.warning(f"硬件检测失败: {e}")
             self.hw_label.setText(tr('hw_detect_failed', '硬件检测不可用'))
         bottom_row.addWidget(hw_box, 1)
-        layout.addLayout(bottom_row)
+        content_layout.addLayout(bottom_row)
+
+        layout.addWidget(content_scroll, 1)
 
         # ===== 操作按钮（标准设置式：恢复默认 | 应用 + 完成） =====
         self.live_hint_label = QLabel(
