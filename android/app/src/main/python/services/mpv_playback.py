@@ -837,6 +837,7 @@ class MpvPlayback:
                     self._facade._reconnect_count = 0
                     self._facade._reconnect_exhausted = False
                     self._facade._reconnect_in_progress = False
+                    self._facade._last_reconnect_ts = 0.0
                     self._facade.is_connecting = False
                     self._facade._eof_notified_url = None
                     self._facade._switching_channel = False

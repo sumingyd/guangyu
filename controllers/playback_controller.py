@@ -56,6 +56,7 @@ class PlaybackController:
             pc._reconnect_exhausted = False
             pc._reconnect_count = 0
             pc._reconnect_in_progress = False
+            pc._last_reconnect_ts = 0.0
             pc.is_connecting = False
 
         if hasattr(self.window, 'player_controller') and self.window.player_controller:
@@ -260,6 +261,7 @@ class PlaybackController:
 
     def on_live_disconnect(self, url=None, reason='live_eof'):
         """直播断流统一入口：计数重连，耗尽后进入终态（不再自动循环）。"""
+        from time import monotonic
         pc = getattr(self.window, 'player_controller', None)
         if pc is None or getattr(pc, '_user_stopped', False):
             return
@@ -272,6 +274,14 @@ class PlaybackController:
         text = url.lower()
         if not text.startswith(('http://', 'https://', 'rtsp://', 'rtp://', 'udp://', 'rtmp://')):
             return
+        # 同一次失败可能同时触发 source_timeout 与 END_FILE 两条路径，
+        # 3 秒内只认作一次断流，避免一次失败吃掉两次重连机会。
+        now = monotonic()
+        last = getattr(pc, '_last_reconnect_ts', 0.0)
+        if now - last < 3.0:
+            logger.debug(f"直播断流({reason})：{now - last:.1f}s 内已触发过重连，忽略重复触发")
+            return
+        pc._last_reconnect_ts = now
         channel = self.current_channel or getattr(self.window, 'current_channel', None)
         if not channel:
             return

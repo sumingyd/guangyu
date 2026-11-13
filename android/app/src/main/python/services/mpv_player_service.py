@@ -199,6 +199,8 @@ class MpvPlayerController(QObject):
         self._reconnect_exhausted = False
         # 重连发起的 play() 不重置计数，只有用户主动换台才重置
         self._reconnect_in_progress = False
+        # 上一次发起重连的时刻：同一次失败被多条路径触发时用它去重
+        self._last_reconnect_ts = 0.0
         self.is_connecting = False
         self._eof_notified_url = None
         self._user_stopped = False
