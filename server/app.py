@@ -61,6 +61,8 @@ class IPTVServer:
         self._thread: Optional[threading.Thread] = None
         self._running = False
         self._start_time = 0.0
+        self._started_event = threading.Event()
+        self._start_error = ''
 
     def start(self):
         global _shutting_down
@@ -98,6 +100,20 @@ class IPTVServer:
     def is_running(self):
         return self._running
 
+    def wait_started(self, timeout: float = 2.0) -> bool:
+        """等待端口真正绑定完成，返回是否启动成功。
+
+        start() 只是拉起后台线程，绑定失败（例如端口被另一个实例占用）时
+        _running 会在后台被置回 False，调用方必须等这个事件才能给出准确提示。
+        """
+        if not self._started_event.wait(timeout):
+            return False
+        return self._running and not self._start_error
+
+    @property
+    def start_error(self) -> str:
+        return self._start_error
+
     def get_uptime(self):
         if self._start_time > 0:
             return int(time.time() - self._start_time)
@@ -118,9 +134,13 @@ class IPTVServer:
         self._loop.set_exception_handler(_safe_async_exception_handler)
         try:
             self._loop.run_until_complete(self._async_start())
+            self._running = True
+            self._started_event.set()
             self._loop.run_forever()
         except Exception as e:
+            self._start_error = str(e)
             logger.error(f"Server运行异常: {e}", exc_info=False)
+            self._started_event.set()
         finally:
             self._running = False
             try:

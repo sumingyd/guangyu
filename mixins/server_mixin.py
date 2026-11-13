@@ -17,18 +17,24 @@ class ServerMixin:
                 return
             port = settings.get('port', 8080)
             host = settings.get('host', '0.0.0.0')
-            start_server(host=host, port=port)
-            server = get_server()
-            if server.is_running():
-                tr = self.language_manager.tr
-                token = get_auth_token()
+            server = start_server(host=host, port=port)
+            if not (server is not None and server.wait_started(2.0)):
+                err = getattr(server, 'start_error', '') if server is not None else ''
+                tr = getattr(self, 'language_manager', None)
+                tr = tr.tr if tr is not None else (lambda key, default: default)
                 self.status_bar_show_message(
-                    tr('server_started', '服务已启动') + f' http://localhost:{port}  ' +
-                    tr('server_auth_token', '认证码') + f': {token}', 10000
-                )
-                logger.info(f"HTTP 服务器已按用户设置启动: http://{host}:{port}, 认证码: {token}")
-                if self._server_action is not None:
-                    self._server_action.setText(tr('server_stop', '停止服务'))
+                    tr('server_start_failed', '服务启动失败') + (f': {err}' if err else ''), 8000)
+                logger.error(f"HTTP 服务器自动启动失败: {err or '端口未绑定成功'}")
+                return
+            tr = self.language_manager.tr
+            token = get_auth_token()
+            self.status_bar_show_message(
+                tr('server_started', '服务已启动') + f' http://localhost:{port}  ' +
+                tr('server_auth_token', '认证码') + f': {token}', 10000
+            )
+            logger.info(f"HTTP 服务器已按用户设置启动: http://{host}:{port}, 认证码: {token}")
+            if self._server_action is not None:
+                self._server_action.setText(tr('server_stop', '停止服务'))
         except Exception as e:
             logger.error(f"自动启动服务失败: {e}")
 
@@ -47,7 +53,13 @@ class ServerMixin:
                 settings = self.config.load_server_settings()
                 port = settings.get('port', 8080)
                 host = settings.get('host', '0.0.0.0')
-                start_server(host=host, port=port)
+                server = start_server(host=host, port=port)
+                if not (server is not None and server.wait_started(2.0)):
+                    err = getattr(server, 'start_error', '') if server is not None else ''
+                    self.status_bar_show_message(
+                        tr('server_start_failed', '服务启动失败') + (f': {err}' if err else ''), 8000)
+                    logger.error(f"启动服务失败: {err or '端口未绑定成功'}")
+                    return
                 token = get_auth_token()
                 self.status_bar_show_message(
                     tr('server_started', '服务已启动') + f' http://localhost:{port}  ' +

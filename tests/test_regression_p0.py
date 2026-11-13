@@ -412,3 +412,23 @@ class TestChannelSettingsPersistence:
         ctrl = PlaybackSettingsController(w)
         ctrl.clear_settings_for_url('http://live.example/1.m3u8')
         assert PlaybackSettingsStore(str(tmp_path)).load_settings('http://live.example/1.m3u8') == {}
+
+class TestServerStartFailure:
+    """端口被占用时必须能识别启动失败，而不是显示“服务已启动”。"""
+
+    def test_wait_started_false_when_port_busy(self):
+        import socket
+        from server.app import IPTVServer
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(('127.0.0.1', 0))
+        sock.listen(1)
+        port = sock.getsockname()[1]
+        server = IPTVServer(host='127.0.0.1', port=port)
+        try:
+            server.start()
+            assert server.wait_started(3.0) is False
+            assert server.start_error
+        finally:
+            server.stop()
+            sock.close()
