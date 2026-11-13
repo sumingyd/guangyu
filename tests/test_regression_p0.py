@@ -413,6 +413,36 @@ class TestChannelSettingsPersistence:
         ctrl.clear_settings_for_url('http://live.example/1.m3u8')
         assert PlaybackSettingsStore(str(tmp_path)).load_settings('http://live.example/1.m3u8') == {}
 
+class TestReconnectTerminalStatusBar:
+    """断流重连耗尽后，状态栏不能显示成用户主动“已暂停”。"""
+
+    def _status_after_stop(self, exhausted):
+        from controllers.playback_controller import PlaybackController
+        w = MagicMock()
+        w.language_manager.tr = lambda k, d=None: d if d is not None else k
+        w.current_channel = {'name': 'live.ts', 'url': 'http://127.0.0.1:18091/live.ts'}
+        w.play_state.is_idle = False
+        w.play_state.is_catchup_or_timeshift = False
+        pc = w.player_controller
+        pc._reconnect_exhausted = exhausted
+        pc.is_paused = False
+        ctrl = PlaybackController(w)
+        with patch('controllers.playback_controller.QIcon'), \
+             patch('controllers.playback_controller.AppStyles.get_icon', return_value=None), \
+             patch('controllers.playback_controller.AppStyles.play_icon_name', return_value='play'):
+            ctrl.handle_play_state_change(False)
+        return w.status_bar_show_message.call_args[0][0]
+
+    def test_exhausted_shows_failed_not_paused(self):
+        msg = self._status_after_stop(True)
+        assert '播放失败' in msg
+        assert '已暂停' not in msg
+
+    def test_normal_stop_still_shows_paused(self):
+        msg = self._status_after_stop(False)
+        assert 'Paused' in msg
+
+
 class TestServerStartFailure:
     """端口被占用时必须能识别启动失败，而不是显示“服务已启动”。"""
 

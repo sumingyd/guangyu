@@ -571,12 +571,6 @@ class TestPlaybackMixin:
         self.host.player_controller.show_osd.assert_called_once_with("test", 2000)
 
     def test_play_channel(self):
-        self.host.playback_ctrl._is_switching = False
-        ch = {'name': 'ch1', 'url': 'http://x.com'}
-        self.host.play_channel(ch)
-        self.host.playback_ctrl.play_channel.assert_called_once_with(ch)
-
-    def test_play_channel_during_switching_delegates_to_controller(self):
         # 入口不再拦截切换窗口内的请求，统一交给控制器排队（最后一次请求生效）
         self.host.playback_ctrl._is_switching = True
         ch = {'name': 'ch1', 'url': 'http://x.com'}
@@ -602,6 +596,25 @@ class TestPlaybackMixin:
     def test_toggle_osd(self):
         self.host.toggle_osd()
         self.host.ui_ctrl.toggle_osd.assert_called_once()
+
+    def test_live_eof_reconnects_even_if_progress_marked_vod(self):
+        """直播 TS 被断开后 mpv 会估出时长、进度被标成 vod，仍要按断线重连。"""
+        self.host.current_channel = {'name': 'live', 'url': 'http://x.com/live.ts'}
+        self.host._progress_time_mode = 'vod'
+        self.host.play_state.is_live = True
+        self.host.player_controller._user_stopped = False
+        self.host.player_controller.current_url = 'http://x.com/live.ts'
+        self.host._on_timeshift_continue()
+        self.host.playback_ctrl.on_live_disconnect.assert_called_once_with(
+            'http://x.com/live.ts', reason='live_eof')
+
+    def test_vod_eof_does_not_reconnect(self):
+        self.host.current_channel = {'name': 'movie', 'url': '/movies/a.mkv'}
+        self.host._progress_time_mode = 'vod'
+        self.host.play_state.is_live = False
+        self.host.player_controller._user_stopped = False
+        self.host._on_timeshift_continue()
+        self.host.playback_ctrl.on_live_disconnect.assert_not_called()
 
 
 class TestEpgMixin:

@@ -553,7 +553,11 @@ class PlaybackController:
                 return
             if w.current_channel:
                 channel_name = w.current_channel.get('name', tr('unknown_channel', 'Unknown Channel'))
-                if w.play_state.is_catchup_or_timeshift:
+                if getattr(pc, '_reconnect_exhausted', False):
+                    # 断流重连耗尽进入终态：这不是用户主动暂停，不能显示"已暂停"
+                    w.status_bar_show_message(
+                        f"{tr('play_failed_label', '播放失败')}: {channel_name}")
+                elif w.play_state.is_catchup_or_timeshift:
                     catchup_paused_text = tr('catchup_paused', '回看暂停: {name}')
                     w.status_bar_show_message(catchup_paused_text.format(name=channel_name))
                 else:

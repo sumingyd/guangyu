@@ -133,9 +133,11 @@ class PlaybackMixin:
             # 注意：网络点播（有已知时长）播完不应重连，否则会从头循环播放。
             pc = getattr(self, 'player_controller', None)
             if pc and not getattr(pc, '_user_stopped', False) and self.current_channel:
-                # 直播 TS 的 duration 可能被服务端关闭连接后估出非 0 值，不能据此判断点播；
-                # 只认显式的点播模式（打开视频文件走 'vod'）。
-                if getattr(self, '_progress_time_mode', None) == 'vod':
+                # 直播 TS 的 duration 可能被服务端关闭连接后估出非 0 值，进度条随之
+                # 被标记为 'vod'，不能只凭它判断点播。播放状态仍是直播（play_state.is_live）
+                # 时一律按断流重连；只有非直播态的点播才视为正常结束。
+                is_live_mode = bool(getattr(self.play_state, 'is_live', False))
+                if not is_live_mode and getattr(self, '_progress_time_mode', None) == 'vod':
                     logger.info("点播文件播放结束，不自动重连")
                     return
                 logger.info("直播流播放到终点，触发重连续播")
