@@ -394,6 +394,28 @@ class TestChannelSettingsPersistence:
         assert saved['audio_track'] == 2
         assert saved['sub_track'] == 1
 
+    def test_apply_settings_restores_tracks_and_aspect(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+        from controllers.playback_settings_controller import PlaybackSettingsController
+        from core.playback_settings_store import PlaybackSettingsStore
+        url = 'http://live.example/1.m3u8'
+        PlaybackSettingsStore(str(tmp_path)).save_settings(
+            url, {'sub_track': 1, 'audio_track': 2, 'aspect_ratio': '4:3'})
+
+        w = self._window(tmp_path)
+        pc = w.player_controller
+        for name in ('set_volume', 'set_mute', 'set_aspect_ratio', 'set_video_rotate',
+                     'set_video_flip', 'set_sub_delay', 'set_audio_delay', 'set_track'):
+            setattr(pc, name, MagicMock())
+        ctrl = PlaybackSettingsController(w)
+        ctrl._applied_url = url
+        with patch('controllers.playback_settings_controller.QTimer.singleShot',
+                   side_effect=lambda _ms, fn: fn()):
+            ctrl._apply_settings()
+        pc.set_aspect_ratio.assert_called_once_with('4:3')
+        pc.set_track.assert_any_call('sub', 1)
+        pc.set_track.assert_any_call('audio', 2)
+
     def test_switch_calls_save_before_play(self):
         from unittest.mock import MagicMock
         from controllers.playback_controller import PlaybackController
