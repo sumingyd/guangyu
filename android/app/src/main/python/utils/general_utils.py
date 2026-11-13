@@ -456,20 +456,54 @@ def unregister_extension(ext: str) -> bool:
     return True
 
 
-def is_extension_registered(ext: str) -> bool:
+def get_extension_registration_state(ext: str) -> str:
+    """返回扩展名关联状态：'none' 未注册 / 'stale' 已注册但命令失效 / 'ok' 正常。
+
+    Windows 的 OpenWithProgids 只记录"可打开方式"，不保证命令仍指向存在的
+    程序；用户移动/重装程序后旧 ProgID 会残留，单纯判断键存在会误报"已关联"。
+    """
     if not is_windows():
-        return False
+        return 'none'
     try:
         import winreg
     except ImportError:
-        return False
+        return 'none'
     prog_id = _get_prog_id_for_ext(ext)
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"Software\\Classes\\{ext}\\OpenWithProgids", 0, winreg.KEY_READ) as key:
             winreg.QueryValueEx(key, prog_id)
+    except Exception:
+        return 'none'
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"Software\\Classes\\{prog_id}\\shell\\open\\command", 0, winreg.KEY_READ) as key:
+            command, _ = winreg.QueryValueEx(key, "")
+    except Exception:
+        return 'stale'
+    if not _command_targets_exist(command):
+        return 'stale'
+    return 'ok'
+
+
+def _command_targets_exist(command: str) -> bool:
+    """校验注册命令里的可执行文件与脚本是否真实存在。"""
+    try:
+        import re
+        parts = re.findall(r'"([^"]+)"', command or '')
+        if not parts:
+            return False
+        candidates = [p for p in parts if not p.strip().lower().endswith('%1')]
+        for path in candidates:
+            if '%' in path:
+                continue
+            if not os.path.exists(path):
+                return False
         return True
     except Exception:
         return False
+
+
+def is_extension_registered(ext: str) -> bool:
+    return get_extension_registration_state(ext) == 'ok'
 
 
 def register_file_association() -> bool:

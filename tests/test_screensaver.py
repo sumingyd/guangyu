@@ -182,14 +182,16 @@ def test_playing_blocks_entry(env):
     assert ctrl.is_active is True, '暂停状态应允许进入屏保'
 
 
-def test_panel_and_dialog_block_entry(env):
+def test_panel_does_not_block_but_dialog_blocks(env):
     window, _widget, ctrl = env
     panel = QWidget(window)
     panel.show()
     window.epg_panel = panel
     _expire_input(ctrl)
     ctrl._evaluate()
-    assert ctrl.is_active is False
+    # 浮层常驻不应阻止屏保，否则窗口模式下永远进不去（F10）
+    assert ctrl.is_active is True
+    ctrl._deactivate('test')
     panel.hide()
 
     dialog = QDialog(window)

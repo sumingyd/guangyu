@@ -128,15 +128,36 @@ class FileAssociationDialog(FloatingDialog):
                 self._checkboxes[ext].setChecked(checked)
 
     def _load_current_state(self):
-        from utils.general_utils import is_extension_registered
+        from utils.general_utils import get_extension_registration_state
+        stale_count = 0
         for ext in self._checkboxes:
             if ext.startswith('_'):
                 continue
             try:
-                registered = is_extension_registered(ext)
-                self._checkboxes[ext].setChecked(registered)
+                state = get_extension_registration_state(ext)
+                cb = self._checkboxes[ext]
+                if state == 'ok':
+                    cb.setChecked(True)
+                else:
+                    # 失效关联不能显示成已勾选：勾选后保存会重写命令修复
+                    cb.setChecked(False)
+                    if state == 'stale':
+                        stale_count += 1
+                        cb.setText(f"{ext} (需重新关联)")
+                        cb.setToolTip(self._tr(
+                            "file_assoc_stale_tip",
+                            "注册表里的打开命令已失效（程序路径不存在），勾选并保存可修复"))
             except Exception as e:
                 logger.debug(f"检查文件关联状态失败 {ext}: {e}")
+        if stale_count:
+            self._stale_hint = QtWidgets.QLabel(self._tr(
+                "file_assoc_stale_hint",
+                f"检测到 {stale_count} 个扩展名的关联已失效，勾选后保存即可修复"))
+            self._stale_hint.setWordWrap(True)
+            self._stale_hint.setStyleSheet("font-size: 11px; color: #e6a23c;")
+            layout = self.layout()
+            if layout is not None:
+                layout.insertWidget(2, self._stale_hint)
 
     def _on_ok(self):
         from utils.general_utils import register_extension, unregister_extension

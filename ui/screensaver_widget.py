@@ -111,6 +111,9 @@ class ScreenSaverWidget(QWidget):
         self._channel_text = ''
         self._program_text = ''
         self._range_text = ''
+        # 顶层覆盖模式：视频区是原生窗口，作为子控件会被 mpv 画面盖住，
+        # 顶部显示时必须挂到独立顶层窗口并跟随主窗口几何。
+        self._source_window = None
 
         self._static_bars = []
         self._bars = [0.0] * BAR_COUNT
@@ -203,6 +206,10 @@ class ScreenSaverWidget(QWidget):
     def is_active(self):
         return self._active
 
+    def set_source_window(self, window):
+        """顶层模式下用它计算覆盖区域（全局坐标）。"""
+        self._source_window = window
+
     # ---- 内部 ----
     def _load_colors(self):
         self._colors = {
@@ -223,6 +230,17 @@ class ScreenSaverWidget(QWidget):
         }
 
     def _sync_parent_size(self):
+        source = self._source_window
+        if source is not None:
+            # 顶层覆盖：与主窗口同区域（全屏时即整屏）
+            try:
+                g = source.geometry()
+                if g.width() > 0 and g.height() > 0:
+                    if self.geometry() != g:
+                        self.setGeometry(g)
+                return
+            except RuntimeError:
+                self._source_window = None
         parent = self.parent()
         if parent is None:
             return

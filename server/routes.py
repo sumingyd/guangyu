@@ -862,6 +862,9 @@ async def handle_status(request):
     channels = _get_all_channels()
     total = len(channels)
     valid = sum(1 for ch in channels if ch.get('valid') is True)
+    # 未校验（valid 字段缺失/None）不能算成无效，否则会出现 valid=0 / invalid=277
+    invalid = sum(1 for ch in channels if ch.get('valid') is False)
+    unknown = total - valid - invalid
     config = get_config()
     port = 8080
     if config:
@@ -875,7 +878,7 @@ async def handle_status(request):
         host=server.host if server else '0.0.0.0',
         port=server.port if server else port,
         uptime=server.get_uptime() if server else 0,
-        channels={'total': total, 'valid': valid, 'invalid': total - valid}
+        channels={'total': total, 'valid': valid, 'invalid': invalid, 'unknown': unknown}
     )
 
 

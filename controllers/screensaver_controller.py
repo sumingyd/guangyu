@@ -372,7 +372,7 @@ class ScreenSaverController(QObject):
 
         if self._require_exposed and not exposed:
             return
-        if self._dialog_open() or self._panels_open() or self._playing():
+        if self._dialog_open() or self._playing():
             return
 
         now = time.monotonic()
@@ -393,9 +393,6 @@ class ScreenSaverController(QObject):
             return
         if self._dialog_open():
             self._deactivate('dialog')
-            return
-        if self._panels_open():
-            self._deactivate('panel')
             return
         if self._playing():
             self._deactivate('playing')

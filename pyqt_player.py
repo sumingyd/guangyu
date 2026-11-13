@@ -1114,7 +1114,18 @@ class IPTVPlayer(
             from ui.screensaver_widget import ScreenSaverWidget
             from controllers.screensaver_controller import ScreenSaverController
 
-            widget = ScreenSaverWidget(self.video_frame)
+            from PySide6.QtCore import Qt as _Qt
+            widget = ScreenSaverWidget(None)
+            # 顶层无边框 + 置顶 + 不接受焦点：视频区是原生 HWND，子控件会被
+            # mpv 画面遮挡（全屏黑屏的根因），必须独立成窗；同时不能抢走
+            # 主窗口的键盘焦点。
+            widget.setWindowFlags(
+                _Qt.WindowType.FramelessWindowHint
+                | _Qt.WindowType.WindowStaysOnTopHint
+                | _Qt.WindowType.Tool
+                | _Qt.WindowType.WindowDoesNotAcceptFocus
+            )
+            widget.set_source_window(self)
             widget.hide()
             ctrl = ScreenSaverController(self, widget)
             ctrl.start()
