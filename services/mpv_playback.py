@@ -1380,7 +1380,8 @@ class MpvPlayback:
 
     def get_available_seek_range(self) -> dict:
         empty = {'max_back': 0, 'max_forward': 0, 'cache_duration': 0,
-                 'buffer_start': 0, 'buffer_end': 0, 'time_pos': 0}
+                 'buffer_start': 0, 'buffer_end': 0, 'time_pos': 0,
+                 'seekable': True}
         if self._facade._terminated or not self._facade.mpv_handle:
             return empty
         try:
@@ -1388,6 +1389,12 @@ class MpvPlayback:
             buffer_start = 0.0
             buffer_end = 0.0
             cache_duration = 0.0
+            # mpv 的 seekable 属性反映流本身是否可定位；直播 HLS 常见为 no，
+            # 此前只看缓存长度会把「点了没反应」的非定位流误判成可拖动
+            seekable_flag = self._facade._get_mpv_property_string('seekable')
+            seekable = True
+            if seekable_flag is not None:
+                seekable = str(seekable_flag).strip().lower() not in ('no', 'false', '0', '')
             cache_state_str = self._facade._get_mpv_property_string('demuxer-cache-state')
             if cache_state_str:
                 try:
@@ -1415,7 +1422,8 @@ class MpvPlayback:
                 'cache_duration': cache_duration,
                 'buffer_start': buffer_start,
                 'buffer_end': buffer_end,
-                'time_pos': time_pos
+                'time_pos': time_pos,
+                'seekable': seekable
             }
         except Exception as e:
             self._facade.logger.debug(f"获取可回退范围失败: {e}")

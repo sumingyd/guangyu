@@ -139,6 +139,9 @@ class ProgressMixin:
             if not pc:
                 return False
             seek_range = pc.get_available_seek_range() or {}
+            # 流本身不可定位（直播 HLS 常见）时，即使有缓存也不能拖动
+            if seek_range.get('seekable') is False:
+                return True
             return (seek_range.get('max_back', 0) == 0
                     and seek_range.get('cache_duration', 0) < 5)
         except Exception:
