@@ -276,15 +276,18 @@ class MappingManagerDialog(FloatingDialog):
         else:
             last_time = status.get('last_cache_time', 0)
             local_count = status.get('local_count', 0)
+            remote_count = status.get('remote_count', 0)
             if last_time > 0:
                 from datetime import datetime
                 dt = datetime.fromtimestamp(last_time)
                 time_str = dt.strftime('%Y-%m-%d %H:%M')
                 text = _('mapping_status_ok',
-                    'Up to date | Loaded: {} mappings | Last: {}').format(local_count, time_str)
+                    'Remote rules: {} | Custom mappings: {} | Last check: {}'
+                ).format(remote_count, local_count, time_str)
             else:
                 text = _('mapping_status_no_cache',
-                    'No cached data yet ({} mappings loaded)').format(local_count)
+                    'Remote rules: {} | Custom mappings: {} | Not checked yet'
+                ).format(remote_count, local_count)
         self.update_status_label.setText(text)
         self.update_status_label.setStyleSheet(
             f"color: {color}; font-size: 11px; border: none; background: transparent; padding: 4px 8px;"

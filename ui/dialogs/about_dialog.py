@@ -244,6 +244,11 @@ class AboutDialog(FloatingDialog):
                 if self._is_newer_version(CURRENT_VERSION, latest):
                     if hasattr(self, '_update_btn'):
                         self._update_btn.setVisible(True)
+                elif hasattr(self, 'latest_version_value'):
+                    # 最新版本与当前一致时明确标注，避免两个相同版本号让人误以为没检查到
+                    tr = self.language_manager.tr
+                    self.latest_version_value.setText(
+                        latest + tr('already_latest', '（当前已是最新）'))
         except RuntimeError:
             pass
 
