@@ -508,9 +508,23 @@ class TestProgressMixin:
         self.host.catchup_ctrl.seek_catchup.assert_called_once_with(60)
 
     def test_on_progress_slider_pressed(self):
+        # 直播态进度条不可拖动：不进入拖动逻辑，改为给出说明
         self.host._on_progress_slider_pressed()
-        assert self.host._disable_progress_auto_update is True
+        assert self.host._disable_progress_auto_update is False
+        assert self.host._live_seek_unavailable is True
         self.host._stop_auto_hide_timer.assert_called_once()
+        self.host.status_bar.showMessage.assert_called_once()
+
+    def test_live_seek_unavailable_in_live_mode(self):
+        assert self.host._is_live_seek_unavailable() is True
+
+    def test_live_seek_available_in_catchup(self):
+        self.host.play_state.is_catchup_or_timeshift = True
+        assert self.host._is_live_seek_unavailable() is False
+
+    def test_live_seek_available_for_vod(self):
+        self.host._progress_time_mode = 'vod'
+        assert self.host._is_live_seek_unavailable() is False
 
     def test_start_live_timeshift_from_progress(self):
         self.host._start_live_timeshift_from_progress(300, 'catchup://x')

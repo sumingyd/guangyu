@@ -129,21 +129,13 @@ class ProgressMixin:
         )
 
     def _is_live_seek_unavailable(self):
-        """直播态且当前缓冲不可回退时，进度条不应进入拖动逻辑。"""
+        """直播态进度条只反映节目进度：普通直播流无法按节目位置定位，禁用拖动。"""
         try:
             if self.play_state.is_catchup_or_timeshift:
                 return False
             if getattr(self, '_progress_time_mode', None) == 'vod':
                 return False
-            pc = getattr(self, 'player_controller', None)
-            if not pc:
-                return False
-            seek_range = pc.get_available_seek_range() or {}
-            # 流本身不可定位（直播 HLS 常见）时，即使有缓存也不能拖动
-            if seek_range.get('seekable') is False:
-                return True
-            return (seek_range.get('max_back', 0) == 0
-                    and seek_range.get('cache_duration', 0) < 5)
+            return getattr(self, 'player_controller', None) is not None
         except Exception:
             return False
 
