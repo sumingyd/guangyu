@@ -16,6 +16,20 @@ from controllers.main_window_protocol import MainWindowProtocol
 from utils.platform_utils import is_macos
 
 
+def reapply_divider_styles(container):
+    """只刷新真正的分隔线样式。
+
+    QLabel 也是 QFrame 子类，节目简介的样式里同样含 max-height；以前按
+    max-height 匹配会把它的透明底换成不透明的分隔线底色，形成一块实底。
+    """
+    for frame in container.findChildren(QFrame):
+        if frame.frameShape() != QFrame.Shape.HLine:
+            continue
+        if frame.styleSheet() and 'max-height' in frame.styleSheet():
+            from ui.styles import AppStyles
+            frame.setStyleSheet(AppStyles.player_line_style())
+
+
 class UIController:
     """UI控制器 - 管理所有UI显示相关的逻辑"""
 
@@ -1085,9 +1099,7 @@ class UIController:
                 slider.setStyleSheet(AppStyles.player_slider_style())
             for combo in fp.findChildren(QComboBox):
                 combo.setStyleSheet(AppStyles.player_group_combo_style())
-            for frame in fp.findChildren(QFrame):
-                if frame.styleSheet() and 'max-height' in frame.styleSheet():
-                    frame.setStyleSheet(AppStyles.player_line_style())
+            self.reapply_divider_styles(fp)
 
             # 进度条滑块handle需要强制刷新
             progress_slider = getattr(self.window, 'progress_slider', None)

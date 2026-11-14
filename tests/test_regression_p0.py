@@ -550,10 +550,10 @@ class TestReconnectTerminalStatusBar:
         assert 'Paused' in msg
 
 
-class TestServerStartFailure:
-    """端口被占用时必须能识别启动失败，而不是显示“服务已启动”。"""
+class TestServerPortFallback:
+    """端口被占用时向后自动顺延，而不是启动失败或误报。"""
 
-    def test_wait_started_false_when_port_busy(self):
+    def test_busy_port_shifts_to_next_available(self):
         import socket
         from server.app import IPTVServer
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -564,8 +564,70 @@ class TestServerStartFailure:
         server = IPTVServer(host='127.0.0.1', port=port)
         try:
             server.start()
-            assert server.wait_started(3.0) is False
-            assert server.start_error
+            assert server.wait_started(3.0) is True
+            assert server.requested_port == port
+            assert server.port > port
         finally:
             server.stop()
             sock.close()
+
+    def test_three_instances_shift_and_reuse_released_port(self):
+        from server.app import IPTVServer
+        base = self._free_base_port()
+        servers = []
+        try:
+            for _ in range(3):
+                s = IPTVServer(host='127.0.0.1', port=base)
+                s.start()
+                assert s.wait_started(3.0) is True
+                servers.append(s)
+
+            ports = [s.port for s in servers]
+            assert len(set(ports)) == 3
+            assert ports == sorted(ports)
+
+            # 关掉中间一个，新实例应复用它释放出来的端口
+            middle = servers.pop(1)
+            middle_port = middle.port
+            middle.stop()
+
+            reused = IPTVServer(host='127.0.0.1', port=base)
+            reused.start()
+            assert reused.wait_started(3.0) is True
+            servers.append(reused)
+            assert reused.port == middle_port
+        finally:
+            for s in servers:
+                s.stop()
+
+    @staticmethod
+    def _free_base_port():
+        import socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(('127.0.0.1', 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        return port
+
+
+class TestPanelDividerStyling:
+    """底栏分隔线样式刷新不能覆盖节目简介等 QLabel 的透明样式。"""
+
+    def test_label_with_max_height_keeps_its_style(self):
+        from PySide6.QtWidgets import QApplication, QFrame, QLabel, QWidget
+        if QApplication.instance() is None:
+            QApplication([])
+        host = QWidget()
+        label = QLabel('desc text', host)
+        label.setObjectName('program_desc')
+        label.setStyleSheet(
+            'QLabel { background-color: transparent; max-height: 48px; }')
+        line = QFrame(host)
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setStyleSheet('QFrame { background-color: #555555; max-height: 1px; }')
+
+        from controllers.ui_controller import reapply_divider_styles
+        reapply_divider_styles(host)
+
+        assert 'transparent' in label.styleSheet()
+        assert 'max-height' in line.styleSheet()
