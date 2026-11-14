@@ -6,6 +6,7 @@
 from typing import Dict, Any
 from datetime import datetime
 from collections import deque
+from time import perf_counter
 
 from PySide6.QtWidgets import QListWidgetItem, QListWidget, QWidget
 from PySide6.QtCore import Qt, QSize, QTimer, QPoint
@@ -136,10 +137,8 @@ class ChannelController:
         list_widget.clear()
         list_widget._channel_render = None
 
-        # 批量重建期间关闭刷新，避免每 addItem 都触发一次重绘
+        # 批量重建期间关闭刷新，避免每 addItem 都触发一次重绘；分片完成时恢复
         self._set_list_bulk_mode(list_widget, False)
-        # 兜底：即使中途异常，也在当前调用栈返回后恢复刷新
-        safe_single_shot(0, list_widget, lambda: self._set_list_bulk_mode(list_widget, True))
 
         if hasattr(w, '_icon_load_timer') and w._icon_load_timer:
             w._icon_load_timer.stop()
@@ -184,66 +183,102 @@ class ChannelController:
         if len(visible_indices) >= 500 and hasattr(w, 'status_bar_show_message'):
             w.status_bar_show_message(tr('loading_channels', '正在加载频道...'))
 
-        for idx in visible_indices:
-            channel = channels[idx]
-            try:
-                channel_name = channel.get("name", tr("unnamed", "Unnamed"))
-                display_name = self._channel_list_display_name(channel, channel_name, name_counts)
-                item = QListWidgetItem()
-                item.setText(display_name)
-                item.setData(self.ROW_DISPLAY_ROLE, display_name)
-                item.setToolTip(display_name)
-                item.setData(Qt.ItemDataRole.UserRole, idx)
-                if is_grid:
-                    item.setSizeHint(QSize(int(round(220 * ui_scale)), int(round(150 * ui_scale))))
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        # 大列表分片填充：先同步建首批保证立即可用，其余按 8ms/帧预算追加。
+        # token 用于取消上一轮未完成的分片，避免快速切分组时重复添加。
+        state = {'pos': 0, 'token': object()}
+        list_widget._channel_populate_token = state['token']
+        # 首批别太大：600 条轻量 item 的构建通常在 10ms 量级
+        initial_limit = 600 if len(visible_indices) > 600 else len(visible_indices)
+
+        def _add_range(limit):
+            nonlocal added_count, error_count
+            start_ts = perf_counter()
+            while state['pos'] < limit:
+                idx = visible_indices[state['pos']]
+                state['pos'] += 1
+                try:
+                    channel = channels[idx]
+                    channel_name = channel.get("name", tr("unnamed", "Unnamed"))
+                    display_name = self._channel_list_display_name(channel, channel_name, name_counts)
+                    item = QListWidgetItem()
+                    item.setText(display_name)
+                    item.setData(self.ROW_DISPLAY_ROLE, display_name)
+                    item.setToolTip(display_name)
+                    item.setData(Qt.ItemDataRole.UserRole, idx)
+                    if is_grid:
+                        item.setSizeHint(QSize(int(round(220 * ui_scale)), int(round(150 * ui_scale))))
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    else:
+                        # 轻量条目：行内控件由 decorate_visible_rows 按视口补上
+                        item.setSizeHint(QSize(0, row_h))
+                    list_widget.addItem(item)
+                    added_count += 1
+                except Exception as e:
+                    error_count += 1
+                    if error_count <= 3:
+                        logger.error(f"populate_channel_list: 添加第{idx}个频道失败: {e}")
+                if (perf_counter() - start_ts) * 1000 >= 8:
+                    break
+
+        def _finalize():
+            if getattr(list_widget, '_channel_populate_token', None) is not state['token']:
+                return
+            if not is_grid:
+                list_widget._channel_render = {
+                    'channels': channels,
+                    'name_counts': name_counts,
+                    'row_h': row_h,
+                    'ui_scale': ui_scale,
+                }
+                self.decorate_visible_rows(list_widget)
+
+            empty_label = None
+            if list_widget is getattr(w, 'sub_channel_list', None):
+                empty_label = getattr(w, 'sub_empty_label', None)
+            elif list_widget is getattr(w, 'local_channel_list', None):
+                empty_label = getattr(w, 'local_empty_label', None)
+
+            if empty_label:
+                if added_count == 0:
+                    empty_label.show()
                 else:
-                    # 轻量条目：行内控件由 decorate_visible_rows 按视口补上
-                    item.setSizeHint(QSize(0, row_h))
-                list_widget.addItem(item)
-                added_count += 1
-            except Exception as e:
-                error_count += 1
-                if error_count <= 3:
-                    logger.error(f"populate_channel_list: 添加第{idx}个频道失败: {e}")
+                    empty_label.hide()
 
-        if not is_grid:
-            list_widget._channel_render = {
-                'channels': channels,
-                'name_counts': name_counts,
-                'row_h': row_h,
-                'ui_scale': ui_scale,
-            }
-            self.decorate_visible_rows(list_widget)
+            if error_count > 0:
+                logger.warning(f"populate_channel_list: 共 {error_count} 个频道添加失败")
+            if skipped_count > 0:
+                logger.warning(f"populate_channel_list: 共 {skipped_count} 个频道被分组过滤跳过")
 
-        empty_label = None
-        if list_widget is getattr(w, 'sub_channel_list', None):
-            empty_label = getattr(w, 'sub_empty_label', None)
-        elif list_widget is getattr(w, 'local_channel_list', None):
-            empty_label = getattr(w, 'local_empty_label', None)
+            logger.info(f"populate_channel_list: 填充完成，共 {list_widget.count()} 个频道项（实际添加: {added_count}, 跳过: {skipped_count}, 总数据: {len(channels)}）")
+            self._set_list_bulk_mode(list_widget, True)
+            if len(visible_indices) >= 500 and hasattr(w, 'status_bar_show_message'):
+                w.status_bar_show_message(
+                    tr('channel_list_loaded', '频道列表已加载（{count} 个频道）').format(count=added_count), 3000)
+            try:
+                list_widget.verticalScrollBar().valueChanged.connect(w._on_channel_list_scrolled, Qt.ConnectionType.UniqueConnection)
+            except TypeError:
+                pass
+            self._connect_render_refresh(list_widget)
+            safe_single_shot(50, self.window, lambda: self.load_visible_icons(list_widget, channels))
 
-        if empty_label:
-            if added_count == 0:
-                empty_label.show()
-            else:
-                empty_label.hide()
-
-        if error_count > 0:
-            logger.warning(f"populate_channel_list: 共 {error_count} 个频道添加失败")
-        if skipped_count > 0:
-            logger.warning(f"populate_channel_list: 共 {skipped_count} 个频道被分组过滤跳过")
-
-        logger.info(f"populate_channel_list: 填充完成，共 {list_widget.count()} 个频道项（实际添加: {added_count}, 跳过: {skipped_count}, 总数据: {len(channels)}）")
-        self._set_list_bulk_mode(list_widget, True)
-        if len(visible_indices) >= 500 and hasattr(w, 'status_bar_show_message'):
-            w.status_bar_show_message(
-                tr('channel_list_loaded', '频道列表已加载（{count} 个频道）').format(count=added_count), 3000)
         try:
-            list_widget.verticalScrollBar().valueChanged.connect(w._on_channel_list_scrolled, Qt.ConnectionType.UniqueConnection)
-        except TypeError:
-            pass
-        self._connect_render_refresh(list_widget)
-        safe_single_shot(50, self.window, lambda: self.load_visible_icons(list_widget, channels))
+            _add_range(initial_limit)
+            if state['pos'] < len(visible_indices):
+                def _next_chunk():
+                    if getattr(list_widget, '_channel_populate_token', None) is not state['token']:
+                        return
+                    _add_range(len(visible_indices))
+                    if state['pos'] < len(visible_indices):
+                        QTimer.singleShot(0, list_widget, _next_chunk)
+                    else:
+                        _finalize()
+
+                QTimer.singleShot(0, list_widget, _next_chunk)
+            else:
+                _finalize()
+        except Exception as e:
+            logger.error(f"populate_channel_list: 分片填充异常，恢复列表刷新: {e}")
+            self._set_list_bulk_mode(list_widget, True)
 
     def _connect_render_refresh(self, list_widget):
         """面板拉伸/字号变化导致可见行数变化时，补装饰新出现的可见行。"""

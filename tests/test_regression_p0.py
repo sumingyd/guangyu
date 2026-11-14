@@ -734,6 +734,15 @@ class TestChannelListVirtualization:
     def _channels(count):
         return [{'name': f'频道{i}', 'url': f'http://example/{i}', 'group': 'g'} for i in range(count)]
 
+    @staticmethod
+    def _drain_population(list_widget, expected, timeout=5.0):
+        """大列表分片填充：驱动事件循环直到目标条数全部就位。"""
+        import time
+        from PySide6.QtWidgets import QApplication
+        deadline = time.perf_counter() + timeout
+        while list_widget.count() < expected and time.perf_counter() < deadline:
+            QApplication.processEvents()
+
     def test_populate_5000_only_decorates_visible_window(self):
         import time
         from controllers.channel_controller import ChannelController
@@ -743,6 +752,7 @@ class TestChannelListVirtualization:
         started = time.perf_counter()
         ctrl.populate_channel_list_for(lw, self._channels(5000), 'All Channels')
         elapsed = time.perf_counter() - started
+        self._drain_population(lw, 5000)
 
         assert lw.count() == 5000
         assert elapsed < 10.0, f'5000 条填充耗时 {elapsed:.1f}s，仍接近平方级'
@@ -760,6 +770,7 @@ class TestChannelListVirtualization:
         host, lw = self._make_host()
         ctrl = ChannelController(host)
         ctrl.populate_channel_list_for(lw, self._channels(2000), 'All Channels')
+        self._drain_population(lw, 2000)
 
         lw.scrollToBottom()
         QApplication.processEvents()
@@ -780,6 +791,7 @@ class TestChannelListVirtualization:
         QApplication.processEvents()
         ctrl = ChannelController(host)
         ctrl.populate_channel_list_for(lw, self._channels(600), 'All Channels')
+        self._drain_population(lw, 600)
         QApplication.processEvents()
 
         lw.verticalScrollBar().setValue(300)

@@ -5,6 +5,8 @@
 
 import hashlib
 import os
+import time
+from collections import Counter, deque
 from typing import Optional, Dict, Any
 from datetime import datetime
 from PySide6.QtCore import QThread, Signal, QTimer
@@ -55,11 +57,11 @@ class SubscriptionController:
         worker.deleteLater()
 
     def handle_playlist_subscription(self, need_update: bool, playlist_url: str, source_index=None):
-        """在后台线程中处理列表订阅（按源索引独立判断）"""
+        """在后台线程中处理列表订阅（按源索引独立判断），返回结果分类。"""
         try:
             if not playlist_url:
                 logger.debug("无播放列表URL，跳过订阅处理")
-                return
+                return 'failed'
 
             logger.debug(f"处理列表订阅: url={playlist_url[:50]}..., need_update={need_update}, source_index={source_index}")
 
@@ -69,24 +71,25 @@ class SubscriptionController:
 
                 if content:
                     self._save_to_local_cache(content, playlist_url)
-                    self._process_m3u_content(content, playlist_url, source_index)
-                else:
-                    logger.warning(f"下载订阅内容为空: {playlist_url}")
-            else:
-                logger.debug("使用缓存数据，无需更新")
-                cached_content = self._load_from_local_cache(playlist_url)
-                if cached_content:
-                    logger.debug("从本地缓存加载M3U数据")
-                    self._process_m3u_content(cached_content, playlist_url, source_index)
-                else:
-                    logger.warning("本地缓存不存在，强制重新下载")
-                    content = self._download_subscription_content(playlist_url)
-                    if content:
-                        self._save_to_local_cache(content, playlist_url)
-                        self._process_m3u_content(content, playlist_url, source_index)
+                    return self._process_m3u_content(content, playlist_url, source_index)
+                logger.warning(f"下载订阅内容为空: {playlist_url}")
+                return 'failed'
+
+            logger.debug("使用缓存数据，无需更新")
+            cached_content = self._load_from_local_cache(playlist_url)
+            if cached_content:
+                logger.debug("从本地缓存加载M3U数据")
+                return self._process_m3u_content(cached_content, playlist_url, source_index)
+            logger.warning("本地缓存不存在，强制重新下载")
+            content = self._download_subscription_content(playlist_url)
+            if content:
+                self._save_to_local_cache(content, playlist_url)
+                return self._process_m3u_content(content, playlist_url, source_index)
+            return 'failed'
 
         except Exception as e:
             logger.error(f"处理列表订阅失败: {e}", exc_info=True)
+            return 'failed'
 
     def _download_subscription_content(self, url: str) -> Optional[str]:
         """下载订阅内容"""
@@ -160,7 +163,7 @@ class SubscriptionController:
 
             if not channels_data:
                 logger.warning(f"M3U内容解析为空: {file_path[:50]}...")
-                return
+                return 'empty'
 
             logger.info(f"M3U处理完成，共 {len(channels_data)} 个频道（数据已准备就绪，等待主线程回调刷新UI）")
 
@@ -192,8 +195,11 @@ class SubscriptionController:
             else:
                 self._last_header_epg_url = None
 
+            return 'ok'
+
         except Exception as e:
             logger.error(f"处理M3U内容失败: {e}", exc_info=True)
+            return 'failed'
 
     def _parse_m3u_content_pure_python(self, content: str) -> tuple:
         from services.m3u_parser import parse_m3u_content
@@ -426,15 +432,87 @@ class SubscriptionController:
             self.window._update_groups_for('subscription')
             self.window._update_groups_for('local')
 
+    # 多订阅源刷新：并发窗口 4，会话总截止 90s，避免慢源把队列占满
+    MAX_CONCURRENT_SOURCES = 4
+    RELOAD_SESSION_DEADLINE_SEC = 90.0
+
     def reload_subscription(self):
-        """重新加载订阅源"""
+        """重新加载订阅源：按并发窗口逐个提交，并统计每类结果。"""
         try:
             sources = global_subscription_manager.get_playlist_sources()
-            if sources:
-                for i, source in enumerate(sources):
-                    if source.get('enabled', True):
-                        self.update_playlist_subscription(i)
-
-            logger.info("订阅源重新加载完成")
+            queue = deque(
+                (i, source) for i, source in enumerate(sources)
+                if source.get('enabled', True)
+            )
+            if not queue:
+                return
+            self._reload_session = {
+                'queue': queue,
+                'active': 0,
+                'stats': Counter(),
+                'deadline': time.monotonic() + self.RELOAD_SESSION_DEADLINE_SEC,
+                'total': len(queue),
+            }
+            self._pump_reload_queue()
         except Exception as e:
             logger.error(f"重新加载订阅源失败: {e}", exc_info=True)
+
+    def _pump_reload_queue(self):
+        session = getattr(self, '_reload_session', None)
+        if not session:
+            return
+        while session['active'] < self.MAX_CONCURRENT_SOURCES and session['queue']:
+            if time.monotonic() >= session['deadline']:
+                pending = len(session['queue'])
+                session['stats']['timeout'] += pending
+                session['queue'].clear()
+                logger.warning(f"订阅刷新会话超时，剩余 {pending} 个源标记为超时")
+                break
+            index, source = session['queue'].popleft()
+            url = source.get('url', '')
+            worker = SubscriptionWorker(
+                lambda i=index, u=url: self.handle_playlist_subscription(True, u, i)
+            )
+            session['active'] += 1
+            self._workers.append(worker)
+            worker.finished.connect(lambda result, w=worker: self._on_reload_worker_done(w, result))
+            worker.error.connect(lambda err, w=worker: self._on_reload_worker_error(w, err))
+            worker.start()
+        self._maybe_finish_reload()
+
+    def _on_reload_worker_done(self, worker, result):
+        self._cleanup_worker(worker)
+        session = getattr(self, '_reload_session', None)
+        if session:
+            session['active'] = max(0, session['active'] - 1)
+            session['stats'][result or 'failed'] += 1
+        self._pump_reload_queue()
+
+    def _on_reload_worker_error(self, worker, err):
+        logger.error(f"刷新订阅源错误: {err}")
+        self._cleanup_worker(worker)
+        session = getattr(self, '_reload_session', None)
+        if session:
+            session['active'] = max(0, session['active'] - 1)
+            session['stats']['failed'] += 1
+        self._pump_reload_queue()
+
+    def _maybe_finish_reload(self):
+        session = getattr(self, '_reload_session', None)
+        if not session or session['active'] > 0 or session['queue']:
+            return
+        stats = session['stats']
+        self._reload_session = None
+        summary = (
+            f"ok={stats.get('ok', 0)} empty={stats.get('empty', 0)} "
+            f"failed={stats.get('failed', 0)} timeout={stats.get('timeout', 0)}"
+        )
+        logger.info(f"订阅源重新加载完成：{summary}")
+        if hasattr(self.window, 'status_bar_show_message'):
+            tr = getattr(self.window.language_manager, 'tr', lambda _k, d='': d)
+            total = session['total']
+            self.window.status_bar_show_message(
+                tr('subscription_reload_summary',
+                   '订阅刷新完成：{ok}/{total} 成功，{failed} 失败，{timeout} 超时').format(
+                    ok=stats.get('ok', 0), total=total,
+                    failed=stats.get('failed', 0), timeout=stats.get('timeout', 0)), 4000)

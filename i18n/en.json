@@ -1419,6 +1419,7 @@
   "sub_style_group": "Subtitle Style",
   "sub_visibility": "Show Subtitle",
   "subscription_name": "Subscription Name",
+  "subscription_reload_summary": "Sources refreshed: {ok}/{total} succeeded, {failed} failed, {timeout} timed out",
   "subscription_name_colon": "Subscription Name:",
   "subscription_settings_title": "Subscription Settings",
   "subscription_sources_tab": "Subscription Sources",

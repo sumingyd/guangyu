@@ -1419,6 +1419,7 @@
   "sub_style_group": "字幕样式",
   "sub_visibility": "显示字幕",
   "subscription_name": "订阅名称",
+  "subscription_reload_summary": "订阅刷新完成：{ok}/{total} 成功，{failed} 失败，{timeout} 超时",
   "subscription_name_colon": "订阅名称:",
   "subscription_settings_title": "订阅设置",
   "subscription_sources_tab": "订阅源管理",
