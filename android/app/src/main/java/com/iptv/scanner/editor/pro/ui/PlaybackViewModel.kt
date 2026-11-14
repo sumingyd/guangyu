@@ -522,7 +522,21 @@ internal fun AppViewModel.getFilteredChannels(): List<Pair<IptvChannel, Int>> {
     }
 }
 
-internal fun AppViewModel.playChannel(idx: Int, silent: Boolean = false) {
+/** 换台来源：决定是否重置换台内的已试线路与连续失败计数 */
+internal enum class SwitchOrigin {
+    /** 用户主动换台（含列表点击、上下键、数字选台） */
+    USER,
+    /** 系统自动切到同名备用线路 / 更低分辨率线路 */
+    FAILOVER,
+    /** 断流后原地重连同一地址 */
+    RECONNECT,
+}
+
+internal fun AppViewModel.playChannel(
+    idx: Int,
+    silent: Boolean = false,
+    origin: SwitchOrigin = SwitchOrigin.USER,
+) {
     val channel = _channels.value.getOrNull(idx) ?: return
     if (currentPlaybackUrl == channel.url && mpv.fileLoaded.value && _currentIdx.value == idx) {
         // 相同频道已在播：不重复起播，但要离开首页进入播放页
@@ -532,7 +546,17 @@ internal fun AppViewModel.playChannel(idx: Int, silent: Boolean = false) {
         _showHome.value = false
         return
     }
-    Log.i(AppViewModel.TAG, "playChannel: ${channel.name} (${channel.url})")
+    // 用户主动换台重置换台内的失败链；自动换线/重连保留已试线路，避免在线路之间来回打转
+    if (origin == SwitchOrigin.USER) {
+        attemptedUrlsThisSwitch.clear()
+        autoFailoverCount = 0
+        lastAutoFailoverAtMs = 0L
+    }
+    attemptedUrlsThisSwitch.add(channel.url)
+    // 代次自增：在途的超时看门狗 / 延迟回调据此判定自己是否已过期
+    val generation = ++playAttemptGeneration
+    stopBufferWatch()
+    Log.i(AppViewModel.TAG, "playChannel: ${channel.name} (${channel.url}) origin=$origin gen=$generation")
     com.iptv.scanner.editor.pro.mpv.SwitchPerf.markRequest(channel.name, channel.url)
 
     val oldIdx = _currentIdx.value
@@ -549,9 +573,11 @@ internal fun AppViewModel.playChannel(idx: Int, silent: Boolean = false) {
         }
         _epgLoading.value = cachedPrograms == null
     }
+    val displayName = channelDisplayName(channel, duplicateChannelNames(_channels.value))
     _channelDisplayInfo.value = ChannelDisplayInfo(
         // 与频道列表同口径：同名多路流补分辨率后缀，OSD/控制栏/分屏标题不再显示同一个名字
-        name = channelDisplayName(channel, duplicateChannelNames(_channels.value)),
+        // 新频道还没有出首帧：标题先标记「加载中」，首帧到达后恢复真实名称（不销毁页面）
+        name = "$displayName（加载中）",
         logo = channel.logo, group = channel.group, idx = idx,
         isLocal = channel.source.isEmpty() || ProgressHelper.isLocalFile(channel.url)
     )
@@ -572,7 +598,8 @@ internal fun AppViewModel.playChannel(idx: Int, silent: Boolean = false) {
 
     fileErrorSwitchJob?.cancel()
     fileErrorSwitchJob = null
-    consecutiveTimeoutCount = 0
+    // 断线重连保留连续失败计数，第 3 次失败后才升级到备用线路；其余来源重新计数
+    if (origin != SwitchOrigin.RECONNECT) consecutiveTimeoutCount = 0
 
     uiUpdateJob?.cancel()
     uiUpdateJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -601,8 +628,18 @@ internal fun AppViewModel.playChannel(idx: Int, silent: Boolean = false) {
         (_player.value as? MpvController)?.releaseVoReloadSuppression()
         // 超时换源必须在等待加载前启动：加载成功后定时器到点检查
         // fileLoaded 为 true 自动空转；卡死时才能触发换源
-        startTimeoutSwitchSource(idx)
+        startTimeoutSwitchSource(idx, generation)
         mpv.fileLoaded.first { it }
+        // 代次已过期说明用户又换了台：这次加载的后续副作用全部丢弃（第 27 条）
+        if (generation != playAttemptGeneration) {
+            Log.i(AppViewModel.TAG, "playChannel: stale callbacks dropped (gen=$generation -> $playAttemptGeneration)")
+            return@launch
+        }
+        // 首帧已出：把标题从「加载中」恢复成真实名称，并开始持续缓冲观测
+        withContext(kotlinx.coroutines.Dispatchers.Main) {
+            _channelDisplayInfo.value = _channelDisplayInfo.value.copy(name = displayName)
+        }
+        startBufferWatch(idx, generation)
 
         if (!silent && !_landscapeSidebarVisible.value) {
             withContext(kotlinx.coroutines.Dispatchers.Main) {
@@ -632,7 +669,10 @@ internal fun AppViewModel.playChannel(idx: Int, silent: Boolean = false) {
     }
 }
 
-internal fun AppViewModel.startTimeoutSwitchSource(idx: Int) {
+internal fun AppViewModel.startTimeoutSwitchSource(
+    idx: Int,
+    generation: Long = playAttemptGeneration,
+) {
     timeoutSwitchJob?.cancel()
     timeoutSwitchJob = viewModelScope.launch {
         val configuredTimeout = userPrefs.getTimeoutMs()
@@ -645,6 +685,11 @@ internal fun AppViewModel.startTimeoutSwitchSource(idx: Int) {
             configuredTimeout
         }
         delay(timeoutMs)
+        // 代次已过期（期间用户又换了台）：本看门狗作废，绝不能动新频道（第 27 条）
+        if (generation != playAttemptGeneration) {
+            Log.i(AppViewModel.TAG, "Timeout watchdog: stale gen=$generation -> $playAttemptGeneration, ignored")
+            return@launch
+        }
         // 超时后检查是否已加载
         if (!mpv.fileLoaded.value) {
             consecutiveTimeoutCount++
@@ -659,6 +704,12 @@ internal fun AppViewModel.startTimeoutSwitchSource(idx: Int) {
             // forceRecreate() 通过 stop + playlist-clear 重置 mpv 内部状态（不终止核心），
             // 下次 playFile() 时 ensureInstanceAlive() 检测到 forceRecreatePending 标志后
             // 直接返回（核心仍存活，idle=yes 保证不会自动 shutdown）。
+            // 第 4 条：同频道还有备用线路时先换线——不停播放器、不重建核心，
+            // 旧画面保留到新线路首帧（第 16 条：不黑屏、不跳页）
+            if (idx >= 0 && tryPlaybackFailover(idx, generation, "timeout", preferLower = false)) {
+                return@launch
+            }
+
             if (consecutiveTimeoutCount >= 1 && _playerType.value == PlayerType.MPV) {
                 Log.w(AppViewModel.TAG, "Timeout switch: forcing mpv state reset (consecutive=$consecutiveTimeoutCount)")
                 mpvSingleton.forceRecreate()
@@ -1251,6 +1302,152 @@ internal fun AppViewModel.showPlayerScreen() {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// 同名备用线路 / 持续缓冲降级（对齐报告第 4、5 条）
+// ---------------------------------------------------------------------------
+
+/** 分辨率高度（1920x1080 → 1080）；解析不出返回 0 */
+internal fun channelResolutionHeight(channel: IptvChannel): Int {
+    val resolution = channel.resolution.trim().lowercase()
+    if (resolution.isEmpty()) return 0
+    return resolution.substringAfterLast('x', "").filter { it.isDigit() }.toIntOrNull() ?: 0
+}
+
+/**
+ * 同频道的其他线路：名称相同、地址不同，且本次换台还没试过。
+ * preferLower=true 时优先挑分辨率更低的线路（持续缓冲降级），没有更低档才回退到任意备用线路。
+ */
+internal fun AppViewModel.sameNameBackupChannels(
+    idx: Int,
+    preferLower: Boolean,
+): List<Pair<Int, IptvChannel>> {
+    val current = _channels.value.getOrNull(idx) ?: return emptyList()
+    val name = current.name.trim()
+    if (name.isEmpty()) return emptyList()
+    val currentHeight = channelResolutionHeight(current)
+    val candidates = _channels.value.mapIndexedNotNull { i, channel ->
+        if (i == idx) return@mapIndexedNotNull null
+        if (channel.name.trim() != name) return@mapIndexedNotNull null
+        if (channel.url.isBlank() || channel.url == current.url) return@mapIndexedNotNull null
+        if (channel.url in attemptedUrlsThisSwitch) return@mapIndexedNotNull null
+        i to channel
+    }
+    if (!preferLower || currentHeight <= 0) return candidates
+    val lower = candidates.filter { channelResolutionHeight(it.second) in 1 until currentHeight }
+    return lower.ifEmpty { candidates }
+}
+
+/**
+ * 在当前频道失败（超时 / 加载错误）或持续缓冲时，切到同名备用线路。
+ * 换线不跳页、不销毁播放器，旧画面保留到新线路首帧（第 16 条）。
+ *
+ * @return true 表示已发起换线；false 表示无线路可切或本次换台已达到切换上限。
+ */
+internal fun AppViewModel.tryPlaybackFailover(
+    idx: Int,
+    generation: Long,
+    reason: String,
+    preferLower: Boolean,
+): Boolean {
+    if (generation != playAttemptGeneration) {
+        Log.i(AppViewModel.TAG, "failover($reason): stale gen=$generation -> $playAttemptGeneration, ignored")
+        return false
+    }
+    if (idx < 0) return false
+    if (_playbackState.value.mode != PlayMode.LIVE) return false
+    if (autoFailoverCount >= AppViewModel.MAX_AUTO_FAILOVER_PER_SWITCH) return false
+    val now = android.os.SystemClock.elapsedRealtime()
+    if (autoFailoverCount > 0 &&
+        now - lastAutoFailoverAtMs < AppViewModel.FAILOVER_COOLDOWN_MS
+    ) {
+        return false
+    }
+    // 失败换线优先挑分辨率更高的备用线路；持续缓冲降级则挑更低一档
+    val candidates = sameNameBackupChannels(idx, preferLower)
+    val target = if (preferLower) {
+        candidates.minByOrNull { channelResolutionHeight(it.second).takeIf { h -> h > 0 } ?: Int.MAX_VALUE }
+    } else {
+        candidates.maxByOrNull { channelResolutionHeight(it.second) }
+    } ?: return false
+    autoFailoverCount++
+    lastAutoFailoverAtMs = now
+    val label = channelDisplayName(target.second, duplicateChannelNames(_channels.value))
+    Log.w(
+        AppViewModel.TAG,
+        "failover($reason): idx=$idx -> ${target.first} ($label) count=$autoFailoverCount"
+    )
+    showOsd(
+        if (preferLower) "持续缓冲" else "线路不可用",
+        "已切换到备用线路：$label"
+    )
+    playChannel(target.first, silent = true, origin = SwitchOrigin.FAILOVER)
+    return true
+}
+
+/** 当前是否处于卡顿缓冲：mpv 看 paused-for-cache，ExoPlayer 看 STATE_BUFFERING */
+internal fun AppViewModel.isBufferingNow(): Boolean = try {
+    when (val player = _player.value) {
+        is MpvController -> player.getPropertyBoolean("paused-for-cache") == true
+        is ExoPlayerWrapper -> player.buffering.value
+        else -> false
+    }
+} catch (_: Throwable) {
+    false
+}
+
+internal fun AppViewModel.stopBufferWatch() {
+    bufferWatchJob?.cancel()
+    bufferWatchJob = null
+    bufferingEventTimes.clear()
+    continuousBufferingSinceMs = 0L
+    lastBufferingEventAtMs = 0L
+}
+
+/**
+ * 持续缓冲观测（第 5 条）：起播窗口后每 500ms 采样一次。
+ * 22 秒内累计 3 次缓冲事件（间隔 ≥700ms）、或单次连续缓冲 9 秒，才切到更低分辨率的同名线路；
+ * 一缓冲就降会来回抖动，所以必须有滞回与冷却。
+ */
+internal fun AppViewModel.startBufferWatch(idx: Int, generation: Long) {
+    stopBufferWatch()
+    if (_playbackState.value.mode != PlayMode.LIVE) return
+    if (currentIsLocalFile) return
+    val startedAt = android.os.SystemClock.elapsedRealtime()
+    bufferWatchJob = viewModelScope.launch {
+        var lastAttemptAt = 0L
+        while (isActive) {
+            delay(AppViewModel.BUFFER_POLL_MS)
+            if (generation != playAttemptGeneration) return@launch
+            val now = android.os.SystemClock.elapsedRealtime()
+            // 起播窗口内不判卡顿，避免把正常起播缓冲当成弱网
+            if (now - startedAt < AppViewModel.BUFFER_WATCH_STARTUP_GRACE_MS) continue
+            if (!isBufferingNow()) {
+                continuousBufferingSinceMs = 0L
+                continue
+            }
+            if (now - lastBufferingEventAtMs >= AppViewModel.BUFFER_EVENT_MIN_GAP_MS) {
+                lastBufferingEventAtMs = now
+                bufferingEventTimes.addLast(now)
+                while (bufferingEventTimes.isNotEmpty() &&
+                    now - bufferingEventTimes.first() > AppViewModel.BUFFER_EVENT_WINDOW_MS
+                ) {
+                    bufferingEventTimes.removeFirst()
+                }
+            }
+            if (continuousBufferingSinceMs == 0L) continuousBufferingSinceMs = now
+            val frequent = bufferingEventTimes.size >= AppViewModel.BUFFER_EVENT_COUNT
+            val continuous = now - continuousBufferingSinceMs >= AppViewModel.BUFFER_CONTINUOUS_MS
+            if (!frequent && !continuous) continue
+            if (now - lastAttemptAt < AppViewModel.FAILOVER_COOLDOWN_MS) continue
+            lastAttemptAt = now
+            bufferingEventTimes.clear()
+            continuousBufferingSinceMs = 0L
+            val reason = if (continuous) "buffer-9s" else "buffer-3x22s"
+            if (tryPlaybackFailover(idx, generation, reason, preferLower = true)) return@launch
+        }
+    }
+}
 
 internal fun AppViewModel.switchPlayerType(newType: PlayerType) {
 if (_playerType.value == newType) return

@@ -165,6 +165,10 @@ class ExoPlayerWrapper(
     private val _fileLoaded = MutableStateFlow(false)
     override val fileLoaded: StateFlow<Boolean> = _fileLoaded.asStateFlow()
 
+    /** 是否处于缓冲停顿（STATE_BUFFERING）：用于上层「持续缓冲」降级判定 */
+    private val _buffering = MutableStateFlow(false)
+    val buffering: StateFlow<Boolean> = _buffering.asStateFlow()
+
     private val _videoWidth = MutableStateFlow(0)
     override val videoWidth: StateFlow<Int> = _videoWidth.asStateFlow()
 
@@ -362,9 +366,10 @@ class ExoPlayerWrapper(
                         override fun onPlaybackStateChanged(playbackState: Int) {
                             when (playbackState) {
                                 Media3Player.STATE_BUFFERING -> {
-                                    // buffering
+                                    _buffering.value = true
                                 }
                                 Media3Player.STATE_READY -> {
+                                    _buffering.value = false
                                     _paused.value = !p.isPlaying
                                     _fileLoaded.value = true
                                     _duration.value = (p.duration.coerceAtLeast(0)) / 1000.0
@@ -376,10 +381,12 @@ class ExoPlayerWrapper(
                                     }
                                 }
                                 Media3Player.STATE_ENDED -> {
+                                    _buffering.value = false
                                     _eofReached.value = true
                                     _paused.value = true
                                 }
                                 Media3Player.STATE_IDLE -> {
+                                    _buffering.value = false
                                     _fileLoaded.value = false
                                 }
                             }
@@ -658,6 +665,7 @@ class ExoPlayerWrapper(
         firstFrameMs = 0L
         _eofReached.value = false
         _fileLoaded.value = false
+        _buffering.value = false
         audioFocus.request()
         // MP2 音频兜底检查：正常播放时音频时钟数秒内启动
         audioClockStartedForCurrentPlay = false

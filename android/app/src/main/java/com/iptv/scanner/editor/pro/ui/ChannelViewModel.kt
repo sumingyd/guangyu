@@ -246,6 +246,9 @@ internal fun AppViewModel.stopPlay() {
     reconnectJob = null
     // 重置连续超时计数器
     consecutiveTimeoutCount = 0
+    // 令所有在途的超时看门狗/延迟回调失效，并停止缓冲观测
+    playAttemptGeneration++
+    stopBufferWatch()
     // 清除当前播放 URL，防止 mpv.stop() 触发的 onFileError 回调自动重连
     currentPlaybackUrl = ""
     // 先置 IDLE 再 stop：确保 mpv.stop() 触发的任何同步事件都能看到已停止状态

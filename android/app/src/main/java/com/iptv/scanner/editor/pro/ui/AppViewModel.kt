@@ -403,6 +403,36 @@ internal var switchPlayJob: Job? = null
 
     internal var fileErrorSwitchJob: Job? = null
 
+    // ---------------- 换台代次 / 同名备用线路 / 持续缓冲降级 ----------------
+
+    /**
+     * 换台代次：每次真正发起一次加载（用户换台 / 自动换线 / 断线重连）都自增。
+     * 所有延迟回调与超时看门狗先比对代次，过期回调直接退出，
+     * 避免快速连续换台时旧请求把新频道状态覆盖掉。
+     */
+    internal var playAttemptGeneration: Long = 0L
+
+    /** 本次换台已尝试过的播放地址：同名备用线路与自动降级共用，避免在线路之间来回打转 */
+    internal val attemptedUrlsThisSwitch = LinkedHashSet<String>()
+
+    /** 本次换台已自动切换线路的次数（含失败后继线路），上限见 MAX_AUTO_FAILOVER_PER_SWITCH */
+    internal var autoFailoverCount: Int = 0
+
+    /** 最近一次自动切换线路的时间（单调时钟毫秒），用于滞回冷却 */
+    internal var lastAutoFailoverAtMs: Long = 0L
+
+    /** 持续缓冲观测 Job（起播成功后启动，换台/停止时取消） */
+    internal var bufferWatchJob: Job? = null
+
+    /** 22 秒窗口内的缓冲事件时间戳（单调时钟毫秒） */
+    internal val bufferingEventTimes = ArrayDeque<Long>()
+
+    /** 连续缓冲开始时间（0=当前未处于连续缓冲） */
+    internal var continuousBufferingSinceMs: Long = 0L
+
+    /** 上一次记为一次「新缓冲事件」的时间，避免同一次缓冲被重复计数 */
+    internal var lastBufferingEventAtMs: Long = 0L
+
     /** 断线重连档位（0-5），0=关闭 ... 5=20s */
     internal val _reconnectIndex = MutableStateFlow(userPrefs.getReconnectIndex())
     val reconnectIndex: StateFlow<Int> = _reconnectIndex.asStateFlow()
@@ -685,8 +715,13 @@ if (consecutiveTimeoutCount > maxConsecutive) {
     showOsd("重新连接", "频道断流，尝试重连 ($consecutiveTimeoutCount/3)")
     val retryUrl = currentPlaybackUrl
     val retryIdx = _currentIdx.value
+    val retryGen = playAttemptGeneration
     fileErrorSwitchJob = viewModelScope.launch {
         delay(800)
+        if (retryGen != playAttemptGeneration) {
+            Log.i(TAG, "onFileError: skipped reconnect, generation $retryGen -> $playAttemptGeneration")
+            return@launch
+        }
         if (mpv.fileLoaded.value) {
             Log.i(TAG, "onFileError: skipped reconnect, file already loaded")
             return@launch
@@ -696,16 +731,26 @@ if (consecutiveTimeoutCount > maxConsecutive) {
             // 同址重连时 onChannelChange 会因端点相同早退，必须强制重发 JOIN，
             // 让代理重新把组播数据推给新连接
             fccService.resendJoin(retryUrl)
-            playChannel(retryIdx, silent = true)
+            playChannel(retryIdx, silent = true, origin = SwitchOrigin.RECONNECT)
         } else {
             fccService.resendJoin(retryUrl)
             mpv.playFile(retryUrl)
         }
     }
+} else if (tryPlaybackFailover(
+        _currentIdx.value, playAttemptGeneration, "load-error", preferLower = false
+    )) {
+    // 同频道还有别的线路：直接换线，不换台、不重建播放器，旧画面保留到新线路首帧
+    Log.i(TAG, "onFileError: switched to backup line of the same channel")
 } else {
-showOsd("加载失败", "当前频道无法播放，自动切换")
+showOsd("加载失败", "当前频道所有线路均失败，自动切换下一频道")
+val switchGen = playAttemptGeneration
 fileErrorSwitchJob = viewModelScope.launch {
 delay(1000)
+if (switchGen != playAttemptGeneration) {
+Log.i(TAG, "onFileError: skipped auto-switch, stale generation $switchGen -> $playAttemptGeneration")
+return@launch
+}
 if (mpv.fileLoaded.value) {
 Log.i(TAG, "onFileError: skipped auto-switch, file already loaded (user manually switched)")
 return@launch
@@ -715,6 +760,8 @@ Log.w(TAG, "onFileError: forcing mpv state reset before switch")
 mpvSingleton.forceRecreate()
 mpvSingleton.markNeedPreStop()
 delay(500)
+// 重置核心期间用户可能已经换了台，重建后再校验一次代次
+if (switchGen != playAttemptGeneration) return@launch
 }
 nextChannel()
 }
@@ -1972,6 +2019,7 @@ internal var currentIsLocalFile: Boolean
         subSyncJob?.cancel()
         reminderCheckJob?.cancel()
         resumeSaveJob?.cancel()
+        bufferWatchJob?.cancel()
         // 关闭 FCC：先同步向旧端点补发 LEAVE，再关闭持久化 UDP socket
         try { fccService.shutdown() } catch (_: Throwable) {}
         // 清理主播放器（MPV 需要 stop + detach，避免 native 资源泄漏）
@@ -2034,6 +2082,26 @@ internal var currentIsLocalFile: Boolean
 
         /** 频谱能量阈值：超过即视为有声音（0-1 归一化） */
         internal const val AUDIO_ACTIVE_THRESHOLD = 0.02f
+
+        // ---------------- 持续缓冲降级（第 5 条） ----------------
+        /** 起播窗口：起播成功后先观察 6 秒再判定卡顿，避免把正常起播缓冲当成持续缓冲 */
+        internal const val BUFFER_WATCH_STARTUP_GRACE_MS = 6_000L
+        /** 缓冲事件统计窗口：22 秒 */
+        internal const val BUFFER_EVENT_WINDOW_MS = 22_000L
+        /** 两次缓冲事件的最小间隔：同一次缓冲不重复计数 */
+        internal const val BUFFER_EVENT_MIN_GAP_MS = 700L
+        /** 窗口内达到该次数才判定为「频繁缓冲」 */
+        internal const val BUFFER_EVENT_COUNT = 3
+        /** 单次连续缓冲达到该时长就降级 */
+        internal const val BUFFER_CONTINUOUS_MS = 9_000L
+        /** 缓冲状态轮询间隔 */
+        internal const val BUFFER_POLL_MS = 500L
+
+        // ---------------- 同名备用线路（第 4 条） ----------------
+        /** 同一次换台最多自动切换线路次数 */
+        internal const val MAX_AUTO_FAILOVER_PER_SWITCH = 2
+        /** 两次自动切换线路之间的最小间隔，避免线路之间来回跳 */
+        internal const val FAILOVER_COOLDOWN_MS = 20_000L
 
         fun factory(app: Application): ViewModelProvider.AndroidViewModelFactory =
             object : ViewModelProvider.AndroidViewModelFactory(app) {}
