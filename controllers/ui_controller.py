@@ -1099,7 +1099,7 @@ class UIController:
                 slider.setStyleSheet(AppStyles.player_slider_style())
             for combo in fp.findChildren(QComboBox):
                 combo.setStyleSheet(AppStyles.player_group_combo_style())
-            self.reapply_divider_styles(fp)
+            reapply_divider_styles(fp)
 
             # 进度条滑块handle需要强制刷新
             progress_slider = getattr(self.window, 'progress_slider', None)
