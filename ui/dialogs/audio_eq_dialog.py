@@ -231,7 +231,7 @@ class AudioEqualizerDialog(FloatingDialog):
         pform.setSpacing(6)
         pform.setContentsMargins(8, 8, 8, 8)
         self.pitch_slider = QSlider(Qt.Orientation.Horizontal)
-        self.pitch_slider.setRange(0, 200)
+        self.pitch_slider.setRange(50, 200)
         self.pitch_slider.setSingleStep(5)
         self.pitch_slider.setPageStep(20)
         self.pitch_slider.setValue(100)
@@ -449,7 +449,8 @@ class AudioEqualizerDialog(FloatingDialog):
         self.delay_slider.setValue(int(round(delay * 100)))
         self.delay_label.setText(f"{delay:.3f}s")
         pitch = float(cfg.get('audio_pitch', 1.0) or 1.0)
-        pitch = max(0.0, min(2.0, pitch))
+        # 旧配置里的 0（audio-pitch-correction 关闭）按原调处理
+        pitch = 1.0 if pitch <= 0 else max(0.5, min(2.0, pitch))
         self.pitch_slider.setValue(int(round(pitch * 100)))
         self.pitch_label.setText(f"{pitch:.2f}")
         ch = cfg.get('audio_channels', 'auto') or 'auto'

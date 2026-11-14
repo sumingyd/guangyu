@@ -1301,12 +1301,14 @@ class SettingsFileOperations:
 
         pitch_slider = QSlider(Qt.Orientation.Horizontal)
         pitch_slider.setObjectName("audio_eq_pitch_slider")
-        pitch_slider.setRange(0, 200)
+        pitch_slider.setRange(50, 200)
         try:
             pitch_value = int(round(float(audio_cfg.get('audio_pitch', 1.0) or 1.0) * 100))
         except (TypeError, ValueError):
             pitch_value = 100
-        pitch_slider.setValue(max(0, min(200, pitch_value)))
+        if pitch_value <= 0:
+            pitch_value = 100
+        pitch_slider.setValue(max(50, min(200, pitch_value)))
         pitch_label = QLabel(f"{pitch_slider.value() / 100.0:.2f}")
         pitch_label.setMinimumWidth(40)
         pitch_slider.valueChanged.connect(
@@ -1316,7 +1318,7 @@ class SettingsFileOperations:
         pitch_layout.setContentsMargins(0, 0, 0, 0)
         pitch_layout.addWidget(pitch_slider, 1)
         pitch_layout.addWidget(pitch_label)
-        audio_layout.addRow(tr("audio_eq_pitch", "音调"), pitch_row)
+        audio_layout.addRow(tr("audio_eq_pitch", "音调（变调不变速）"), pitch_row)
 
         channels_combo = QComboBox()
         channels_combo.setObjectName("audio_eq_channels_combo")

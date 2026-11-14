@@ -2,6 +2,15 @@
 
 from core.log_manager import global_logger as logger
 
+import re
+
+# 变调范围与默认值。1.0 表示不加滤镜；mpv 的 audio-pitch-correction 只是
+# “变速时是否保持音调”的开关（yes/no），无法表达连续音调，因此这里用
+# lavfi 的 rubberband 滤镜实现真正的变调不变速。
+PITCH_MIN = 0.5
+PITCH_MAX = 2.0
+PITCH_NEUTRAL = 1.0
+
 
 class MpvAudioEq:
     """MpvAudioEq — 通过 facade 访问 mpv 实例和播放器。"""
@@ -31,9 +40,9 @@ class MpvAudioEq:
         return new_v
 
     def adjust_audio_pitch(self, delta: float) -> float:
-        cur = self._facade.get_audio_pitch()
-        new_v = round(max(0.0, min(2.0, cur + delta)), 3)
-        self._facade.set_audio_pitch(new_v)
+        cur = self.get_audio_pitch()
+        new_v = round(max(PITCH_MIN, min(PITCH_MAX, cur + delta)), 3)
+        self.set_audio_pitch(new_v)
         return new_v
 
     def apply_audio_eq(self, settings: dict) -> bool:
@@ -148,11 +157,19 @@ class MpvAudioEq:
         }
 
     def get_audio_pitch(self) -> float:
-        """读取音调补偿（UI 兼容：yes→1.0，no→0.0）"""
-        v = self._facade._get_mpv_property_string('audio-pitch-correction')
-        if v and v.lower() in ('yes', 'true', '1'):
-            return 1.0
-        return 0.0
+        """读取当前变调倍率（默认 1.0）。
+
+        从 mpv 的 af 链里解析 @iptv_pitch 的 rubberband pitch 参数；
+        没有该滤镜时返回 1.0。
+        """
+        try:
+            raw = self._facade._get_mpv_property_string('af') or ''
+            m = re.search(r'iptv_pitch.*?pitch=([0-9]*\.?[0-9]+)', str(raw))
+            if m:
+                return max(PITCH_MIN, min(PITCH_MAX, float(m.group(1))))
+        except Exception as _e:
+            logger.debug(f"unexpected error: {_e}")
+        return PITCH_NEUTRAL
 
     def get_channel_levels(self) -> dict:
         """获取各声道 RMS 电平
@@ -247,13 +264,39 @@ class MpvAudioEq:
         return self._facade._apply_audio_eq_filter(eq)
 
     def set_audio_pitch(self, v: float) -> bool:
-        """设置音调补偿。
-        注意：audio-pitch-correction 是 mpv Flag（yes/no），不是浮点。
-        保留 0.0~2.0 接口仅用于 UI 兼容：>=0.5 映射 yes，<0.5 映射 no。
+        """设置变调不变速（0.5–2.0，1.0 为原调）。
+
+        实现方式：af 链上的 rubberband 滤镜（lavfi 包装），而不是
+        audio-pitch-correction —— 后者是 yes/no 开关，传浮点会被 mpv 拒绝。
+
+        影响面：滤镜会把音频转成 PCM 处理，音频直通（audio-spdif）时听不到
+        变调效果；另外需要当前 mpv 构建编译了 librubberband，否则滤镜添加
+        失败并返回 False（界面保持原调）。
         """
-        v = max(0.0, min(2.0, float(v)))
-        flag_val = 'yes' if v >= 0.5 else 'no'
-        return self._facade._set_mpv_string('audio-pitch-correction', flag_val) >= 0
+        if not self._facade.mpv_handle or self._facade._terminated:
+            return False
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            v = PITCH_NEUTRAL
+        # 旧配置里的 0 表示“关闭音调补偿”，对变调而言等价于原调
+        if v <= 0.0:
+            v = PITCH_NEUTRAL
+        v = max(PITCH_MIN, min(PITCH_MAX, v))
+        try:
+            self._facade.send_command(['af', 'remove', '@iptv_pitch'])
+        except Exception as _e:
+            logger.debug(f"unexpected error: {_e}")
+        if abs(v - PITCH_NEUTRAL) < 0.005:
+            return True
+        ret = self._facade.send_command(
+            ['af', 'add', f'@iptv_pitch:lavfi=[rubberband=pitch={v:.3f}]']
+        )
+        if ret != 0:
+            self._facade.logger.warning(
+                f"变调滤镜添加失败(ret={ret})，当前 mpv 构建可能不含 rubberband 滤镜"
+            )
+        return ret == 0
 
     def start_channel_monitor(self) -> bool:
         """启动声道活动监控（添加 astats 滤镜）
