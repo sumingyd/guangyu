@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.layer.drawLayer
@@ -157,6 +158,7 @@ fun LiquidGlassSurface(
                     saturation = glassBase.saturation,
                     brightness = glassBase.brightness,
                     fallbackSolid = glassBase.fallbackSolid,
+                    noSampleBrush = glassBase.noSampleBrush,
                     modifier = Modifier.matchParentSize()
                 )
 
@@ -169,6 +171,7 @@ fun LiquidGlassSurface(
                     saturation = glassBase.saturation,
                     brightness = glassBase.brightness,
                     fallbackSolid = glassBase.fallbackSolid,
+                    noSampleBrush = glassBase.noSampleBrush,
                     modifier = Modifier.matchParentSize()
                 )
 
@@ -189,7 +192,9 @@ fun LiquidGlassSurface(
                 else -> Box(
                     modifier = Modifier
                         .matchParentSize()
-                        .background(glassBase.frostBrush)
+                        // 非静态玻璃（底栏、面板）在折射关闭时用厚霜层，避免下层文字透上来；
+                        // 静态玻璃（弹窗、VideoView 上的覆盖层）保持原来的薄霜观感
+                        .background(if (staticGlass) glassBase.frostBrush else glassBase.noSampleBrush)
                 )
             }
             // 层 2：顶部光泽（很淡，防止洗白）
@@ -227,6 +232,8 @@ private class GlassBase(
     val tintAlpha: Float,
     /** 画布模式下的染色不透明度（略轻，透出画布光斑） */
     val canvasTintAlpha: Float,
+    /** 采样不到背景时的厚霜层：比 frostBrush 更实，但保持半透，不做死实底 */
+    val noSampleBrush: Brush,
     val saturation: Float,
     val brightness: Float,
     val fallbackSolid: Color,
@@ -246,8 +253,8 @@ private class GlassBase(
     val innerBottomShadow: Float,
     /** 顶部内侧细高光线强度：玻璃厚度的第二道反光 */
     val innerTopSheen: Float,
-    /** 主描边线宽：大屏上 1dp 描边的侧边会被抗锯齿摊薄，overlay 用略粗的线保证轮廓可辨 */
-    val edgeWidth: Dp = 1.dp,
+    /** 内圈暗边强度：紧贴外沿内侧的暗线，负责读出玻璃断面的厚度 */
+    val edgeInnerDark: Float,
     /** 描边基色：null 表示按主题取 palette 的 effect.glass_border */
     val borderTint: Color? = null
 )
@@ -263,6 +270,10 @@ private val DarkGlass = GlassBase(
     tintColor = Color(0xFF1E1E22),
     tintAlpha = 0.30f,
     canvasTintAlpha = 0.26f,
+    // 折射关掉或采样层为空时：约 86% 的暗色霜层，压住下层文字又不至于变成实心板
+    noSampleBrush = Brush.verticalGradient(
+        listOf(Color(0xDD1E1E22), Color(0xD914161C), Color(0xDC171B22))
+    ),
     saturation = 1.6f,
     brightness = 0.82f,
     fallbackSolid = Color(0xFF1E1E22),
@@ -279,9 +290,10 @@ private val DarkGlass = GlassBase(
     shadowElevation = 10.dp,
     shadowAmbient = Color(0x33000000),
     shadowSpot = Color(0x4D000000),
-    borderTop = 0.46f, borderMid = 0.08f, borderBottom = 0.18f,
+    borderTop = 0.48f, borderMid = 0.09f, borderBottom = 0.22f,
     innerHighlight = 0.20f,
-    innerTopShadow = 0.12f, innerBottomShadow = 0.14f, innerTopSheen = 0.10f
+    innerTopShadow = 0.12f, innerBottomShadow = 0.14f, innerTopSheen = 0.10f,
+    edgeInnerDark = 0.14f
 )
 
 /** 播放器覆盖层专用：暗色玻璃（覆盖条上多为白色文字，亮玻璃会让白字不可读） */
@@ -289,6 +301,9 @@ private val OverlayGlass = GlassBase(
     tintColor = Color(0xFF0D1016),
     tintAlpha = 0.62f,
     canvasTintAlpha = 0.62f,
+    noSampleBrush = Brush.verticalGradient(
+        listOf(Color(0xE60D1016), Color(0xE0111922), Color(0xDB131A20))
+    ),
     saturation = 1.35f,
     brightness = 0.78f,
     fallbackSolid = Color(0xFF0D1016),
@@ -308,10 +323,10 @@ private val OverlayGlass = GlassBase(
     shadowElevation = 14.dp,
     shadowAmbient = Color(0x40000000),
     shadowSpot = Color(0x59000000),
-    borderTop = 0.52f, borderMid = 0.14f, borderBottom = 0.24f,
+    borderTop = 0.52f, borderMid = 0.10f, borderBottom = 0.24f,
     innerHighlight = 0.24f,
     innerTopShadow = 0.16f, innerBottomShadow = 0.22f, innerTopSheen = 0.14f,
-    edgeWidth = 1.3.dp
+    edgeInnerDark = 0.16f
 )
 
 /** 浅色主题：薄白玻璃 + 阴影浮起 + 深色描边可辨 */
@@ -319,6 +334,9 @@ private val LightGlass = GlassBase(
     tintColor = Color.White,
     tintAlpha = 0.16f,
     canvasTintAlpha = 0.12f,
+    noSampleBrush = Brush.verticalGradient(
+        listOf(Color(0xE0FFFFFF), Color(0xDBF2F4F8), Color(0xDBFFFFFF))
+    ),
     saturation = 1.8f,
     brightness = 1.04f,
     fallbackSolid = Color(0xFFE8EAF0),
@@ -336,9 +354,10 @@ private val LightGlass = GlassBase(
     shadowAmbient = Color(0x1F000000),
     shadowSpot = Color(0x33000000),
     // 白底上白描边不可见，改用深灰蓝提供轮廓
-    borderTop = 0.26f, borderMid = 0.10f, borderBottom = 0.16f,
+    borderTop = 0.30f, borderMid = 0.10f, borderBottom = 0.18f,
     innerHighlight = 0.30f,
-    innerTopShadow = 0.06f, innerBottomShadow = 0.08f, innerTopSheen = 0.18f
+    innerTopShadow = 0.06f, innerBottomShadow = 0.08f, innerTopSheen = 0.18f,
+    edgeInnerDark = 0.08f
 )
 
 /**
@@ -401,8 +420,11 @@ private fun DrawScope.drawGlassDepth(
 }
 
 /**
- * 镜面双描边：外圈纵向由亮到暗再回亮（玻璃边缘受光），
- * 内圈缩进 1.5dp，只保留顶部高光，模拟玻璃厚度。
+ * 玻璃断面三层结构（三端同一套参数，各自路径共用本函数）：
+ * 1. 外沿受光线：整圈 1dp，顶亮、两侧弱、底中等，圆角处由同一次 stroke 连续过渡；
+ *    顶/底再叠一层横向渐变做中心最亮、向圆角衰减，避免"印刷描边"式的均匀亮度。
+ * 2. 内圈暗边：缩进 1dp 的暗线，压出玻璃断面的厚度。
+ * 3. 内侧顶部 1px 高光：断面上的第二道反光。
  */
 private fun DrawScope.drawGlassEdges(
     size: Size,
@@ -410,45 +432,75 @@ private fun DrawScope.drawGlassEdges(
     base: GlassBase,
     borderTint: Color
 ) {
-    // palette 里的描边色自带 alpha（如 0x4DFFFFFF），这里先归一化再按位置施加 alpha。
+    if (size.width <= 2f || size.height <= 2f) return
+    // palette 里的描边色自带 alpha（如 0x4DFFFFFF），这里先归一化再按位置施加 alpha，
     // 否则两次 alpha 相乘后电视上的 1dp 描边只剩约 0.14，几乎完全看不见。
     val tint = borderTint.copy(alpha = 1f)
     val radius = CornerRadius(radiusPx, radiusPx)
-    // 外圈柔光：3dp 宽的低 alpha 描边，给边缘一层受光的高光晕
-    drawRoundRect(
-        brush = Brush.verticalGradient(
-            0f to tint.copy(alpha = base.borderTop * 0.18f),
-            0.5f to Color.Transparent,
-            1f to tint.copy(alpha = base.borderBottom * 0.12f)
-        ),
-        cornerRadius = radius,
-        style = Stroke(width = 3.dp.toPx())
-    )
-    // 主描边：纵向渐变，顶边最亮、两侧中段最暗、底边略回亮（受光 bevel）
+    val line = 1.dp.toPx()
+
+    // ① 外沿：纵向渐变让左右两侧恒为弱光，上/下沿分别取受光/回光强度
     drawRoundRect(
         brush = Brush.verticalGradient(
             0f to tint.copy(alpha = base.borderTop),
-            0.42f to tint.copy(alpha = base.borderMid),
-            0.82f to tint.copy(alpha = base.borderMid * 1.2f),
+            0.22f to tint.copy(alpha = base.borderMid),
+            0.78f to tint.copy(alpha = base.borderMid),
             1f to tint.copy(alpha = base.borderBottom)
         ),
         cornerRadius = radius,
-        style = Stroke(width = 1.dp.toPx())
+        style = Stroke(width = line)
     )
-    val inset = 1.5.dp.toPx()
+
+    // ② 顶沿受光：只在顶部 2dp 带内叠横向渐变，中心最亮、向两端圆角平滑回落
+    val edgeBand = (line * 2.5f).coerceAtMost(size.height / 3f)
+    clipRect(0f, 0f, size.width, edgeBand) {
+        drawRoundRect(
+            brush = Brush.horizontalGradient(
+                0f to tint.copy(alpha = base.borderTop * 0.5f),
+                0.16f to tint.copy(alpha = base.borderTop),
+                0.84f to tint.copy(alpha = base.borderTop),
+                1f to tint.copy(alpha = base.borderTop * 0.5f)
+            ),
+            cornerRadius = radius,
+            style = Stroke(width = line)
+        )
+    }
+    // ③ 底沿回光：同样的横向衰减，强度低于顶沿
+    clipRect(0f, size.height - edgeBand, size.width, size.height) {
+        drawRoundRect(
+            brush = Brush.horizontalGradient(
+                0f to tint.copy(alpha = base.borderBottom * 0.6f),
+                0.18f to tint.copy(alpha = base.borderBottom),
+                0.82f to tint.copy(alpha = base.borderBottom),
+                1f to tint.copy(alpha = base.borderBottom * 0.6f)
+            ),
+            cornerRadius = radius,
+            style = Stroke(width = line)
+        )
+    }
+
+    val inset = line
     if (size.width <= inset * 2 || size.height <= inset * 2) return
+    // ④ 内圈暗边：断面的"厚度"靠这道内暗线读出来
+    drawRoundRect(
+        color = Color.Black.copy(alpha = base.edgeInnerDark),
+        topLeft = Offset(inset, inset),
+        size = Size(size.width - inset * 2, size.height - inset * 2),
+        cornerRadius = CornerRadius((radiusPx - inset).coerceAtLeast(0f)),
+        style = Stroke(width = line)
+    )
+    // ⑤ 内侧顶部 1px 高光
+    val sheenInset = 2.dp.toPx()
+    if (size.width <= sheenInset * 2 || size.height <= sheenInset * 2) return
     drawRoundRect(
         brush = Brush.verticalGradient(
             0f to Color.White.copy(alpha = base.innerHighlight),
-            0.4f to Color.Transparent,
-            1f to Color.White.copy(alpha = base.innerHighlight * 0.25f)
+            0.38f to Color.White.copy(alpha = base.innerHighlight * 0.15f),
+            1f to Color.Transparent
         ),
-        topLeft = Offset(inset, inset),
-        size = Size(size.width - inset * 2, size.height - inset * 2),
-        cornerRadius = CornerRadius(
-            (radiusPx - inset).coerceAtLeast(0f),
-            (radiusPx - inset).coerceAtLeast(0f)
-        ),
+        topLeft = Offset(sheenInset, sheenInset),
+        size = Size(size.width - sheenInset * 2, size.height - sheenInset * 2),
+        cornerRadius = CornerRadius((radiusPx - sheenInset).coerceAtLeast(0f)),
         style = Stroke(width = 1.dp.toPx())
     )
 }
@@ -474,6 +526,7 @@ internal fun GlassSampledBackdrop(
     saturation: Float,
     brightness: Float,
     fallbackSolid: Color,
+    noSampleBrush: Brush,
     modifier: Modifier = Modifier
 ) {
     val layer = rememberGraphicsLayer()
@@ -500,6 +553,16 @@ internal fun GlassSampledBackdrop(
             .onGloballyPositioned { origin = it.positionOnScreen() }
             .drawBehind {
                 drawCount[0]++
+                // 没有可采样的内容层时同折射路径一致：只铺厚霜层，不能画死实底
+                val contentAreas = hazeState.areas.filter { area ->
+                    val content = area.contentLayer
+                    content != null && !content.isReleased &&
+                        content.size.width > 0 && content.size.height > 0
+                }
+                if (contentAreas.isEmpty()) {
+                    drawRect(brush = noSampleBrush)
+                    return@drawBehind
+                }
                 val longest = max(size.width, size.height).coerceAtLeast(1f)
                 val sampleScale = if (settled) 1f else {
                     min(0.28f, SAMPLED_MAX_EDGE / longest)

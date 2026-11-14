@@ -65,6 +65,8 @@ internal fun GlassRefractionBackdrop(
     saturation: Float,
     brightness: Float,
     fallbackSolid: androidx.compose.ui.graphics.Color,
+    /** 采样层为空时用的静态厚霜层：不能用死实底，也不能薄到让下层文字透出来 */
+    noSampleBrush: androidx.compose.ui.graphics.Brush,
     modifier: Modifier = Modifier
 ) {
     val layer = rememberGraphicsLayer()
@@ -88,14 +90,24 @@ internal fun GlassRefractionBackdrop(
                 }
                 val w = size.width.roundToInt().coerceAtLeast(1)
                 val h = size.height.roundToInt().coerceAtLeast(1)
+                // 没有任何可采样的内容层（空源、SurfaceView 视频层）时，折射无从谈起。
+                // 这里绝不能画死实底：玻璃是叠在真实内容之上的，画实底会把下层整块盖住，
+                // 表现为「底栏中间完全不透明」。改用厚霜层 + 保持透明，让层次透出来。
+                val contentAreas = hazeState.areas.filter { area ->
+                    val content = area.contentLayer
+                    content != null && !content.isReleased &&
+                        content.size.width > 0 && content.size.height > 0
+                }
+                if (contentAreas.isEmpty()) {
+                    drawRect(brush = noSampleBrush)
+                    return@drawBehind
+                }
                 layer.record(this, layoutDirection, IntSize(w, h)) {
-                    // 采样不到的画面（SurfaceView / 空源）用深色兜底，避免出现黑洞
+                    // 采样层覆盖不到的缝隙用深色兜底，避免出现黑洞
                     drawRect(fallbackSolid)
                     translate(-origin.x, -origin.y) {
-                        hazeState.areas.forEach { area ->
+                        contentAreas.forEach { area ->
                             val content = area.contentLayer ?: return@forEach
-                            if (content.isReleased) return@forEach
-                            if (content.size.width <= 0 || content.size.height <= 0) return@forEach
                             translate(area.positionOnScreen.x, area.positionOnScreen.y) {
                                 drawLayer(content)
                             }
