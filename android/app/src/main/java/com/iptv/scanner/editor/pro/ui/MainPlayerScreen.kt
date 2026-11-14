@@ -1,7 +1,10 @@
 package com.iptv.scanner.editor.pro.ui
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.res.Configuration
+import android.media.AudioManager
 import android.util.Log
 import androidx.compose.runtime.key
 import androidx.compose.ui.window.Dialog
@@ -173,6 +176,16 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.SwapHoriz
 import java.io.File
+
+/** 从 Compose 的 Context 向上找到宿主 Activity（亮度调节需要 Window）。 */
+private fun findHostActivity(context: Context): Activity? {
+    var current: Context? = context
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return current as? Activity
+}
 
 /**
  * 主播放屏：MPVView + 透明控制层 + 面板抽屉 + OSD 浮层。
@@ -703,8 +716,12 @@ viewModel.mpv.setMute(savedMute)
                             // 竖屏视频覆盖层：单击切换控制层 + 双击全屏 + 上下滑动换台
                             if (!showHome && !anyPanelOpen) {
                                 var controlsVisible by remember { mutableStateOf(false) }
+                                var gestureHint by remember { mutableStateOf<String?>(null) }
                                 val pausedState by viewModel.mpv.paused.collectAsState()
                                 val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+                                val hostViewRef = androidx.compose.ui.platform.LocalView.current
+                                val contextRef = hostViewRef.context
+                                val hostActivity = remember(contextRef) { findHostActivity(contextRef) }
                                 Box(
                                     modifier = Modifier
                                         .fillMaxSize()
@@ -718,34 +735,104 @@ viewModel.mpv.setMute(savedMute)
                                             )
                                         }
                                         .pointerInput(Unit) {
+                                            // 竖向手势分区：左 30% 调亮度、右 30% 调音量、中间换台。
+                                            // 阈值按屏幕高度的一半折算，短滑不会误调。
                                             var totalY = 0f
                                             var triggered = false
+                                            var zone = 1
+                                            var startBrightness = 0.5f
+                                            var startVolume = 0
+                                            var lastShown = -1
+                                            val activity = hostActivity
+                                            val audioManager = contextRef.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
                                             detectVerticalDragGestures(
-                                                onDragStart = {
+                                                onDragStart = { offset ->
                                                     totalY = 0f
                                                     triggered = false
+                                                    lastShown = -1
+                                                    val width = size.width.coerceAtLeast(1)
+                                                    zone = when {
+                                                        offset.x < width * 0.30f -> 0
+                                                        offset.x > width * 0.70f -> 2
+                                                        else -> 1
+                                                    }
+                                                    if (zone == 0) {
+                                                        val current = activity?.window?.attributes?.screenBrightness ?: -1f
+                                                        startBrightness = if (current < 0f) 0.5f else current
+                                                    } else if (zone == 2) {
+                                                        startVolume = audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 0
+                                                    }
                                                 },
                                                 onDragEnd = {
                                                     totalY = 0f
                                                     triggered = false
+                                                    gestureHint = null
+                                                },
+                                                onDragCancel = {
+                                                    totalY = 0f
+                                                    triggered = false
+                                                    gestureHint = null
                                                 },
                                                 onVerticalDrag = { change, dragAmount ->
                                                     change.consume()
                                                     totalY += dragAmount
-                                                    val threshold = 80f
-                                                    if (!triggered && kotlin.math.abs(totalY) > threshold) {
-                                                        triggered = true
-                                                        if (totalY < 0) {
-                                                            viewModel.prevChannel()
-                                                        } else {
-                                                            viewModel.nextChannel()
+                                                    val height = size.height.coerceAtLeast(1).toFloat()
+                                                    when (zone) {
+                                                        0 -> {
+                                                            val value = (startBrightness - totalY / height)
+                                                                .coerceIn(0.05f, 1f)
+                                                            activity?.window?.let { win ->
+                                                                val attrs = win.attributes
+                                                                attrs.screenBrightness = value
+                                                                win.attributes = attrs
+                                                            }
+                                                            val pct = (value * 100).toInt()
+                                                            if (pct != lastShown) {
+                                                                lastShown = pct
+                                                                gestureHint = "亮度 $pct%"
+                                                            }
                                                         }
-                                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                        2 -> {
+                                                            val max = (audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 1)
+                                                                .coerceAtLeast(1)
+                                                            val delta = (-totalY / height * max).toInt()
+                                                            val value = (startVolume + delta).coerceIn(0, max)
+                                                            if (value != lastShown) {
+                                                                lastShown = value
+                                                                audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC, value, 0)
+                                                                gestureHint = "音量 ${value * 100 / max}%"
+                                                            }
+                                                        }
+                                                        else -> {
+                                                            val threshold = 80f
+                                                            if (!triggered && kotlin.math.abs(totalY) > threshold) {
+                                                                triggered = true
+                                                                if (totalY < 0) {
+                                                                    viewModel.prevChannel()
+                                                                } else {
+                                                                    viewModel.nextChannel()
+                                                                }
+                                                                haptic.performHapticFeedback(
+                                                                    androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             )
                                         }
                                 )
+                                gestureHint?.let { hint ->
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.TopCenter)
+                                            .padding(top = 12.dp)
+                                            .clip(RoundedCornerShape(50))
+                                            .background(Color(0x99000000))
+                                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                                    ) {
+                                        Text(hint, color = Color.White, fontSize = 13.sp)
+                                    }
+                                }
                                 if (controlsVisible) {
                                     Box(
                                         modifier = Modifier

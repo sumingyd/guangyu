@@ -394,11 +394,35 @@ private fun ChannelListContent(
             }
         }
 
+        // 连按上键三次回顶：长列表里不用一路按上去
+        var upBurst by remember { mutableStateOf(0) }
+        var lastUpAt by remember { mutableStateOf(0L) }
+        var topSignal by remember { mutableStateOf(0) }
+
+        LaunchedEffect(topSignal) {
+            if (topSignal > 0 && displayedChannels.isNotEmpty()) {
+                listState.animateScrollToItem(0)
+                focusRowIndex = 0
+                androidx.compose.runtime.withFrameNanos { }
+                kotlin.runCatching { rowFocusRequester.requestFocus() }
+            }
+        }
+
         LazyColumn(
             state = listState,
             modifier = modifier
                 .fillMaxSize()
                 .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
+                        val now = System.currentTimeMillis()
+                        upBurst = if (now - lastUpAt <= 600) upBurst + 1 else 1
+                        lastUpAt = now
+                        if (upBurst >= 3) {
+                            upBurst = 0
+                            topSignal += 1
+                            return@onPreviewKeyEvent true
+                        }
+                    }
                     // BACK 从列表回到搜索框（消费掉事件，Activity 就不会关面板）
                     if (backToSearchFocus != null &&
                         event.type == KeyEventType.KeyDown && event.key == Key.Back

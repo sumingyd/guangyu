@@ -268,7 +268,7 @@ class UnifiedSearchDialog(FloatingDialog):
         if not text:
             return
 
-        self.result_list.clear()
+        # 保留上一轮结果直到新结果返回，避免输入过程中列表反复清空闪烁
         self._results.clear()
         self._result_channels.clear()
         self._epg_results.clear()
@@ -297,6 +297,9 @@ class UnifiedSearchDialog(FloatingDialog):
 
         if search_epg:
             epg_parser = getattr(w, 'epg_parser', None)
+            # 频道结果先出，EPG 结果稍后追加，避免整段时间都停在旧列表
+            if self._results:
+                self._render_results()
             if epg_parser:
                 if self._worker is not None:
                     self._retire_worker(self._worker)
