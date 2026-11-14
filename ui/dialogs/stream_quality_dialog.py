@@ -125,6 +125,7 @@ class StreamQualityDialog(FloatingDialog):
             ('cache_size',       tr('stream_quality_cache_size',      '缓存大小')),
             ('cache_speed',      tr('stream_quality_cache_speed',     '缓存速度')),
             ('buffering',        tr('stream_quality_buffering',       '缓冲状态')),
+            ('first_frame',      tr('stream_quality_first_frame',     '首帧耗时')),
             ('demuxer_bitrate',  tr('stream_quality_demuxer_bitrate', '解复用码率')),
         ])
         layout.addWidget(net_group)
@@ -279,6 +280,8 @@ class StreamQualityDialog(FloatingDialog):
                       f"{buf}%" if buf > 0 else tr('stream_quality_no_buffer', '无缓冲'))
             demux_br = info.get('demuxer_bitrate', 0) or 0
             self._set('demuxer_bitrate', UIController.format_bitrate(demux_br) if demux_br > 0 else 'N/A')
+            first_frame = info.get('first_frame_ms', 0) or 0
+            self._set('first_frame', f"{first_frame}ms" if first_frame > 0 else 'N/A')
 
             # 丢帧统计
             self._set('vo_drop', str(info.get('frame_drop_count', 0) or 0))

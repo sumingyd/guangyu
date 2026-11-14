@@ -114,10 +114,9 @@ class FavoritesController:
                 if logo_url:
                     logo_cache = getattr(w, '_logo_cache_service', None)
                     if logo_cache:
-                        cached = logo_cache.get(logo_url)
+                        cached = logo_cache.get_scaled(logo_url, 44, 32)
                         if cached:
-                            scaled = logo_cache.scale_logo_pixmap_to_fit(cached, 44, 32)
-                            logo_label.setPixmap(scaled)
+                            logo_label.setPixmap(cached)
                         else:
                             logo_cache.fetch_async(logo_url)
             except Exception as e:
@@ -188,10 +187,9 @@ class FavoritesController:
                 if logo_url:
                     logo_cache = getattr(w, '_logo_cache_service', None)
                     if logo_cache:
-                        cached = logo_cache.get(logo_url)
+                        cached = logo_cache.get_scaled(logo_url, 44, 32)
                         if cached:
-                            scaled = logo_cache.scale_logo_pixmap_to_fit(cached, 44, 32)
-                            logo_label.setPixmap(scaled)
+                            logo_label.setPixmap(cached)
                         else:
                             logo_cache.fetch_async(logo_url)
             except Exception as e:

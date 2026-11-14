@@ -2,6 +2,7 @@ package com.iptv.scanner.editor.pro.player
 
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -105,6 +106,9 @@ class ExoPlayerWrapper(
     private var forcedMimeType: String? = null
     /** 本次播放已做过的容器重试次数（每个方向最多一次） */
     private var containerRetryCount = 0
+    /** 首帧耗时：playFile 到 onRenderedFirstFrame 的毫秒数，用于排障 */
+    private var playStartedAtMs = 0L
+    private var firstFrameMs = 0L
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private fun isMainThread() = android.os.Looper.myLooper() == android.os.Looper.getMainLooper()
 
@@ -498,8 +502,11 @@ class ExoPlayerWrapper(
 
                         override fun onRenderedFirstFrame() {
                             firstFrameSeen = true
+                            if (firstFrameMs == 0L && playStartedAtMs > 0L) {
+                                firstFrameMs = SystemClock.elapsedRealtime() - playStartedAtMs
+                            }
                             mainHandler.removeCallbacks(firstFrameWatchdogRunnable)
-                            Log.i(TAG, "VIDEO first frame rendered")
+                            Log.i(TAG, "VIDEO first frame rendered (${firstFrameMs}ms)")
                         }
                     })
                 // 视频管线诊断（AnalyticsListener 携带解码器/帧计数细节）
@@ -644,9 +651,11 @@ class ExoPlayerWrapper(
 
     override fun playFile(url: String) {
         currentUrl = url
-        // 新地址重新开始容器探测
+        // 新地址重新开始容器探测与首帧计时
         forcedMimeType = null
         containerRetryCount = 0
+        playStartedAtMs = SystemClock.elapsedRealtime()
+        firstFrameMs = 0L
         _eofReached.value = false
         _fileLoaded.value = false
         audioFocus.request()
@@ -1129,6 +1138,7 @@ class ExoPlayerWrapper(
                 "containerFormat" to p.currentMediaItem?.localConfiguration?.mimeType,
                 "hwdec" to if (hardwareDecodeEnabled) "mediacodec" else "software",
                 "vo" to "exo",
+                "firstFrameMs" to if (firstFrameMs > 0L) firstFrameMs.toString() else null,
                 "videoPrimaries" to primaries,
                 "videoGamma" to gamma,
                 "videoColorRange" to colorRange

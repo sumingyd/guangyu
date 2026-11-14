@@ -783,6 +783,10 @@ internal fun PortraitMediaInfoBar(viewModel: AppViewModel) {
                 mediaInfo["hwdec"]?.takeIf { it.isNotEmpty() && it != "null" && it != "no" }?.let { hwdec ->
                     MediaBadge(label = "HW", oc = oc, isAccent = false)
                 }
+                // 首帧耗时：排障时区分「源慢」与「渲染慢」
+                mediaInfo["firstFrameMs"]?.takeIf { it.isNotEmpty() && it != "null" && it != "0" }?.let { ms ->
+                    MediaBadge(label = "首帧 ${ms}ms", oc = oc, isAccent = false)
+                }
             }
         } else {
             // 文件已加载但视频尺寸未知（纯音频流 / 换台瞬间 videoWidth 还没回来），

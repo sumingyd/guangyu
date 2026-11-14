@@ -165,6 +165,10 @@ class UIController:
         if hw and hw != 'no':
             vline.append(f'{tr("osd_hwdec", "HWDec")}: {hw}')
 
+        first_frame_ms = info.get('first_frame_ms', 0) or 0
+        if first_frame_ms > 0:
+            vline.append(f'{tr("osd_first_frame", "FirstFrame")}: {first_frame_ms}ms')
+
         interlaced = info.get('interlaced', '') or ''
         if interlaced and interlaced.lower() not in ('', 'no', 'false', '0'):
             vline.append(f'{tr("osd_scan", "Scan")}: {tr("osd_interlaced", "Interlaced")}')
@@ -1139,7 +1143,12 @@ class UIController:
             if logo:
                 logo = logo.strip('`"\'')
                 if logo == url and hasattr(self.window, 'channel_logo'):
-                    scaled = self.window._logo_cache_service.scale_logo_pixmap_to_fit(pixmap, self.window.channel_logo.width(), self.window.channel_logo.height())
+                    svc = self.window._logo_cache_service
+                    w = max(48, self.window.channel_logo.width())
+                    h = max(34, self.window.channel_logo.height())
+                    scaled = svc.get_scaled(logo, w, h)
+                    if scaled is None:
+                        scaled = svc.scale_logo_pixmap_to_fit(pixmap, w, h)
                     self.window.channel_logo.setPixmap(scaled)
                     self.window.channel_logo.setText("")
 

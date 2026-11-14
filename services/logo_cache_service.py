@@ -4,9 +4,9 @@ import time
 import json
 import threading
 from collections import OrderedDict
-from PySide6.QtCore import Signal, QUrl, QTimer, Qt
+from PySide6.QtCore import Signal, QUrl, QTimer, Qt, QBuffer, QSize, QIODevice
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
-from PySide6.QtGui import QPixmap, QImage
+from PySide6.QtGui import QPixmap, QImage, QImageReader
 from PySide6.QtWidgets import QApplication
 from utils.thread_safety import ThreadSafeQObject
 from core.log_manager import global_logger as logger
@@ -22,6 +22,70 @@ class LogoCacheService(ThreadSafeQObject):
     NEGATIVE_CACHE_TTL = 3600
     MIN_IMAGE_DATA_SIZE = 100
     SUPPORTED_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico')
+    # 按显示尺寸解码：尺寸键缓存与单图解码像素上限，避免 1080p 台标整图进内存
+    SCALED_CACHE_MAX = 800
+    MAX_DECODE_PIXELS = 2_000_000
+    PREVIEW_MAX_PIXELS = 240_000
+
+    @staticmethod
+    def _device_pixel_ratio():
+        screen = QApplication.primaryScreen()
+        return screen.devicePixelRatio() if screen else 1.0
+
+    @classmethod
+    def _scaled_size(cls, source_w, source_h, width, height, max_pixels):
+        """把源图等比缩进目标框，并受单图像素上限约束。"""
+        dpr = cls._device_pixel_ratio()
+        target_w = max(1, int(width * dpr))
+        target_h = max(1, int(height * dpr))
+        if source_w <= 0 or source_h <= 0:
+            return target_w, target_h
+        scale = min(target_w / source_w, target_h / source_h, 1.0)
+        w = max(1, int(source_w * scale))
+        h = max(1, int(source_h * scale))
+        if max_pixels and w * h > max_pixels:
+            factor = (max_pixels / float(w * h)) ** 0.5
+            w = max(1, int(w * factor))
+            h = max(1, int(h * factor))
+        return w, h
+
+    @classmethod
+    def _read_image_reader(cls, reader, width, height, max_pixels):
+        size = reader.size()
+        if not size.isValid():
+            image = reader.read()
+            return image if not image.isNull() else None
+        w, h = cls._scaled_size(size.width(), size.height(), width, height, max_pixels)
+        if (w, h) != (size.width(), size.height()):
+            reader.setScaledSize(QSize(w, h))
+        image = reader.read()
+        return image if not image.isNull() else None
+
+    def _read_image_at_size(self, path, width, height, max_pixels=None):
+        reader = QImageReader(path)
+        reader.setAutoTransform(True)
+        try:
+            return self._read_image_reader(
+                reader, width, height, max_pixels or self.MAX_DECODE_PIXELS)
+        except Exception as e:
+            logger.debug(f"按尺寸解码台标失败: {e}")
+            return None
+
+    def _read_image_from_bytes(self, raw_data, width, height, max_pixels=None):
+        buffer = QBuffer()
+        buffer.setData(raw_data)
+        buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+        try:
+            reader = QImageReader(buffer)
+            reader.setAutoTransform(True)
+            return self._read_image_reader(
+                reader, width, height, max_pixels or self.MAX_DECODE_PIXELS)
+        except Exception as e:
+            logger.debug(f"解码下载台标失败: {e}")
+            return None
+        finally:
+            buffer.close()
+
 
     @staticmethod
     def scale_logo_pixmap(pixmap, size=60):
@@ -71,6 +135,7 @@ class LogoCacheService(ThreadSafeQObject):
         self._meta_path = os.path.join(self._cache_dir, self.META_FILE)
         self._meta = self._load_meta()
         self._image_cache = OrderedDict()
+        self._scaled_cache = OrderedDict()
         self._negative_cache = {}
         self._lock = threading.Lock()
         self._network_manager = QNetworkAccessManager(self)
@@ -230,8 +295,9 @@ class LogoCacheService(ThreadSafeQObject):
                     logger.debug(f"淘汰过期台标失败: {e}")
                 return None
 
-            image = QImage()
-            if image.load(disk_path):
+            image = self._read_image_at_size(
+                disk_path, 4096, 4096, self.MAX_DECODE_PIXELS)
+            if image is not None:
                 with self._lock:
                     self._image_cache[url] = image
                     self._image_cache.move_to_end(url)
@@ -239,6 +305,43 @@ class LogoCacheService(ThreadSafeQObject):
                         self._image_cache.popitem(last=False)
                 return self._image_to_pixmap(image)
         return None
+
+    def get_scaled(self, url, width, height=None):
+        """按控件显示尺寸解码并缓存；同一 URL 的不同尺寸互不复用整图。"""
+        if not url:
+            return None
+        width = max(1, int(width or 60))
+        height = max(1, int(height or width))
+        cache_key = f'{url}|{width}x{height}'
+        with self._lock:
+            if url in self._negative_cache:
+                if time.time() - self._negative_cache[url] < self.NEGATIVE_CACHE_TTL:
+                    return None
+                del self._negative_cache[url]
+            if cache_key in self._scaled_cache:
+                self._scaled_cache.move_to_end(cache_key)
+                return QPixmap(self._scaled_cache[cache_key])
+
+        key = self._url_to_key(url)
+        disk_path = self._find_disk_path(key)
+        if not disk_path or not os.path.exists(disk_path):
+            return None
+        meta_entry = self._meta.get(key, {})
+        cached_at = self._cached_at(meta_entry, disk_path)
+        if time.time() - cached_at > self.DEFAULT_TTL:
+            return None
+
+        image = self._read_image_at_size(disk_path, width, height)
+        if image is None:
+            return None
+        pixmap = self._image_to_pixmap(image)
+        pixmap.setDevicePixelRatio(self._device_pixel_ratio())
+        with self._lock:
+            self._scaled_cache[cache_key] = pixmap
+            self._scaled_cache.move_to_end(cache_key)
+            while len(self._scaled_cache) > self.SCALED_CACHE_MAX:
+                self._scaled_cache.popitem(last=False)
+        return QPixmap(pixmap)
 
     def get_image(self, url):
         if not url:
@@ -315,6 +418,33 @@ class LogoCacheService(ThreadSafeQObject):
             self._save_meta()
         except Exception as e:
             logger.debug(f"缓存台标元数据失败: {e}")
+
+    def _store_raw(self, url, raw_data, ext, content_hash):
+        """把下载到的原始图片字节写盘；返回是否成功写入且可被 Qt 识别。"""
+        key = self._url_to_key(url)
+        new_ext = ext if ext else '.png'
+        disk_path = self._disk_path(key, new_ext)
+        old_path = self._find_disk_path(key)
+        try:
+            if old_path and old_path != disk_path and os.path.exists(old_path):
+                os.remove(old_path)
+            with open(disk_path, 'wb') as f:
+                f.write(raw_data)
+            self._meta[key] = {
+                'url': url,
+                'time': time.time(),
+                'ext': new_ext,
+                'content_hash': content_hash,
+            }
+            self._save_meta()
+            with self._lock:
+                self._image_cache.pop(url, None)
+                for cache_key in [k for k in self._scaled_cache if k.startswith(url + '|')]:
+                    self._scaled_cache.pop(cache_key, None)
+            return self._read_image_at_size(disk_path, 64, 64, self.PREVIEW_MAX_PIXELS) is not None
+        except Exception as e:
+            logger.debug(f"保存台标原图失败: {e}")
+            return False
 
     def mark_negative(self, url, reason=''):
         with self._lock:
@@ -406,11 +536,17 @@ class LogoCacheService(ThreadSafeQObject):
                 self._save_meta()
                 return
 
-            image = QImage()
-            if image.loadFromData(raw_data):
-                self.put(url, image, ext=ext, content_hash=content_hash)
-                pixmap = self._image_to_pixmap(image)
-                self.logo_loaded.emit(url, pixmap)
+            # 直接落盘原始字节，避免下载时解码整图；显示时再按控件尺寸解码
+            if self._store_raw(url, raw_data, ext, content_hash):
+                preview = self._read_image_from_bytes(
+                    raw_data, 320, 180, self.PREVIEW_MAX_PIXELS)
+                if preview is not None:
+                    with self._lock:
+                        self._image_cache[url] = preview
+                        self._image_cache.move_to_end(url)
+                        while len(self._image_cache) > self.MAX_CACHE_SIZE:
+                            self._image_cache.popitem(last=False)
+                    self.logo_loaded.emit(url, self._image_to_pixmap(preview))
             else:
                 self.mark_negative(url, f"QImage无法解析图片数据({len(raw_data)}字节)")
         except Exception as e:

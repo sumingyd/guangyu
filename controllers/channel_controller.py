@@ -513,7 +513,7 @@ class ChannelController:
                             icon_load_set.add(dedupe_key)
                         continue
                 if logo_url:
-                    cached = w._logo_cache_service.get(logo_url)
+                    cached = w._logo_cache_service.get_scaled(logo_url, 160, 90)
                     if cached:
                         dedupe_key = ('grid_logo', i)
                         if dedupe_key not in icon_load_set:
@@ -533,7 +533,10 @@ class ChannelController:
                 if logo_label.pixmap() and not logo_label.pixmap().isNull():
                     continue
                 if logo_url:
-                    cached = w._logo_cache_service.get(logo_url)
+                    cached = w._logo_cache_service.get_scaled(
+                        logo_url,
+                        logo_label.width() if logo_label.width() > 0 else 48,
+                        logo_label.height() if logo_label.height() > 0 else 34)
                     if cached:
                         dedupe_key = ('list_logo', i)
                         if dedupe_key not in icon_load_set:
@@ -575,15 +578,30 @@ class ChannelController:
         if logo:
             logo = logo.strip('`"\'')
 
-            cached = w._logo_cache_service.get(logo)
-            if cached:
-                scaled_pixmap = w._logo_cache_service.scale_logo_pixmap_to_fit(cached, w.channel_logo.width(), w.channel_logo.height())
-                w.channel_logo.setPixmap(scaled_pixmap)
+            svc = w._logo_cache_service
+            target_w = max(48, w.channel_logo.width())
+            target_h = max(34, w.channel_logo.height())
+            # 先用列表尺寸的低清图立刻出画，再在事件循环空闲时换成高清
+            small = svc.get_scaled(logo, 48, 34)
+            if small and not small.isNull():
+                w.channel_logo.setPixmap(small)
                 w.channel_logo.setText("")
+                if (target_w, target_h) != (48, 34):
+                    def _upgrade_logo(_logo=logo, _w=target_w, _h=target_h):
+                        high = svc.get_scaled(_logo, _w, _h)
+                        if high and not high.isNull():
+                            w.channel_logo.setPixmap(high)
+                    safe_single_shot(0, w, _upgrade_logo)
             else:
-                w._logo_cache_service.fetch_async(logo)
-                from utils.general_utils import set_default_channel_logo
-                set_default_channel_logo(w.channel_logo, w.channel_logo.width(), w.channel_logo.height())
+                cached = svc.get(logo)
+                if cached:
+                    scaled_pixmap = svc.scale_logo_pixmap_to_fit(cached, target_w, target_h)
+                    w.channel_logo.setPixmap(scaled_pixmap)
+                    w.channel_logo.setText("")
+                else:
+                    svc.fetch_async(logo)
+                    from utils.general_utils import set_default_channel_logo
+                    set_default_channel_logo(w.channel_logo, w.channel_logo.width(), w.channel_logo.height())
         else:
             ch_url = w.current_channel.get('url', '') if w.current_channel else ''
             from services.audio_visual_service import AUDIO_EXTENSIONS

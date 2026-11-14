@@ -3,6 +3,7 @@
 import ctypes
 import os
 import threading
+import time
 
 from PySide6.QtCore import QTimer
 from core.log_manager import global_logger as logger
@@ -51,6 +52,9 @@ class MpvPlayback:
 
     def __init__(self, facade):
         self._facade = facade
+        # 首帧耗时：从发起 loadfile 到首次拿到有效播放位置
+        self._load_started_at = 0.0
+        self._first_frame_ms = 0
 
     def _adjust_buffer_for_content(self):
         try:
@@ -1529,6 +1533,13 @@ class MpvPlayback:
             return -1
 
     def get_current_time(self):
+        pos_ms = self._read_position_ms()
+        # 首次拿到有效播放位置即视作首帧已出：记录从发起 loadfile 到出画的耗时
+        if pos_ms and pos_ms > 0 and not self._first_frame_ms and self._load_started_at:
+            self._first_frame_ms = max(0, int((time.monotonic() - self._load_started_at) * 1000))
+        return pos_ms
+
+    def _read_position_ms(self):
         try:
             time_seconds = self._facade._get_mpv_property_double('time-pos')
             if time_seconds is not None:
@@ -1712,6 +1723,8 @@ class MpvPlayback:
                 'frame_drop_count': get_int('frame-drop-count') or 0,
                 'decoder_frame_drop_count': get_int('decoder-frame-drop-count') or 0,
                 'mistimed_frame_count': get_int('mistimed-frame-count') or 0,
+                # 首帧耗时（毫秒）：本次 loadfile 到首次出画，排障时区分「源慢」与「渲染慢」
+                'first_frame_ms': self._first_frame_ms or 0,
                 'vo_delay': get_double('vo-delayed-frame-count') or 0,
                 'cache_size': get_double('demuxer-cache-state/total-bytes') or 0,
                 'cache_range_end': get_double('demuxer-cache-state/seeking-ranges/0/end') or 0,
@@ -1866,6 +1879,8 @@ class MpvPlayback:
             self._facade.logger.error(f"暂停播放失败: {str(e)}")
 
     def play(self, url, channel_name=None, program_duration=0, **kwargs):
+        self._load_started_at = time.monotonic()
+        self._first_frame_ms = 0
         try:
             if not self._facade._ensure_mpv_initialized():
                 self._facade.logger.error("mpv播放器初始化失败，无法播放")

@@ -189,7 +189,10 @@ class ThumbnailService(QObject):
                 self._running = True
                 need_start = True
         if need_start:
-            self._thread = threading.Thread(target=self._worker, daemon=True)
+            # 截图线程独立命名：台标走 Qt 网络、订阅/EPG 走 requests，
+            # 三者在日志里可区分，也避免缩略图生成挤占数据请求
+            self._thread = threading.Thread(
+                target=self._worker, daemon=True, name="thumbnail-worker")
             self._thread.start()
 
     def stop(self):

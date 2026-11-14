@@ -9,6 +9,8 @@ import coil.intercept.Interceptor
 import coil.memory.MemoryCache
 import coil.request.CachePolicy
 import coil.request.ImageResult
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import com.chaquo.python.android.PyApplication
 import com.iptv.scanner.editor.pro.data.GithubProxy
 import com.iptv.scanner.editor.pro.data.GithubProxyRuntime
@@ -139,10 +141,14 @@ class IptvApplication : PyApplication(), ImageLoaderFactory {
     // 台标预加载策略：通过 Coil 的 crossfade + 磁盘缓存实现。
     // 频道列表滚动时 AsyncImage 自动使用缓存，首次加载后后续命中缓存。
     // -----------------------------------------------------------------
+    @OptIn(ExperimentalCoroutinesApi::class)
     override fun newImageLoader(): ImageLoader {
         return ImageLoader.Builder(this)
             .crossfade(true)
             .crossfade(200)
+            // 图片下载/解码各用独立且限流的池，避免台标把订阅刷新、EPG 解析的 IO 挤满
+            .fetcherDispatcher(Dispatchers.IO.limitedParallelism(4))
+            .decoderDispatcher(Dispatchers.IO.limitedParallelism(2))
             // 台标等 GitHub 图片同样按用户选择的加速代理加载
             .components {
                 add(object : Interceptor {
