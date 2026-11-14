@@ -341,6 +341,10 @@ class ContextMenuController:
             return
         success = pc.set_track('sub', track_id)
         if success:
+            # 显式选轨代表“要看这个字幕”：必须同时打开可见性，
+            # 否则之前用 V 隐藏过字幕时会出现“选上了但画面不显示”
+            if hasattr(pc, 'set_sub_visibility'):
+                pc.set_sub_visibility(True)
             for act, tid, _ in actions:
                 act.setChecked(tid == track_id)
             tr = self._facade.window.language_manager.tr
@@ -471,6 +475,9 @@ class ContextMenuController:
         )
         if file_path:
             if pc.add_subtitle_file(file_path):
+                # 外挂字幕加载成功同样要保证可见，避免此前隐藏状态下“加载了但看不到”
+                if hasattr(pc, 'set_sub_visibility'):
+                    pc.set_sub_visibility(True)
                 self._facade.window._show_osd_feedback(f"{tr('ctx_subtitle', 'Subtitle')}: {file_path.split('/')[-1].split(chr(92))[-1]}")
 
     def _show_subtitle_style_dialog(self):
