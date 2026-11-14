@@ -66,13 +66,13 @@ class FileAssociationDialog(FloatingDialog):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(12)
 
-        title = QtWidgets.QLabel(tr("file_assoc_title", "选择要关联的文件格式"))
+        title = QtWidgets.QLabel(tr("file_assoc_title", "选择要加入「打开方式」的文件格式"))
         from ui.styles import AppStyles
         title_colors = AppStyles._get_colors()
         title.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {title_colors['window_text']};")
         layout.addWidget(title)
 
-        hint = QtWidgets.QLabel(tr("file_assoc_hint", '注册后，右键文件即可在"打开方式"中选择本程序'))
+        hint = QtWidgets.QLabel(tr("file_assoc_hint", '勾选后，这些格式会出现在右键菜单的「打开方式」里，不会改变系统默认程序'))
         from ui.styles import AppStyles
         hint_colors = AppStyles._get_colors()
         hint.setStyleSheet(f"font-size: 11px; color: {hint_colors['player_panel_hint']};")
@@ -143,16 +143,17 @@ class FileAssociationDialog(FloatingDialog):
                     cb.setChecked(False)
                     if state == 'stale':
                         stale_count += 1
-                        cb.setText(f"{ext} (需重新关联)")
+                        cb.setText(f"{ext} " + self._tr("file_assoc_stale_label", "（登记已失效）"))
                         cb.setToolTip(self._tr(
                             "file_assoc_stale_tip",
-                            "注册表里的打开命令已失效（程序路径不存在），勾选并保存可修复"))
+                            "登记里的打开命令已失效（程序路径不存在），勾选并保存可重新登记"))
             except Exception as e:
                 logger.debug(f"检查文件关联状态失败 {ext}: {e}")
         if stale_count:
-            self._stale_hint = QtWidgets.QLabel(self._tr(
-                "file_assoc_stale_hint",
-                f"检测到 {stale_count} 个扩展名的关联已失效，勾选后保存即可修复"))
+            self._stale_hint = QtWidgets.QLabel(
+                self._tr("file_assoc_stale_hint",
+                         "检测到 {count} 个扩展名的登记已失效（程序路径不存在），勾选后保存即可修复"
+                         ).format(count=stale_count))
             self._stale_hint.setWordWrap(True)
             self._stale_hint.setStyleSheet("font-size: 11px; color: #e6a23c;")
             layout = self.layout()
