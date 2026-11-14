@@ -309,10 +309,10 @@ private val OverlayGlass = GlassBase(
     fallbackSolid = Color(0xFF0D1016),
     blurRadius = 3.dp,
     // 视频是 SurfaceView（硬件合成层）无法被采样做背景模糊 —— 霜层必须足够厚。
-    // 压在视频上的玻璃按需求保持半透观感（不做背景采集），材质感交给边缘 bevel /
-    // 内顶高光 / 内阴影 / 投影，不靠把面板做"实"。
+    // 电视上菜单面板压在彩条/亮画面上时，原来的 0x66~0x5C 会让文字被画面盖住，
+    // 这里抬到约 80%：既压住透上来的画面，又保留一层可辨的玻璃层次。
     frostBrush = Brush.verticalGradient(
-        listOf(Color(0xA60D1016), Color(0x8F111922), Color(0x80131A20))
+        listOf(Color(0xCF0D1016), Color(0xC6111922), Color(0xCA131A20))
     ),
     glossBrush = Brush.verticalGradient(
         0f to Color.White.copy(alpha = 0.12f),
