@@ -944,16 +944,11 @@ class ContextMenuController:
             logger.error(f"打开断点续播列表对话框失败: {e}")
 
     def _show_network_enhance_dialog(self):
-        """打开网络流媒体增强对话框"""
+        """定位到设置「网络 > 流媒体请求」（代理/Referer/请求头已并入设置页）"""
         try:
-            from ui.dialogs.network_enhance_dialog import NetworkEnhanceDialog
-            if not hasattr(self._facade.window, '_network_enhance_dialog') or not self._facade.window._network_enhance_dialog:
-                self._facade.window._network_enhance_dialog = NetworkEnhanceDialog(self._facade.window)
-            self._facade.window._network_enhance_dialog.show()
-            self._facade.window._network_enhance_dialog.raise_()
-            self._facade.window._network_enhance_dialog.activateWindow()
+            self._facade.window.player_settings('network_stream')
         except Exception as e:
-            logger.error(f"打开网络流媒体增强对话框失败: {e}")
+            logger.error(f"打开网络流媒体设置失败: {e}")
 
     def _show_burst_screenshot_dialog(self):
         """打开连拍截图对话框"""

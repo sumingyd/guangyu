@@ -96,6 +96,7 @@
     <string name="settings_group_general">General</string>
     <string name="settings_group_playback">Playback</string>
     <string name="settings_group_network">Network</string>
+    <string name="settings_log_level">Log level</string>
     <string name="settings_playback">Playback</string>
     <string name="settings_player">Player Settings</string>
     <string name="settings_player_desc">%1$s Config%2$s</string>

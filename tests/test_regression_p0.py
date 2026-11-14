@@ -809,3 +809,122 @@ class TestChannelListVirtualization:
         assert widget is not None
         bar = widget.findChild(QualityBarWidget, 'quality_bar')
         assert bar is not None and bar._score == 73.5
+
+class TestSettingsConsolidation:
+    """设置合并：读改存、键合并不互相覆盖、原入口定位。"""
+
+    @staticmethod
+    def _app():
+        from PySide6.QtWidgets import QApplication
+        return QApplication.instance() or QApplication([])
+
+    @staticmethod
+    def _tr(key, default=None):
+        return default if default is not None else key
+
+    def _host(self):
+        from unittest.mock import MagicMock
+        host = MagicMock()
+        host.language_manager.tr = self._tr
+        host.language_manager.available_languages = {
+            "zh": {"display_name": "中文"},
+            "en": {"display_name": "English"},
+        }
+        host.language_manager.current_language = "zh"
+        host.config.load_playback_settings.return_value = {
+            "http_proxy": "http://127.0.0.1:7890",
+            "http_referer": "https://old.example/",
+            "http_headers": "X-Test: 1",
+            "queue_mode": "none",
+            "auto_skip_intro": False,
+            "skip_intro_seconds": 0.0,
+            "auto_skip_outro": False,
+            "skip_outro_seconds": 0.0,
+            "user_agent": "keep-me",
+        }
+        host.config.load_video_eq.return_value = {
+            "brightness": 10, "contrast": 5, "saturation": 0, "hue": 0,
+            "gamma": 0, "sharpness": 0.2, "video_rotate": 90,
+            "video_flip": "horizontal", "reset_on_new_file": True,
+            "motion_comp": "on",
+        }
+        host.config.load_audio_eq.return_value = {
+            "audio_delay": 0.2, "audio_pitch": 1.1, "audio_channels": "2.0",
+            "eq": [1.0] * 10, "audio_device": "dev",
+        }
+        host.config.load_subtitle_style.return_value = {
+            "font_size": 60, "border_size": 4, "shadow_offset": 2,
+            "bold": True, "italic": False, "sub_delay": 0.5,
+            "sub_scale": 1.2, "sub_pos": 80, "sub_visibility": False,
+            "color": "#FFFFFFFF",
+        }
+        host.player_controller = None
+        return host
+
+    def test_network_stream_reads_and_extracts(self):
+        self._app()
+        from controllers.settings_file_ops import SettingsFileOperations
+        from PySide6.QtWidgets import QLineEdit, QPlainTextEdit
+
+        host = self._host()
+        ops = SettingsFileOperations(host)
+        group = ops._build_network_stream_section(self._tr, host.config.load_playback_settings())
+        assert group.findChild(QLineEdit, "http_proxy_edit").text() == "http://127.0.0.1:7890"
+        assert group.findChild(QLineEdit, "http_referer_edit").text() == "https://old.example/"
+        group.findChild(QLineEdit, "http_proxy_edit").setText("http://127.0.0.1:8080")
+        group.findChild(QPlainTextEdit, "http_headers_edit").setPlainText("A: 1\nB: 2")
+        extracted = ops._extract_playback_settings(group)
+        assert extracted["http_proxy"] == "http://127.0.0.1:8080"
+        assert extracted["http_headers"] == "A: 1\nB: 2"
+
+    def test_apply_playback_settings_keeps_unmanaged_keys(self):
+        from controllers.settings_file_ops import SettingsFileOperations
+
+        host = self._host()
+        ops = SettingsFileOperations(host)
+        ops._apply_playback_settings({"http_proxy": "http://127.0.0.1:8080"})
+        saved = host.config.save_playback_settings.call_args[0][0]
+        assert saved["http_proxy"] == "http://127.0.0.1:8080"
+        assert saved["user_agent"] == "keep-me"
+
+    def test_playback_extras_reads_and_saves_merged_media(self):
+        self._app()
+        from controllers.settings_file_ops import SettingsFileOperations
+        from PySide6.QtWidgets import QSlider
+
+        host = self._host()
+        ops = SettingsFileOperations(host)
+        group = ops._build_playback_extras_section(self._tr, host.config.load_playback_settings())
+        group.findChild(QSlider, "video_eq_brightness_slider").setValue(33)
+        group.findChild(QSlider, "audio_eq_delay_slider").setValue(50)
+        ops._save_detailed_media_settings(group)
+
+        video_cfg = host.config.save_video_eq.call_args[0][0]
+        assert video_cfg["brightness"] == 33
+        assert video_cfg["motion_comp"] == "on"
+        audio_cfg = host.config.save_audio_eq.call_args[0][0]
+        assert audio_cfg["audio_delay"] == 0.5
+        assert audio_cfg["audio_device"] == "dev"
+
+    def test_general_app_saves_language_and_log_level(self):
+        self._app()
+        from controllers.settings_file_ops import SettingsFileOperations
+        from PySide6.QtWidgets import QComboBox, QWidget
+
+        host = self._host()
+        ops = SettingsFileOperations(host)
+        ops.set_language = MagicMock()
+        group = ops._build_general_app_section(self._tr)
+        group.findChild(QComboBox, "language_combo").setCurrentIndex(1)
+        group.findChild(QComboBox, "log_level_combo").setCurrentIndex(0)
+        ops._save_general_app_settings(group)
+        ops.set_language.assert_called_once_with("en")
+        host.config.set_value.assert_any_call("UI", "log_level", "DEBUG")
+
+    def test_network_enhance_entry_locates_network_stream(self):
+        from controllers.context_menu_controller import ContextMenuController
+        facade = MagicMock()
+        ctrl = object.__new__(ContextMenuController)
+        ctrl._facade = facade
+        ctrl._show_network_enhance_dialog()
+        facade.window.player_settings.assert_called_once_with("network_stream")

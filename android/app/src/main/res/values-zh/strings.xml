@@ -96,6 +96,7 @@
     <string name="settings_group_general">常规</string>
     <string name="settings_group_playback">播放设置</string>
     <string name="settings_group_network">网络</string>
+    <string name="settings_log_level">日志等级</string>
     <string name="settings_playback">播放</string>
     <string name="settings_player">播放器设置</string>
     <string name="settings_player_desc">%1$s 配置%2$s</string>

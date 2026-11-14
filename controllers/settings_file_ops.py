@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QApplication,
     QCheckBox,
+    QSlider,
     QDialog,
     QVBoxLayout,
     QHBoxLayout,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QLineEdit,
     QSpinBox,
+    QPlainTextEdit,
     QGroupBox,
     QListWidget,
     QWidget,
@@ -201,6 +203,7 @@ class SettingsFileOperations:
         general_content_layout = QVBoxLayout(general_content)
         general_content_layout.setContentsMargins(0, 0, 0, 0)
         screensaver_section = self._build_screensaver_section(tr)
+        general_content_layout.addWidget(self._build_general_app_section(tr))
         general_content_layout.addWidget(self._build_close_behavior_section(tr))
         general_content_layout.addWidget(screensaver_section)
         general_content_layout.addStretch()
@@ -222,6 +225,7 @@ class SettingsFileOperations:
         playback_content_layout = QVBoxLayout(playback_content)
         playback_content_layout.setContentsMargins(0, 0, 0, 0)
         playback_content_layout.addWidget(self._build_protocol_section(tr, playback_settings))
+        playback_content_layout.addWidget(self._build_playback_extras_section(tr, playback_settings))
         playback_content_layout.addStretch()
 
         playback_scroll = QScrollArea()
@@ -241,6 +245,8 @@ class SettingsFileOperations:
         network_content_layout = QVBoxLayout(network_content)
         network_content_layout.setContentsMargins(0, 0, 0, 0)
         network_content_layout.addWidget(self._build_connection_section(tr, playback_settings))
+        stream_section = self._build_network_stream_section(tr, playback_settings)
+        network_content_layout.addWidget(stream_section)
         network_content_layout.addWidget(self._build_github_proxy_section(tr))
         server_section = self._build_server_section(tr)
         network_content_layout.addWidget(server_section)
@@ -354,15 +360,16 @@ class SettingsFileOperations:
 
             QTimer.singleShot(0, _reveal_screensaver)
 
-        elif focus == 'network':
-            # HTTP 服务设置已并入「网络」页签（索引 2），入口直接定位到服务分组
+        elif focus in ('network', 'network_stream'):
+            # HTTP 服务 / 流媒体请求设置已并入「网络」页签（索引 2）
             tab_widget.setCurrentIndex(2)
+            target = stream_section if focus == 'network_stream' else server_section
 
-            def _reveal_server():
+            def _reveal_target():
                 if dialog.isVisible():
-                    network_scroll.ensureWidgetVisible(server_section, 0, 0)
+                    network_scroll.ensureWidgetVisible(target, 0, 0)
 
-            QTimer.singleShot(0, _reveal_server)
+            QTimer.singleShot(0, _reveal_target)
 
         if self.window._center_dialog_on_screen:
             self.window._center_dialog_on_screen(dialog)
@@ -431,10 +438,26 @@ class SettingsFileOperations:
         layout.addRow(QLabel(tr("font_size_label", "字体大小:")), tier_combo)
         layout.addRow(QLabel(tr("ui_scale_label", "界面缩放:")), scale_combo)
 
+        theme_manager = get_theme_manager()
+        color_combo = QComboBox()
+        color_combo.setObjectName("color_mode_combo")
+        for mode in theme_manager.get_available_color_modes():
+            color_combo.addItem(tr(f"color_mode_{mode}", mode), mode)
+        color_combo.setCurrentIndex(max(0, color_combo.findData(theme_manager.get_color_mode())))
+        layout.addRow(QLabel(tr("color_mode_label", "颜色模式:")), color_combo)
+
+        style_combo = QComboBox()
+        style_combo.setObjectName("visual_style_combo")
+        for style in theme_manager.get_available_visual_styles():
+            style_combo.addItem(tr(f"visual_style_{style}", style), style)
+        style_combo.setCurrentIndex(max(0, style_combo.findData(theme_manager.get_visual_style())))
+        layout.addRow(QLabel(tr("visual_style_label", "视觉风格:")), style_combo)
+
         hint = QLabel(tr(
             "appearance_hint",
             "界面缩放会等比放大文字、图标与间距；字体大小只调整文字，"
-            "适合只想看清文字、不想减少可视内容的情况。修改后立即生效。"
+            "适合只想看清文字、不想减少可视内容的情况。修改后立即生效；"
+            "颜色模式与视觉风格点「保存」后生效。"
         ))
         hint.setWordWrap(True)
         hint.setStyleSheet(AppStyles.hint_label_style())
@@ -464,6 +487,59 @@ class SettingsFileOperations:
         except Exception as e:
             logger.debug(f"回滚字号/缩放设置失败: {e}")
         dialog.close()
+
+    def _build_general_app_section(self, tr):
+        """常规页的应用级设置：界面语言与日志等级。"""
+        group = QGroupBox(tr("general_app_settings", "应用"))
+        layout = QFormLayout()
+
+        lang_combo = QComboBox()
+        lang_combo.setObjectName("language_combo")
+        lm = getattr(self.window, 'language_manager', None)
+        languages = getattr(lm, 'available_languages', {}) if lm is not None else {}
+        for code in ('zh', 'en'):
+            if code in languages:
+                lang_combo.addItem(languages[code].get('display_name', code), code)
+        for code, info in (languages or {}).items():
+            if code in ('zh', 'en'):
+                continue
+            lang_combo.addItem(info.get('display_name', code), code)
+        current_lang = getattr(lm, 'current_language', 'zh') if lm is not None else 'zh'
+        idx = lang_combo.findData(current_lang)
+        if idx >= 0:
+            lang_combo.setCurrentIndex(idx)
+        layout.addRow(tr("language_label", "界面语言:"), lang_combo)
+
+        log_combo = QComboBox()
+        log_combo.setObjectName("log_level_combo")
+        log_levels = [
+            ('DEBUG', tr("log_level_debug", "调试")),
+            ('INFO', tr("log_level_info", "信息")),
+            ('WARNING', tr("log_level_warning", "警告")),
+            ('ERROR', tr("log_level_error", "错误")),
+        ]
+        for name, label in log_levels:
+            log_combo.addItem(label, name)
+        raw_level = ''
+        if self.window.config:
+            raw_level = str(self.window.config.get_value('UI', 'log_level', 'INFO') or 'INFO')
+        current_level = raw_level.upper()
+        idx = log_combo.findData(current_level)
+        if idx < 0:
+            idx = log_combo.findData('INFO')
+        log_combo.setCurrentIndex(max(0, idx))
+        layout.addRow(tr("log_level_label", "日志等级:"), log_combo)
+
+        hint = QLabel(tr(
+            "general_app_hint",
+            "日志等级只影响日志文件与终端输出，普通使用保持「信息」即可。"
+        ))
+        hint.setWordWrap(True)
+        hint.setStyleSheet(AppStyles.hint_label_style())
+        layout.addRow(hint)
+
+        group.setLayout(layout)
+        return group
 
     def _build_close_behavior_section(self, tr):
         group = QGroupBox(tr("close_behavior_settings", "关闭行为"))
@@ -592,6 +668,49 @@ class SettingsFileOperations:
                 selected_idx = i
         timeout_combo.setCurrentIndex(selected_idx)
         layout.addRow(tr("network_timeout_colon", "Network Timeout:"), timeout_combo)
+
+        group.setLayout(layout)
+        return group
+
+    def _build_network_stream_section(self, tr, playback_settings):
+        """流媒体请求参数：HTTP 代理 / Referer / 自定义请求头。
+
+        原「网络增强」对话框的三项已完整并入本分组，配置键沿用
+        Playback.http_proxy / http_referer / http_headers。
+        """
+        group = QGroupBox(tr("network_stream_settings", "流媒体请求"))
+        layout = QFormLayout()
+
+        proxy_edit = QLineEdit()
+        proxy_edit.setObjectName("http_proxy_edit")
+        proxy_edit.setPlaceholderText("http://127.0.0.1:8080")
+        proxy_edit.setText(playback_settings.get('http_proxy', '') or '')
+        layout.addRow(tr("network_enhance_proxy", "代理 URL"), proxy_edit)
+
+        referer_edit = QLineEdit()
+        referer_edit.setObjectName("http_referer_edit")
+        referer_edit.setPlaceholderText("https://example.com/")
+        referer_edit.setText(playback_settings.get('http_referer', '') or '')
+        layout.addRow(tr("network_enhance_referer", "Referer"), referer_edit)
+
+        headers_edit = QPlainTextEdit()
+        headers_edit.setObjectName("http_headers_edit")
+        headers_edit.setPlaceholderText("Key: Value\nKey2: Value2")
+        headers_edit.setFixedHeight(96)
+        headers_edit.setPlainText(playback_settings.get('http_headers', '') or '')
+        layout.addRow(tr("network_enhance_group_headers", "HTTP 请求头"), headers_edit)
+
+        hint = QLabel(tr(
+            "network_stream_hint",
+            "代理仅支持 HTTP/HTTPS（http:// 或 https:// 开头），由 mpv/FFmpeg 的 "
+            "http-proxy 下发；SOCKS5 不被 mpv 的 HTTP 协议栈支持，填写 socks5:// "
+            "地址不会生效。只有 SOCKS5 时，请在本机用 gost/Privoxy 等把 SOCKS5 转为 "
+            "本地 HTTP 端口后再填 http://127.0.0.1:端口。Referer 用于绕过防盗链，"
+            "请求头每行一个 Key: Value。"
+        ))
+        hint.setWordWrap(True)
+        hint.setStyleSheet(AppStyles.hint_label_style())
+        layout.addRow(hint)
 
         group.setLayout(layout)
         return group
@@ -1033,6 +1152,304 @@ class SettingsFileOperations:
         group.setLayout(layout)
         return group
 
+    def _build_playback_extras_section(self, tr, playback_settings):
+        """播放设置页的其余分组：循环模式、片头片尾跳过、视频/音频/字幕调整。
+
+        图像/音频/字幕参数与各自的独立对话框共用同一份配置，保存时先读取
+        现有字典再合并本次字段，避免互相覆盖。
+        """
+        group = QGroupBox(tr("playback_extras_settings", "播放行为"))
+        layout = QFormLayout()
+
+        queue_combo = QComboBox()
+        queue_combo.setObjectName("queue_mode_combo")
+        queue_items = [
+            ('none', tr("playback_queue_mode_none", "不循环")),
+            ('single', tr("playback_queue_mode_single", "单文件循环")),
+            ('all', tr("playback_queue_mode_all", "列表循环")),
+            ('shuffle', tr("playback_queue_mode_shuffle", "随机播放")),
+        ]
+        for value, label in queue_items:
+            queue_combo.addItem(label, value)
+        queue_combo.setCurrentIndex(
+            max(0, queue_combo.findData(playback_settings.get('queue_mode', 'none'))))
+        layout.addRow(tr("queue_mode_label", "循环模式:"), queue_combo)
+
+        def _skip_row(enable_name, seconds_name, key_enable, key_seconds):
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            check = QCheckBox(tr("skip_enabled", "自动跳过"))
+            check.setObjectName(enable_name)
+            check.setChecked(bool(playback_settings.get(key_enable, False)))
+            spin = QSpinBox()
+            spin.setObjectName(seconds_name)
+            spin.setRange(0, 600)
+            spin.setSuffix(tr("seconds_suffix", " 秒"))
+            spin.setMinimumHeight(28)
+            try:
+                spin.setValue(int(round(float(playback_settings.get(key_seconds, 0.0) or 0.0))))
+            except (TypeError, ValueError):
+                spin.setValue(0)
+            spin.setEnabled(check.isChecked())
+            check.toggled.connect(spin.setEnabled)
+            row_layout.addWidget(check)
+            row_layout.addWidget(spin, 1)
+            return row
+
+        layout.addRow(tr("skip_intro_label", "跳过片头:"),
+                      _skip_row("auto_skip_intro_check", "skip_intro_seconds_spin",
+                                "auto_skip_intro", "skip_intro_seconds"))
+        layout.addRow(tr("skip_outro_label", "跳过片尾:"),
+                      _skip_row("auto_skip_outro_check", "skip_outro_seconds_spin",
+                                "auto_skip_outro", "skip_outro_seconds"))
+
+        # ---- 视频图像调整（核心参数） ----
+        eq_cfg = self.window.config.load_video_eq() if self.window.config else {}
+        video_box = QGroupBox(tr("video_eq_group_image", "图像参数"))
+        video_layout = QFormLayout(video_box)
+        for key in ('brightness', 'contrast', 'saturation', 'hue', 'gamma'):
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setObjectName(f"video_eq_{key}_slider")
+            slider.setRange(-100, 100)
+            try:
+                value = int(eq_cfg.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                value = 0
+            slider.setValue(max(-100, min(100, value)))
+            value_label = QLabel(str(slider.value()))
+            value_label.setMinimumWidth(36)
+            slider.valueChanged.connect(lambda v, lbl=value_label: lbl.setText(str(v)))
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.addWidget(slider, 1)
+            row_layout.addWidget(value_label)
+            video_layout.addRow(tr(f"video_eq_{key}", key.capitalize()), row)
+
+        sharp_slider = QSlider(Qt.Orientation.Horizontal)
+        sharp_slider.setObjectName("video_eq_sharpness_slider")
+        sharp_slider.setRange(-100, 100)
+        try:
+            sharp_value = int(round(float(eq_cfg.get('sharpness', 0.0) or 0.0) * 100))
+        except (TypeError, ValueError):
+            sharp_value = 0
+        sharp_slider.setValue(max(-100, min(100, sharp_value)))
+        sharp_label = QLabel(f"{sharp_slider.value() / 100.0:.2f}")
+        sharp_label.setMinimumWidth(42)
+        sharp_slider.valueChanged.connect(
+            lambda v, lbl=sharp_label: lbl.setText(f"{v / 100.0:.2f}"))
+        sharp_row = QWidget()
+        sharp_layout = QHBoxLayout(sharp_row)
+        sharp_layout.setContentsMargins(0, 0, 0, 0)
+        sharp_layout.addWidget(sharp_slider, 1)
+        sharp_layout.addWidget(sharp_label)
+        video_layout.addRow(tr("video_eq_sharpness", "锐度"), sharp_row)
+
+        rotate_combo = QComboBox()
+        rotate_combo.setObjectName("video_eq_rotate_combo")
+        for label, value in [('0°', 0), ('90°', 90), ('180°', 180), ('270°', 270)]:
+            rotate_combo.addItem(label, value)
+        try:
+            rotate_value = int(eq_cfg.get('video_rotate', 0) or 0)
+        except (TypeError, ValueError):
+            rotate_value = 0
+        rotate_combo.setCurrentIndex(max(0, rotate_combo.findData(rotate_value)))
+        video_layout.addRow(tr("video_eq_rotate", "旋转"), rotate_combo)
+
+        flip_combo = QComboBox()
+        flip_combo.setObjectName("video_eq_flip_combo")
+        for label, value in [
+            (tr("video_eq_flip_none", "无"), ''),
+            (tr("video_eq_flip_horizontal", "水平翻转"), 'horizontal'),
+            (tr("video_eq_flip_vertical", "垂直翻转"), 'vertical'),
+            (tr("video_eq_flip_both", "双向翻转"), 'both'),
+        ]:
+            flip_combo.addItem(label, value)
+        flip_combo.setCurrentIndex(
+            max(0, flip_combo.findData(eq_cfg.get('video_flip', '') or '')))
+        video_layout.addRow(tr("video_eq_flip", "镜像翻转"), flip_combo)
+
+        reset_check = QCheckBox(tr("video_eq_reset_on_new_file", "切换文件时自动重置"))
+        reset_check.setObjectName("video_eq_reset_check")
+        reset_check.setChecked(bool(eq_cfg.get('reset_on_new_file', False)))
+        video_layout.addRow('', reset_check)
+        layout.addRow(video_box)
+
+        # ---- 音频调整（核心参数） ----
+        audio_cfg = self.window.config.load_audio_eq() if self.window.config else {}
+        audio_box = QGroupBox(tr("audio_eq_group_delay", "音频调整"))
+        audio_layout = QFormLayout(audio_box)
+
+        delay_slider = QSlider(Qt.Orientation.Horizontal)
+        delay_slider.setObjectName("audio_eq_delay_slider")
+        delay_slider.setRange(-1000, 1000)
+        try:
+            delay_value = int(round(float(audio_cfg.get('audio_delay', 0.0) or 0.0) * 100))
+        except (TypeError, ValueError):
+            delay_value = 0
+        delay_slider.setValue(max(-1000, min(1000, delay_value)))
+        delay_label = QLabel(f"{delay_slider.value() / 100.0:+.3f}s")
+        delay_label.setMinimumWidth(62)
+        delay_slider.valueChanged.connect(
+            lambda v, lbl=delay_label: lbl.setText(f"{v / 100.0:+.3f}s"))
+        delay_row = QWidget()
+        delay_layout = QHBoxLayout(delay_row)
+        delay_layout.setContentsMargins(0, 0, 0, 0)
+        delay_layout.addWidget(delay_slider, 1)
+        delay_layout.addWidget(delay_label)
+        audio_layout.addRow(tr("audio_eq_delay", "音频延迟"), delay_row)
+
+        pitch_slider = QSlider(Qt.Orientation.Horizontal)
+        pitch_slider.setObjectName("audio_eq_pitch_slider")
+        pitch_slider.setRange(0, 200)
+        try:
+            pitch_value = int(round(float(audio_cfg.get('audio_pitch', 1.0) or 1.0) * 100))
+        except (TypeError, ValueError):
+            pitch_value = 100
+        pitch_slider.setValue(max(0, min(200, pitch_value)))
+        pitch_label = QLabel(f"{pitch_slider.value() / 100.0:.2f}")
+        pitch_label.setMinimumWidth(40)
+        pitch_slider.valueChanged.connect(
+            lambda v, lbl=pitch_label: lbl.setText(f"{v / 100.0:.2f}"))
+        pitch_row = QWidget()
+        pitch_layout = QHBoxLayout(pitch_row)
+        pitch_layout.setContentsMargins(0, 0, 0, 0)
+        pitch_layout.addWidget(pitch_slider, 1)
+        pitch_layout.addWidget(pitch_label)
+        audio_layout.addRow(tr("audio_eq_pitch", "音调"), pitch_row)
+
+        channels_combo = QComboBox()
+        channels_combo.setObjectName("audio_eq_channels_combo")
+        for value, label in [
+            ('auto', 'Auto'), ('mono', 'Mono'), ('1.0', '1.0'), ('2.0', '2.0'),
+            ('2.1', '2.1'), ('3.0', '3.0'), ('4.0', '4.0'), ('5.0', '5.0'),
+            ('5.1', '5.1'), ('6.0', '6.0'), ('6.1', '6.1'), ('7.0', '7.0'),
+            ('7.1', '7.1'),
+        ]:
+            channels_combo.addItem(label, value)
+        channels_combo.setCurrentIndex(
+            max(0, channels_combo.findData(audio_cfg.get('audio_channels', 'auto') or 'auto')))
+        audio_layout.addRow(tr("audio_eq_channels", "声道"), channels_combo)
+
+        eq_bands = audio_cfg.get('eq', [0.0] * 10)
+        if not isinstance(eq_bands, list) or len(eq_bands) != 10:
+            eq_bands = [0.0] * 10
+        band_row = QWidget()
+        band_layout = QHBoxLayout(band_row)
+        band_layout.setContentsMargins(0, 0, 0, 0)
+        band_layout.setSpacing(4)
+        for i in range(10):
+            slider = QSlider(Qt.Orientation.Vertical)
+            slider.setObjectName(f"audio_eq_band_{i}_slider")
+            slider.setRange(-12, 12)
+            slider.setFixedHeight(72)
+            try:
+                band_value = int(round(float(eq_bands[i])))
+            except (TypeError, ValueError):
+                band_value = 0
+            slider.setValue(max(-12, min(12, band_value)))
+            slider.setToolTip(tr("audio_eq_band_tip", "第 {n} 段").format(n=i + 1))
+            band_layout.addWidget(slider, 1)
+        audio_layout.addRow(tr("audio_eq_group_equalizer", "均衡器"), band_row)
+        layout.addRow(audio_box)
+
+        # ---- 字幕样式（核心参数） ----
+        sub_cfg = self.window.config.load_subtitle_style() if self.window.config else {}
+        sub_box = QGroupBox(tr("sub_style_group", "字幕样式"))
+        sub_layout = QFormLayout(sub_box)
+
+        sub_font_size = QSpinBox()
+        sub_font_size.setObjectName("sub_font_size_spin")
+        sub_font_size.setRange(8, 200)
+        sub_font_size.setValue(int(sub_cfg.get('font_size', 55) or 55))
+        sub_layout.addRow(tr("sub_font_size", "字体大小"), sub_font_size)
+
+        sub_border_size = QSpinBox()
+        sub_border_size.setObjectName("sub_border_size_spin")
+        sub_border_size.setRange(0, 20)
+        sub_border_size.setValue(int(sub_cfg.get('border_size', 3) or 0))
+        sub_layout.addRow(tr("sub_border_size", "边框粗细"), sub_border_size)
+
+        sub_shadow_offset = QSpinBox()
+        sub_shadow_offset.setObjectName("sub_shadow_offset_spin")
+        sub_shadow_offset.setRange(0, 20)
+        sub_shadow_offset.setValue(int(sub_cfg.get('shadow_offset', 1) or 0))
+        sub_layout.addRow(tr("sub_shadow_offset", "阴影偏移"), sub_shadow_offset)
+
+        sub_font_style = QWidget()
+        sub_font_style_layout = QHBoxLayout(sub_font_style)
+        sub_font_style_layout.setContentsMargins(0, 0, 0, 0)
+        bold_check = QCheckBox(tr("sub_bold", "加粗"))
+        bold_check.setObjectName("sub_bold_check")
+        bold_check.setChecked(bool(sub_cfg.get('bold', False)))
+        italic_check = QCheckBox(tr("sub_italic", "斜体"))
+        italic_check.setObjectName("sub_italic_check")
+        italic_check.setChecked(bool(sub_cfg.get('italic', False)))
+        sub_font_style_layout.addWidget(bold_check)
+        sub_font_style_layout.addWidget(italic_check)
+        sub_font_style_layout.addStretch()
+        sub_layout.addRow(tr("sub_font_style", "字形"), sub_font_style)
+
+        sub_delay = QSpinBox()
+        sub_delay.setObjectName("sub_delay_spin")
+        sub_delay.setRange(-300000, 300000)
+        sub_delay.setSingleStep(100)
+        sub_delay.setSuffix(' ms')
+        sub_delay.setMinimumHeight(28)
+        try:
+            delay_ms = int(round(float(sub_cfg.get('sub_delay', 0.0) or 0.0) * 1000))
+        except (TypeError, ValueError):
+            delay_ms = 0
+        sub_delay.setValue(max(-300000, min(300000, delay_ms)))
+        sub_layout.addRow(tr("sub_delay", "字幕延迟"), sub_delay)
+
+        sub_scale = QSpinBox()
+        sub_scale.setObjectName("sub_scale_spin")
+        sub_scale.setRange(10, 1000)
+        sub_scale.setSingleStep(10)
+        sub_scale.setSuffix(' %')
+        sub_scale.setMinimumHeight(28)
+        try:
+            scale_percent = int(round(float(sub_cfg.get('sub_scale', 1.0) or 1.0) * 100))
+        except (TypeError, ValueError):
+            scale_percent = 100
+        sub_scale.setValue(max(10, min(1000, scale_percent)))
+        sub_layout.addRow(tr("sub_scale", "字幕缩放"), sub_scale)
+
+        sub_pos = QSlider(Qt.Orientation.Horizontal)
+        sub_pos.setObjectName("sub_pos_slider")
+        sub_pos.setRange(0, 100)
+        sub_pos.setValue(int(sub_cfg.get('sub_pos', 100) or 0))
+        sub_pos_label = QLabel(str(sub_pos.value()))
+        sub_pos_label.setMinimumWidth(36)
+        sub_pos.valueChanged.connect(
+            lambda v, lbl=sub_pos_label: lbl.setText(str(v)))
+        sub_pos_row = QWidget()
+        sub_pos_layout = QHBoxLayout(sub_pos_row)
+        sub_pos_layout.setContentsMargins(0, 0, 0, 0)
+        sub_pos_layout.addWidget(sub_pos, 1)
+        sub_pos_layout.addWidget(sub_pos_label)
+        sub_layout.addRow(tr("sub_pos", "字幕位置"), sub_pos_row)
+
+        sub_visibility = QCheckBox(tr("sub_visibility", "显示字幕"))
+        sub_visibility.setObjectName("sub_visibility_check")
+        sub_visibility.setChecked(bool(sub_cfg.get('sub_visibility', True)))
+        sub_layout.addRow('', sub_visibility)
+        layout.addRow(sub_box)
+
+        hint = QLabel(tr(
+            "playback_extras_hint",
+            "图像、音频与字幕的完整参数（运动补偿、着色器、VU 电平、颜色与预设等）"
+            "仍在播放页右键的同名对话框中调整，两处共用同一份配置。"
+        ))
+        hint.setWordWrap(True)
+        hint.setStyleSheet(AppStyles.hint_label_style())
+        layout.addRow(hint)
+
+        group.setLayout(layout)
+        return group
+
     @staticmethod
     def _add_form_row_with_desc(layout, label_text, widget, desc_text):
         """在 QFormLayout 中添加一行：label + (widget + 灰色说明文字)。
@@ -1200,6 +1617,79 @@ class SettingsFileOperations:
         if check is not None:
             check.setChecked(True)
 
+        # 常规：语言与日志等级
+        pick('language_combo', 'zh')
+        pick('log_level_combo', 'INFO')
+        # 外观：颜色模式与视觉风格
+        pick('color_mode_combo', 'dark')
+        pick('visual_style_combo', 'flat')
+        # 网络：流媒体请求
+        for edit_name in ('http_proxy_edit', 'http_referer_edit'):
+            edit = dialog.findChild(QLineEdit, edit_name)
+            if edit is not None:
+                edit.clear()
+        edit = dialog.findChild(QPlainTextEdit, "http_headers_edit")
+        if edit is not None:
+            edit.clear()
+        # 播放行为
+        pick('queue_mode_combo', 'none')
+        for check_name in ('auto_skip_intro_check', 'auto_skip_outro_check',
+                           'video_eq_reset_check', 'sub_bold_check', 'sub_italic_check'):
+            check = dialog.findChild(QCheckBox, check_name)
+            if check is not None:
+                check.setChecked(False)
+        for spin_name in ('skip_intro_seconds_spin', 'skip_outro_seconds_spin'):
+            spin = dialog.findChild(QSpinBox, spin_name)
+            if spin is not None:
+                spin.setValue(0)
+        check = dialog.findChild(QCheckBox, "sub_visibility_check")
+        if check is not None:
+            check.setChecked(True)
+
+        # 播放页：视频/音频/字幕参数
+        for key in ('brightness', 'contrast', 'saturation', 'hue', 'gamma'):
+            slider = dialog.findChild(QSlider, f"video_eq_{key}_slider")
+            if slider is not None:
+                slider.setValue(0)
+        slider = dialog.findChild(QSlider, "video_eq_sharpness_slider")
+        if slider is not None:
+            slider.setValue(0)
+        pick('video_eq_rotate_combo', 0)
+        pick('video_eq_flip_combo', '')
+        slider = dialog.findChild(QSlider, "audio_eq_delay_slider")
+        if slider is not None:
+            slider.setValue(0)
+        slider = dialog.findChild(QSlider, "audio_eq_pitch_slider")
+        if slider is not None:
+            slider.setValue(100)
+        pick('audio_eq_channels_combo', 'auto')
+        for i in range(10):
+            slider = dialog.findChild(QSlider, f"audio_eq_band_{i}_slider")
+            if slider is not None:
+                slider.setValue(0)
+
+        from core.stores.video_eq_store import VideoEqStore
+
+        sub_defaults = VideoEqStore.SUBTITLE_STYLE_DEFAULTS
+        spin = dialog.findChild(QSpinBox, "sub_font_size_spin")
+        if spin is not None:
+            spin.setValue(int(sub_defaults.get('font_size', 55)))
+        spin = dialog.findChild(QSpinBox, "sub_border_size_spin")
+        if spin is not None:
+            spin.setValue(int(sub_defaults.get('border_size', 3)))
+        spin = dialog.findChild(QSpinBox, "sub_shadow_offset_spin")
+        if spin is not None:
+            spin.setValue(int(sub_defaults.get('shadow_offset', 1)))
+        spin = dialog.findChild(QSpinBox, "sub_delay_spin")
+        if spin is not None:
+            spin.setValue(int(round(float(sub_defaults.get('sub_delay', 0.0)) * 1000)))
+        spin = dialog.findChild(QSpinBox, "sub_scale_spin")
+        if spin is not None:
+            spin.setValue(int(round(float(sub_defaults.get('sub_scale', 1.0)) * 100)))
+        slider = dialog.findChild(QSlider, "sub_pos_slider")
+        if slider is not None:
+            slider.setValue(int(sub_defaults.get('sub_pos', 100)))
+
     def _save_and_close_settings(self, dialog):
         try:
             # 订阅源在对话框内只改列表，因此用「打开对话框时」的配置做对比基线；
@@ -1227,7 +1717,9 @@ class SettingsFileOperations:
             self._save_screensaver_settings(dialog)
             self._save_github_proxy_settings(dialog)
             self._save_server_settings(dialog)
+            self._save_detailed_media_settings(dialog)
             self._apply_playback_settings(new_playback)
+            self._save_theme_choices(dialog)
 
             playlist_changed, new_active_index = self._check_playlist_changed(old_playlist, new_playlist, old_active_index)
             if playlist_changed:
@@ -1237,6 +1729,9 @@ class SettingsFileOperations:
                 epg_thread = _EpgLoadThread(self.window)
                 epg_thread.finished.connect(epg_thread.deleteLater)
                 epg_thread.start()
+
+            # 语言切换会重建菜单与界面文案，放到其余配置落盘之后
+            self._save_general_app_settings(dialog)
 
             dialog.close()
             try:
@@ -1295,6 +1790,34 @@ class SettingsFileOperations:
         combo = dialog.findChild(QComboBox, "deinterlace_combo")
         if combo:
             settings['deinterlace'] = combo.currentData() if combo.currentData() else 'no'
+
+        # 网络页「流媒体请求」
+        edit = dialog.findChild(QLineEdit, "http_proxy_edit")
+        if edit is not None:
+            settings['http_proxy'] = edit.text().strip()
+        edit = dialog.findChild(QLineEdit, "http_referer_edit")
+        if edit is not None:
+            settings['http_referer'] = edit.text().strip()
+        edit = dialog.findChild(QPlainTextEdit, "http_headers_edit")
+        if edit is not None:
+            settings['http_headers'] = edit.toPlainText().strip()
+
+        # 播放页「播放行为」
+        combo = dialog.findChild(QComboBox, "queue_mode_combo")
+        if combo is not None:
+            settings['queue_mode'] = combo.currentData() or 'none'
+        check = dialog.findChild(QCheckBox, "auto_skip_intro_check")
+        if check is not None:
+            settings['auto_skip_intro'] = check.isChecked()
+        spin = dialog.findChild(QSpinBox, "skip_intro_seconds_spin")
+        if spin is not None:
+            settings['skip_intro_seconds'] = float(spin.value())
+        check = dialog.findChild(QCheckBox, "auto_skip_outro_check")
+        if check is not None:
+            settings['auto_skip_outro'] = check.isChecked()
+        spin = dialog.findChild(QSpinBox, "skip_outro_seconds_spin")
+        if spin is not None:
+            settings['skip_outro_seconds'] = float(spin.value())
 
         def _parse_positive_int(edit_name):
             edit = dialog.findChild(QLineEdit, edit_name)
@@ -1385,11 +1908,190 @@ class SettingsFileOperations:
             auto_start=auto_start
         )
 
+    def _save_general_app_settings(self, dialog):
+        """写入常规页的语言与日志等级。"""
+        import logging
+
+        combo = dialog.findChild(QComboBox, "language_combo")
+        lm = getattr(self.window, 'language_manager', None)
+        if combo is not None and lm is not None:
+            lang = combo.currentData()
+            if lang and lang != getattr(lm, 'current_language', None):
+                self.set_language(lang)
+
+        combo = dialog.findChild(QComboBox, "log_level_combo")
+        if combo is not None and self.window.config:
+            name = combo.currentData() or 'INFO'
+            levels = {
+                'DEBUG': logging.DEBUG,
+                'INFO': logging.INFO,
+                'WARNING': logging.WARNING,
+                'ERROR': logging.ERROR,
+            }
+            level = levels.get(name, logging.INFO)
+            logger.set_level(level)
+            self.window.config.set_value('UI', 'log_level', name)
+            self.window.config.save_config()
+
+    def _save_theme_choices(self, dialog):
+        """写入外观页的颜色模式与视觉风格。"""
+        theme_manager = get_theme_manager()
+        combo = dialog.findChild(QComboBox, "color_mode_combo")
+        if combo is not None and combo.currentData():
+            mode = combo.currentData()
+            if mode != theme_manager.get_color_mode():
+                self.set_color_mode(mode)
+        combo = dialog.findChild(QComboBox, "visual_style_combo")
+        if combo is not None and combo.currentData():
+            style = combo.currentData()
+            if style != theme_manager.get_visual_style():
+                self.set_visual_style(style)
+
+    def _save_detailed_media_settings(self, dialog):
+        """保存播放页的视频/音频/字幕参数。
+
+        独立对话框可能持有旧 UI，保存后清掉缓存实例，下次打开会重新读取配置。
+        """
+        config = self.window.config
+        if not config:
+            return
+        pc = self.window.player_controller
+
+        def _slider(name):
+            widget = dialog.findChild(QSlider, name)
+            return widget.value() if widget is not None else None
+
+        def _combo(name, cast=None):
+            widget = dialog.findChild(QComboBox, name)
+            if widget is None:
+                return None
+            value = widget.currentData()
+            return cast(value) if cast is not None and value is not None else value
+
+        def _spin_int(name):
+            widget = dialog.findChild(QSpinBox, name)
+            return widget.value() if widget is not None else None
+
+        values = {
+            key: _slider(f"video_eq_{key}_slider")
+            for key in ('brightness', 'contrast', 'saturation', 'hue', 'gamma')
+        }
+        sharp_value = _slider("video_eq_sharpness_slider")
+        rotate_value = _combo("video_eq_rotate_combo")
+        flip_value = _combo("video_eq_flip_combo")
+        reset_value = dialog.findChild(QCheckBox, "video_eq_reset_check")
+        if any(v is not None for v in values.values()) or sharp_value is not None:
+            video_cfg = config.load_video_eq()
+            for key, value in values.items():
+                if value is not None:
+                    video_cfg[key] = int(value)
+            if sharp_value is not None:
+                video_cfg['sharpness'] = round(sharp_value / 100.0, 3)
+            if rotate_value is not None:
+                video_cfg['video_rotate'] = int(rotate_value)
+            if flip_value is not None:
+                video_cfg['video_flip'] = flip_value or ''
+            if reset_value is not None:
+                video_cfg['reset_on_new_file'] = reset_value.isChecked()
+            config.save_video_eq(video_cfg)
+            if pc is not None:
+                try:
+                    if hasattr(pc, 'apply_video_eq'):
+                        pc.apply_video_eq(video_cfg)
+                    if hasattr(pc, 'set_video_rotate'):
+                        pc.set_video_rotate(int(video_cfg.get('video_rotate', 0) or 0))
+                    if hasattr(pc, 'set_video_flip'):
+                        pc.set_video_flip(video_cfg.get('video_flip', '') or '')
+                except Exception as e:
+                    logger.debug(f"应用视频调整失败: {e}")
+            self.window._video_eq_dialog = None
+
+        delay_value = _slider("audio_eq_delay_slider")
+        pitch_value = _slider("audio_eq_pitch_slider")
+        channels_value = _combo("audio_eq_channels_combo")
+        band_values = [_slider(f"audio_eq_band_{i}_slider") for i in range(10)]
+        if delay_value is not None or pitch_value is not None or channels_value is not None:
+            audio_cfg = config.load_audio_eq()
+            if delay_value is not None:
+                audio_cfg['audio_delay'] = round(delay_value / 100.0, 3)
+            if pitch_value is not None:
+                audio_cfg['audio_pitch'] = round(pitch_value / 100.0, 3)
+            if channels_value is not None:
+                audio_cfg['audio_channels'] = channels_value or 'auto'
+            if all(v is not None for v in band_values):
+                audio_cfg['eq'] = [float(v) for v in band_values]
+            config.save_audio_eq(audio_cfg)
+            if pc is not None:
+                try:
+                    if hasattr(pc, 'apply_audio_eq'):
+                        pc.apply_audio_eq(audio_cfg)
+                except Exception as e:
+                    logger.debug(f"应用音频调整失败: {e}")
+            self.window._audio_eq_dialog = None
+
+        font_size = _spin_int("sub_font_size_spin")
+        border_size = _spin_int("sub_border_size_spin")
+        shadow_offset = _spin_int("sub_shadow_offset_spin")
+        sub_delay_ms = _spin_int("sub_delay_spin")
+        sub_scale_percent = _spin_int("sub_scale_spin")
+        sub_pos = _slider("sub_pos_slider")
+        if any(v is not None for v in (font_size, border_size, shadow_offset,
+                                       sub_delay_ms, sub_scale_percent, sub_pos)):
+            sub_cfg = config.load_subtitle_style()
+            if font_size is not None:
+                sub_cfg['font_size'] = int(font_size)
+            if border_size is not None:
+                sub_cfg['border_size'] = int(border_size)
+            if shadow_offset is not None:
+                sub_cfg['shadow_offset'] = int(shadow_offset)
+            bold = dialog.findChild(QCheckBox, "sub_bold_check")
+            if bold is not None:
+                sub_cfg['bold'] = bold.isChecked()
+            italic = dialog.findChild(QCheckBox, "sub_italic_check")
+            if italic is not None:
+                sub_cfg['italic'] = italic.isChecked()
+            if sub_delay_ms is not None:
+                sub_cfg['sub_delay'] = round(sub_delay_ms / 1000.0, 3)
+            if sub_scale_percent is not None:
+                sub_cfg['sub_scale'] = round(sub_scale_percent / 100.0, 3)
+            if sub_pos is not None:
+                sub_cfg['sub_pos'] = int(sub_pos)
+            visible = dialog.findChild(QCheckBox, "sub_visibility_check")
+            if visible is not None:
+                sub_cfg['sub_visibility'] = visible.isChecked()
+            config.save_subtitle_style(sub_cfg)
+            if pc is not None:
+                try:
+                    if hasattr(pc, 'apply_sub_style'):
+                        pc.apply_sub_style(sub_cfg)
+                    for setter, key in (
+                        ('set_sub_delay', 'sub_delay'),
+                        ('set_sub_scale', 'sub_scale'),
+                        ('set_sub_pos', 'sub_pos'),
+                        ('set_sub_visibility', 'sub_visibility'),
+                    ):
+                        if hasattr(pc, setter):
+                            getattr(pc, setter)(sub_cfg.get(key))
+                except Exception as e:
+                    logger.debug(f"应用字幕样式失败: {e}")
+            self.window._subtitle_style_dialog = None
+
     def _apply_playback_settings(self, new_playback):
         if not new_playback or not self.window.config:
             return
         old_playback = self.window.config.load_playback_settings()
-        self.window.config.save_playback_settings(new_playback)
+        # 只覆盖本次界面涉及的键，保留用户通过独立对话框改过的未暴露键
+        merged = dict(old_playback)
+        merged.update(new_playback)
+        self.window.config.save_playback_settings(merged)
+
+        if 'queue_mode' in new_playback:
+            qc = getattr(self.window, 'file_queue_ctrl', None)
+            if qc is not None and new_playback['queue_mode'] != qc.queue_mode:
+                try:
+                    qc.set_queue_mode(new_playback['queue_mode'])
+                except Exception as e:
+                    logger.debug(f"同步循环模式失败: {e}")
 
         changed = any(old_playback.get(k) != v for k, v in new_playback.items())
         if changed and self.window.player_controller:

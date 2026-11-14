@@ -739,6 +739,7 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
     val screenSaverTimeout by viewModel.screenSaverTimeoutMinutes.collectAsState()
     val githubProxyEnabled by viewModel.githubProxyEnabled.collectAsState()
     val githubProxySelected by viewModel.githubProxySelected.collectAsState()
+    val logLevel by viewModel.logLevel.collectAsState()
     val uiModePref by viewModel.uiModePref.collectAsState()
     val currentUiMode by viewModel.uiMode.collectAsState()
     val isMpv = playerType == PlayerType.MPV
@@ -749,14 +750,14 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
     // 底栏 TAB 的 UP 落点 + 详情关闭后的焦点回归：设置列表每一行都挂 FocusRequester。
     // - 底栏居中悬浮、正上方是 Mini 播放条，几何 UP 永远只会回到播放条，入口必须显式注册；
     // - BACK 关闭右侧详情后，焦点回到「进入详情前那一行」，而不是永远回第一项。
-    val rowFocuses = remember { List(19) { FocusRequester() } }
-    val rowBrings = remember { List(19) { BringIntoViewRequester() } }
+    val rowFocuses = remember { List(20) { FocusRequester() } }
+    val rowBrings = remember { List(20) { BringIntoViewRequester() } }
     var lastFocusedRow by remember { mutableStateOf(0) }
     val scrollScope = rememberCoroutineScope()
     // 行序号与 PC 端三页签对齐：
-    // 0-8 常规（主题/界面模式/续播/底栏样式/玻璃/自启/屏保/屏保等待/关于），
-    // 9-15 播放设置（播放器/视频/音频/字幕/播放设置/截图/视图），
-    // 16-18 网络（频道映射/网络增强/GitHub 加速代理）
+    // 0-9 常规（主题/界面模式/续播/底栏样式/玻璃/自启/屏保/屏保等待/日志等级/关于），
+    // 10-16 播放设置（播放器/视频/音频/字幕/播放设置/截图/视图），
+    // 17-19 网络（频道映射/网络增强/GitHub 加速代理）
     // 显式接管上下键：目标行在可视区外时几何焦点搜索命中不了（整列滚动的视口外节点），
     // 只靠 bringIntoView 会「先要焦点再滚动」形成死锁，到了「视图设置」就停住。
     fun moveRowFocus(from: Int, dir: Int) {
@@ -916,7 +917,21 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
                     }
                     viewModel.setScreenSaverTimeoutMinutes(next)
                 }
-                AptvRow(Icons.Default.Info, stringResource(R.string.settings_about), modifier = rowModifier(8)) {
+                AptvRow(Icons.Default.Tune, stringResource(R.string.settings_log_level), value = when (logLevel) {
+                    "debug" -> "调试"
+                    "warn" -> "警告"
+                    "error" -> "错误"
+                    else -> "信息"
+                }, modifier = rowModifier(8)) {
+                    val next = when (logLevel) {
+                        "debug" -> "info"
+                        "info" -> "warn"
+                        "warn" -> "error"
+                        else -> "debug"
+                    }
+                    viewModel.setLogLevel(next)
+                }
+                AptvRow(Icons.Default.Info, stringResource(R.string.settings_about), modifier = rowModifier(9)) {
                     splitDetailOrToggle(isLandscape, viewModel.aboutPanelOpen, { AboutPanel(viewModel = viewModel) }) { viewModel.toggleAboutPanel() }
                 }
             }
@@ -924,25 +939,25 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
         // ===== 播放设置：与 PC「播放设置」页签一致 =====
         AptvSectionHeader(stringResource(R.string.settings_group_playback))
         AptvGroupCard {
-            AptvRow(Icons.Default.PlayCircle, stringResource(R.string.settings_player), value = playerType.displayName, modifier = rowModifier(9)) {
+            AptvRow(Icons.Default.PlayCircle, stringResource(R.string.settings_player), value = playerType.displayName, modifier = rowModifier(10)) {
                 splitDetailOrToggle(isLandscape, viewModel.playerSettingsOpen, { PlayerSettingsPanel(viewModel = viewModel) }) { viewModel.togglePlayerSettings() }
             }
-            AptvRow(Icons.Default.Tv, stringResource(R.string.settings_video), modifier = rowModifier(10)) {
+            AptvRow(Icons.Default.Tv, stringResource(R.string.settings_video), modifier = rowModifier(11)) {
                 splitDetailOrToggle(isLandscape, viewModel.videoSettingsOpen, { VideoSettingsPanel(viewModel = viewModel) }) { viewModel.toggleVideoSettings() }
             }
-            AptvRow(Icons.Default.VolumeUp, stringResource(R.string.settings_audio), modifier = rowModifier(11)) {
+            AptvRow(Icons.Default.VolumeUp, stringResource(R.string.settings_audio), modifier = rowModifier(12)) {
                 splitDetailOrToggle(isLandscape, viewModel.audioSettingsOpen, { AudioSettingsPanel(viewModel = viewModel) }) { viewModel.toggleAudioSettings() }
             }
-            AptvRow(Icons.Default.Subtitles, stringResource(R.string.settings_subtitle), disabled = !isMpv, modifier = rowModifier(12)) {
+            AptvRow(Icons.Default.Subtitles, stringResource(R.string.settings_subtitle), disabled = !isMpv, modifier = rowModifier(13)) {
                 splitDetailOrToggle(isLandscape, viewModel.subtitleSettingsOpen, { SubtitleSettingsPanel(viewModel = viewModel) }) { viewModel.toggleSubtitleSettings() }
             }
-            AptvRow(Icons.Default.Tune, stringResource(R.string.settings_playback_settings), modifier = rowModifier(13)) {
+            AptvRow(Icons.Default.Tune, stringResource(R.string.settings_playback_settings), modifier = rowModifier(14)) {
                 splitDetailOrToggle(isLandscape, viewModel.playbackPanelOpen, { PlaybackPanel(viewModel = viewModel) }) { viewModel.togglePlaybackPanel() }
             }
-            AptvRow(Icons.Default.PhotoCamera, stringResource(R.string.settings_screenshot), disabled = !isMpv, modifier = rowModifier(14)) {
+            AptvRow(Icons.Default.PhotoCamera, stringResource(R.string.settings_screenshot), disabled = !isMpv, modifier = rowModifier(15)) {
                 splitDetailOrToggle(isLandscape, viewModel.screenshotPanelOpen, { ScreenshotPanel(viewModel = viewModel) }) { viewModel.toggleScreenshotPanel() }
             }
-            AptvRow(Icons.Default.Wallpaper, stringResource(R.string.settings_view), modifier = rowModifier(15)) {
+            AptvRow(Icons.Default.Wallpaper, stringResource(R.string.settings_view), modifier = rowModifier(16)) {
                 splitDetailOrToggle(isLandscape, viewModel.viewSettingsOpen, { ViewSettingsPanel(viewModel = viewModel) }) { viewModel.toggleViewSettings() }
             }
         }
@@ -950,17 +965,17 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
         // ===== 网络：连接/映射/代理相关（与 PC「网络」页签一致）=====
         AptvSectionHeader(stringResource(R.string.settings_group_network))
         AptvGroupCard {
-            AptvRow(Icons.Default.CompareArrows, stringResource(R.string.settings_mapping), modifier = rowModifier(16)) {
+            AptvRow(Icons.Default.CompareArrows, stringResource(R.string.settings_mapping), modifier = rowModifier(17)) {
                 splitDetailOrToggle(isLandscape, viewModel.mappingPanelOpen, { MappingPanel(viewModel = viewModel) }) { viewModel.toggleMappingPanel() }
             }
-            AptvRow(Icons.Default.Wifi, stringResource(R.string.settings_network), modifier = rowModifier(17)) {
+            AptvRow(Icons.Default.Wifi, stringResource(R.string.settings_network), modifier = rowModifier(18)) {
                 splitDetailOrToggle(isLandscape, viewModel.networkPanelOpen, { NetworkPanel(viewModel = viewModel) }) { viewModel.toggleNetworkPanel() }
             }
             AptvRow(
                 Icons.Default.CloudSync,
                 "GitHub 加速代理",
                 value = if (githubProxyEnabled) "已开启 · $githubProxySelected" else "已关闭",
-                modifier = rowModifier(18)
+                modifier = rowModifier(19)
             ) {
                 splitDetailOrToggle(
                     isLandscape,
