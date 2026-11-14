@@ -556,6 +556,7 @@ internal fun AppViewModel.playChannel(
     // 代次自增：在途的超时看门狗 / 延迟回调据此判定自己是否已过期
     val generation = ++playAttemptGeneration
     stopBufferWatch()
+    cancelTvSeekHold()
     Log.i(AppViewModel.TAG, "playChannel: ${channel.name} (${channel.url}) origin=$origin gen=$generation")
     com.iptv.scanner.editor.pro.mpv.SwitchPerf.markRequest(channel.name, channel.url)
 

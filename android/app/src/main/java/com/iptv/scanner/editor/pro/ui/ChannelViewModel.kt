@@ -249,6 +249,7 @@ internal fun AppViewModel.stopPlay() {
     // 令所有在途的超时看门狗/延迟回调失效，并停止缓冲观测
     playAttemptGeneration++
     stopBufferWatch()
+    cancelTvSeekHold()
     // 清除当前播放 URL，防止 mpv.stop() 触发的 onFileError 回调自动重连
     currentPlaybackUrl = ""
     // 先置 IDLE 再 stop：确保 mpv.stop() 触发的任何同步事件都能看到已停止状态
@@ -670,6 +671,100 @@ internal fun AppViewModel.seekLiveRelative(seconds: Double) {
             showOsd("提示", "已是最新直播")
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// TV 方向键按住加速 seek（与桌面端一致：单击 ±15s、按住 0.5s 后加速、松手提交一次）
+// ---------------------------------------------------------------------------
+
+/** 按当前播放模式执行一次相对 seek：回看/本地文件直接 seek，直播走时移逻辑 */
+private fun AppViewModel.applyTvSeek(seconds: Double) {
+    if (seconds == 0.0) return
+    val mode = _playbackState.value.mode
+    if (mode.isCatchup || currentChannel.value == null) {
+        mpv.seekRelative(seconds)
+    } else {
+        seekLiveRelative(seconds)
+    }
+}
+
+private fun AppViewModel.showTvSeekOsd(direction: Int, seconds: Double, holding: Boolean) {
+    val total = kotlin.math.abs(seconds).toLong()
+    showOsd(
+        if (direction > 0) "快进" else "快退",
+        "$total 秒" + if (holding) "（按住加速中，松开确认）" else ""
+    )
+}
+
+/** 清空按住状态并取消加速计时（不提交任何 seek） */
+internal fun AppViewModel.cancelTvSeekHold() {
+    tvSeekHoldJob?.cancel()
+    tvSeekHoldJob = null
+    tvSeekHoldDirection = 0
+    tvSeekHoldAccumulated = 0.0
+}
+
+/**
+ * 方向键按下：先按单击语义立即 seek ±15s，并启动按住加速计时。
+ * 按住超过 0.5s 后按 30→240 秒/秒 线性加速，期间只更新 OSD 预览，不发 seek。
+ *
+ * @return true 表示已接管该按键；false 表示当前内容不可 seek（已提示用户）。
+ */
+internal fun AppViewModel.beginTvSeekHold(direction: Int): Boolean {
+    if (!canSeekCurrent()) {
+        showOsd("时移", "该频道不支持时移")
+        return false
+    }
+    cancelTvSeekHold()
+    tvSeekHoldDirection = direction
+    tvSeekHoldAccumulated = 0.0
+    tvSeekHoldLastOsdAtMs = android.os.SystemClock.elapsedRealtime()
+    applyTvSeek(direction * AppViewModel.TV_SEEK_STEP_SECONDS)
+    showTvSeekOsd(direction, AppViewModel.TV_SEEK_STEP_SECONDS, holding = false)
+    tvSeekHoldJob = viewModelScope.launch {
+        // 0.5s 内松开＝单击：只保留已经生效的 ±15s
+        delay(AppViewModel.TV_SEEK_HOLD_DELAY_MS)
+        var lastTickAt = android.os.SystemClock.elapsedRealtime()
+        val holdStartAt = lastTickAt
+        while (isActive) {
+            delay(AppViewModel.TV_SEEK_HOLD_TICK_MS)
+            val now = android.os.SystemClock.elapsedRealtime()
+            val dtSec = (now - lastTickAt) / 1000.0
+            lastTickAt = now
+            val heldSec = (now - holdStartAt) / 1000.0
+            val rate = (AppViewModel.TV_SEEK_HOLD_RATE_START +
+                AppViewModel.TV_SEEK_HOLD_RATE_ACCEL * heldSec)
+                .coerceAtMost(AppViewModel.TV_SEEK_HOLD_RATE_MAX)
+            tvSeekHoldAccumulated += rate * dtSec
+            // OSD 预览按 5Hz 刷新，避免每 100ms 重组一次
+            if (now - tvSeekHoldLastOsdAtMs >= 200L) {
+                tvSeekHoldLastOsdAtMs = now
+                showTvSeekOsd(
+                    direction,
+                    AppViewModel.TV_SEEK_STEP_SECONDS + tvSeekHoldAccumulated,
+                    holding = true
+                )
+            }
+        }
+    }
+    return true
+}
+
+/**
+ * 方向键松开：把按住期间累积的额外秒数一次性提交。
+ * 单击（0.5s 内松开）没有累积，不重复 seek。
+ */
+internal fun AppViewModel.endTvSeekHold() {
+    val direction = tvSeekHoldDirection
+    val extra = tvSeekHoldAccumulated
+    cancelTvSeekHold()
+    if (direction == 0 || extra <= 0.0) return
+    applyTvSeek(direction * extra)
+    showTvSeekOsd(
+        direction,
+        AppViewModel.TV_SEEK_STEP_SECONDS + extra,
+        holding = false
+    )
 }
 
 internal fun AppViewModel.trimEpgNearNow(programs: List<IptvEpgProgram>): List<IptvEpgProgram> {

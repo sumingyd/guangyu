@@ -570,6 +570,14 @@ class MainActivityCompose : ComponentActivity() {
         if (isTvMode()) {
             val kc = event.keyCode
             val isOk = kc == KeyEvent.KEYCODE_DPAD_CENTER || kc == KeyEvent.KEYCODE_ENTER
+            // 方向键松开：提交按住加速累积的 seek（单击没有累积，不会重复 seek）
+            if (event.action == KeyEvent.ACTION_UP &&
+                (kc == KeyEvent.KEYCODE_DPAD_LEFT || kc == KeyEvent.KEYCODE_DPAD_RIGHT) &&
+                viewModel.tvSeekHoldDirection != 0
+            ) {
+                viewModel.endTvSeekHold()
+                return true
+            }
             val isDpad = kc == KeyEvent.KEYCODE_DPAD_UP || kc == KeyEvent.KEYCODE_DPAD_DOWN ||
                     kc == KeyEvent.KEYCODE_DPAD_LEFT || kc == KeyEvent.KEYCODE_DPAD_RIGHT
             if (event.action == KeyEvent.ACTION_DOWN) {
@@ -913,35 +921,16 @@ class MainActivityCompose : ComponentActivity() {
             }
 
             KeyEvent.KEYCODE_DPAD_LEFT -> {
-                // 左键：快退。仅当内容真的可 seek 时执行；纯直播只提示，不拉流、不空转、不进入时移。
-                if (!viewModel.canSeekCurrent()) {
-                    viewModel.showOsd("时移", "该频道不支持时移")
-                    return true
-                }
-                // - 回看/本地视频：直接 seek
-                // - 直播/时移：在缓冲区内快退，自动进入时移模式
-                val mode = viewModel.playbackState.value.mode
-                if (mode.isCatchup || viewModel.currentChannel.value == null) {
-                    viewModel.mpv.seekRelative(-10.0)
-                } else {
-                    viewModel.seekLiveRelative(-10.0)
-                }
+                // 左键：快退。单击 -15s；按住 0.5s 后线性加速，松手一次性提交。
+                // 纯直播不支持时移时只提示，不拉流、不空转、不进入时移。
+                if ((event?.repeatCount ?: 0) > 0) return true
+                viewModel.beginTvSeekHold(-1)
                 return true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                // 右键：快进。仅当内容真的可 seek 时执行；纯直播只提示。
-                if (!viewModel.canSeekCurrent()) {
-                    viewModel.showOsd("时移", "该频道不支持时移")
-                    return true
-                }
-                // - 回看/本地视频：直接 seek
-                // - 直播/时移：时移下快进，追赶到前沿自动切回直播；直播前沿提示
-                val mode = viewModel.playbackState.value.mode
-                if (mode.isCatchup || viewModel.currentChannel.value == null) {
-                    viewModel.mpv.seekRelative(10.0)
-                } else {
-                    viewModel.seekLiveRelative(10.0)
-                }
+                // 右键：快进。单击 +15s；按住 0.5s 后线性加速，松手一次性提交。
+                if ((event?.repeatCount ?: 0) > 0) return true
+                viewModel.beginTvSeekHold(1)
                 return true
             }
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {

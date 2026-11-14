@@ -448,6 +448,15 @@ internal var switchPlayJob: Job? = null
     /** 上次 URL 重建的时间戳（System.nanoTime 转秒） */
     internal var lastUrlRebuildTime: Double = 0.0
 
+    // TV 方向键按住加速 seek：单击 ±15s，按住 0.5s 后加速预览，松手一次性提交
+    internal var tvSeekHoldJob: Job? = null
+    /** 按住方向：-1 快退，1 快进，0 未按住 */
+    internal var tvSeekHoldDirection: Int = 0
+    /** 按住期间额外累积的秒数（不含按下时立即生效的 15s） */
+    internal var tvSeekHoldAccumulated: Double = 0.0
+    /** 上一次刷新 seek 预览 OSD 的时间，节流用 */
+    internal var tvSeekHoldLastOsdAtMs: Long = 0L
+
     /** 是否有待执行的冷却后 seek */
     internal var urlRebuildPending: Boolean = false
 
@@ -2102,6 +2111,20 @@ internal var currentIsLocalFile: Boolean
         internal const val MAX_AUTO_FAILOVER_PER_SWITCH = 2
         /** 两次自动切换线路之间的最小间隔，避免线路之间来回跳 */
         internal const val FAILOVER_COOLDOWN_MS = 20_000L
+
+        // ---------------- TV 方向键按住加速 seek（第 1 条） ----------------
+        /** 单击步长：与桌面端一致 */
+        internal const val TV_SEEK_STEP_SECONDS = 15.0
+        /** 按住多久开始加速 */
+        internal const val TV_SEEK_HOLD_DELAY_MS = 500L
+        /** 加速计时 tick */
+        internal const val TV_SEEK_HOLD_TICK_MS = 100L
+        /** 加速起始速率（秒/秒） */
+        internal const val TV_SEEK_HOLD_RATE_START = 30.0
+        /** 每秒增加的速率（秒/秒²） */
+        internal const val TV_SEEK_HOLD_RATE_ACCEL = 30.0
+        /** 加速封顶速率（秒/秒） */
+        internal const val TV_SEEK_HOLD_RATE_MAX = 240.0
 
         fun factory(app: Application): ViewModelProvider.AndroidViewModelFactory =
             object : ViewModelProvider.AndroidViewModelFactory(app) {}
