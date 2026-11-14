@@ -43,9 +43,6 @@ class VideoOpenDialog(FloatingDialog):
         from ui.styles import AppStyles
         self.setStyleSheet(AppStyles.popup_dialog_style())
 
-        from ui.theme_manager import safe_register_window
-        safe_register_window(self)
-
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
@@ -117,6 +114,10 @@ class VideoOpenDialog(FloatingDialog):
 
         self._refresh_list()
         QTimer.singleShot(DelayMs.NEXT_TICK, self._list.setFocus)
+        # 必须等控件全部建好再注册主题：register_window 会立即回调
+        # reapply_styles，此时 _drive_btn 尚未创建会抛 AttributeError
+        from ui.theme_manager import safe_register_window
+        safe_register_window(self)
 
     def closeEvent(self, event):
         from ui.theme_manager import safe_unregister_window
@@ -126,8 +127,9 @@ class VideoOpenDialog(FloatingDialog):
     def reapply_styles(self):
         from ui.styles import AppStyles
         self.setStyleSheet(AppStyles.popup_dialog_style())
-        if self._drive_btn is not None:
-            self._drive_btn.setMenu(self._build_drive_menu())
+        drive_btn = getattr(self, '_drive_btn', None)
+        if drive_btn is not None:
+            drive_btn.setMenu(self._build_drive_menu())
 
     def _tr(self, key, default=''):
         if self._lm:
