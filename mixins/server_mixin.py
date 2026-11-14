@@ -11,7 +11,7 @@ class ServerMixin:
             set_main_window(self)
             settings = self.config.load_server_settings()
             if not settings.get('auto_start', False):
-                logger.info("HTTP 服务器未启动（默认关闭，可在“工具 > 服务 > 服务设置”中开启）")
+                logger.info("HTTP 服务器未启动（默认关闭，可在“设置 > 网络 > 服务设置”中开启）")
                 return
             port = settings.get('port', 8080)
             host = settings.get('host', '0.0.0.0')
