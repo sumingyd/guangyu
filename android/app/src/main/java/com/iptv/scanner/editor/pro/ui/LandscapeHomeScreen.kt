@@ -123,6 +123,10 @@ internal fun LandscapeHomeScreen(
             val displayInfo by viewModel.channelDisplayInfo.collectAsState()
             val paused2 by viewModel.mpv.paused.collectAsState()
             val hasMini = fileLoaded2 && (currentCh != null || displayInfo.name.isNotEmpty())
+            // 环境色柔光跟随当前台标；没有台标时回落到主题光斑
+            val ambientColors = rememberAmbientColors(currentCh?.logo ?: displayInfo.logo)
+            val spotA = ambientColors?.primary ?: tvPalette.spotBlue
+            val spotB = ambientColors?.secondary ?: tvPalette.spotPurple
 
             // 内容区（玻璃采样源挂固定内容层，不挂视频层）
             // Mini 播放条不再占布局行：改为顶部居中悬浮胶囊 overlay（悬浮在 0~48dp 带），
@@ -153,14 +157,14 @@ internal fun LandscapeHomeScreen(
                                 val g = if (canvasDark) 0.32f else 0.24f
                                 drawCircle(
                                     brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                        listOf(tvPalette.spotBlue.copy(alpha = g), androidx.compose.ui.graphics.Color.Transparent)
+                                        listOf(spotA.copy(alpha = g), androidx.compose.ui.graphics.Color.Transparent)
                                     ),
                                     radius = size.width * 0.85f,
                                     center = androidx.compose.ui.geometry.Offset(size.width * 0.15f, size.height * 0.12f)
                                 )
                                 drawCircle(
                                     brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                        listOf(tvPalette.spotPurple.copy(alpha = g * 0.85f), androidx.compose.ui.graphics.Color.Transparent)
+                                        listOf(spotB.copy(alpha = g * 0.85f), androidx.compose.ui.graphics.Color.Transparent)
                                     ),
                                     radius = size.width * 0.75f,
                                     center = androidx.compose.ui.geometry.Offset(size.width * 0.95f, size.height * 0.52f)

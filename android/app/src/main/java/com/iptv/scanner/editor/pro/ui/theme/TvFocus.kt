@@ -1,11 +1,16 @@
 package com.iptv.scanner.editor.pro.ui.theme
 
+import android.provider.Settings
+import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -26,11 +31,38 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.draw.drawWithContent
 import kotlin.math.roundToInt
+
+/**
+ * 焦点动效曲线：临界阻尼弹簧，快速连按时不会互相打断；
+ * 系统开启「移除动画」（ANIMATOR_DURATION_SCALE=0）时直接跳到终值。
+ */
+@Composable
+private fun tvFocusAnimationSpec(): AnimationSpec<Float> {
+    val context = LocalContext.current
+    val reduceMotion = remember(context) {
+        runCatching {
+            Settings.Global.getFloat(
+                context.contentResolver,
+                Settings.Global.ANIMATOR_DURATION_SCALE,
+                1f
+            ) == 0f
+        }.getOrDefault(false)
+    }
+    return if (reduceMotion) {
+        snap()
+    } else {
+        spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMediumLow
+        )
+    }
+}
 
 /**
  * TV 端焦点高亮边框 Modifier。
@@ -50,7 +82,7 @@ fun Modifier.tvFocusBorder(cornerRadius: Int = 8, focusedScale: Float = 1.07f): 
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(
         targetValue = if (isFocused) focusedScale else 1f,
-        animationSpec = tween(durationMillis = 160),
+        animationSpec = tvFocusAnimationSpec(),
         label = "tvFocusBorderScale"
     )
     this
@@ -97,7 +129,7 @@ fun Modifier.tvFocusLayoutScale(focusedScale: Float = 1.07f): Modifier = compose
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(
         targetValue = if (isFocused) focusedScale else 1f,
-        animationSpec = tween(durationMillis = 160),
+        animationSpec = tvFocusAnimationSpec(),
         label = "tvFocusLayoutScale"
     )
     this
@@ -151,7 +183,7 @@ fun Modifier.tvFocusable(cornerRadius: Int = 8, focusedScale: Float = 1.07f): Mo
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(
         targetValue = if (isFocused) focusedScale else 1f,
-        animationSpec = tween(durationMillis = 160),
+        animationSpec = tvFocusAnimationSpec(),
         label = "tvFocusableScale"
     )
     this
