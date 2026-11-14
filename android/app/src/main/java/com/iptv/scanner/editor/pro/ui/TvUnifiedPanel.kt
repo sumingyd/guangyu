@@ -554,7 +554,7 @@ private fun SourceSwitchColumn(
             // 轻量单层玻璃：不额外垫深色底衬，避免双层叠加观感
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 4.dp)
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)
             ) {
             items(items = sources, key = { it.url }) { src ->
                 val isSelected = src.url == selectedSource
@@ -624,7 +624,7 @@ private fun GroupColumn(
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 4.dp)
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)
                 ) {
                     // "全部" 项
                     item(key = "__all__") {
@@ -862,7 +862,7 @@ private fun ChannelsColumn(
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 4.dp)
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)
                 ) {
                     itemsIndexed(
                         items = filteredChannels,
@@ -1185,7 +1185,7 @@ private fun MenuColumn(
 
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 4.dp)
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)
             ) {
                 itemsIndexed(
                     items = menuItems,
@@ -1321,7 +1321,7 @@ private fun EpgListColumn(
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 4.dp)
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)
                     ) {
                         items(
                             items = epg,

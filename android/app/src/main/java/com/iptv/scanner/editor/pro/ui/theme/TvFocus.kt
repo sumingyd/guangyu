@@ -25,6 +25,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -65,6 +66,32 @@ private fun tvFocusAnimationSpec(): AnimationSpec<Float> {
 }
 
 /**
+ * 焦点放大倍数收敛：缩放是纯绘制变换（布局尺寸不变），超出父容器的部分会被裁掉。
+ * 电视上列表行往往接近满宽，1.07 倍会向左右各溢出十几 dp，视觉上是「缺边」。
+ *
+ * 规则：
+ * - 接近满宽的行（>320dp）不做横向放大，避免左右被 Lazy 列表/面板裁切；
+ * - 其它条目把单边溢出限制在 [TV_FOCUS_MAX_GROW] 内（列表/宫格现有 4~6dp 的
+ *   contentPadding 正好可以容纳），视觉上仍是平滑放大，但不会被切。
+ */
+private val TV_FOCUS_WIDE_ROW = 320.dp
+private val TV_FOCUS_MAX_GROW = 4.dp
+
+private fun GraphicsLayerScope.applyFocusScale(scale: Float) {
+    if (size.width <= 0f || size.height <= 0f) {
+        scaleX = scale
+        scaleY = scale
+        return
+    }
+    val growPx = TV_FOCUS_MAX_GROW.toPx()
+    val limitX = if (size.width > TV_FOCUS_WIDE_ROW.toPx()) 1f else 1f + growPx * 2f / size.width
+    val limitY = 1f + growPx * 2f / size.height
+    val s = scale.coerceAtMost(minOf(limitX, limitY))
+    scaleX = s
+    scaleY = s
+}
+
+/**
  * TV 端焦点高亮边框 Modifier。
  *
  * 焦点反馈增强（放大 + 高亮）：
@@ -89,12 +116,8 @@ fun Modifier.tvFocusBorder(cornerRadius: Int = 8, focusedScale: Float = 1.07f): 
         // 焦点元素提升绘制层级：放大后不被相邻网格卡/列表行遮挡
         .zIndex(if (isFocused) 1f else 0f)
         .onFocusChanged { isFocused = it.isFocused }
-        .graphicsLayer {
-            scaleX = scale
-            scaleY = scale
-        }
-        // 焦点视觉用 drawWithContent 画在内容之上：
-        // 不会被链上更内层的不透明背景（chip 表面/选中底色）盖住，也不会被外层 clip 裁掉边框
+        // 焦点环画在缩放层之外：用未放大的布局边界绘制，条目贴着列表首末边时
+        // 焦点环也不会被视口裁掉；放大只作用于内容本身。
         .drawWithContent {
             drawContent()
             if (isFocused) {
@@ -113,6 +136,9 @@ fun Modifier.tvFocusBorder(cornerRadius: Int = 8, focusedScale: Float = 1.07f): 
                     style = Stroke(width = stroke)
                 )
             }
+        }
+        .graphicsLayer {
+            applyFocusScale(scale)
         }
 }
 
@@ -189,11 +215,6 @@ fun Modifier.tvFocusable(cornerRadius: Int = 8, focusedScale: Float = 1.07f): Mo
     this
         .zIndex(if (isFocused) 1f else 0f)
         .onFocusChanged { isFocused = it.isFocused }
-        .graphicsLayer {
-            scaleX = scale
-            scaleY = scale
-        }
-        .focusable()
         .drawWithContent {
             drawContent()
             if (isFocused) {
@@ -212,6 +233,10 @@ fun Modifier.tvFocusable(cornerRadius: Int = 8, focusedScale: Float = 1.07f): Mo
                 )
             }
         }
+        .graphicsLayer {
+            applyFocusScale(scale)
+        }
+        .focusable()
 }
 
 /**

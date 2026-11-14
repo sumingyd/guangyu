@@ -433,7 +433,8 @@ private fun ChannelListContent(
                         false
                     }
                 },
-            contentPadding = PaddingValues(vertical = 4.dp)
+            // 上下留 8dp：焦点放大是绘制缩放，首末行贴边时需要余量，否则焦点环被列表视口裁掉
+            contentPadding = PaddingValues(vertical = 8.dp)
         ) {
             itemsIndexed(
                 items = displayedChannels,
@@ -488,7 +489,8 @@ private fun GroupListColumn(
     ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(vertical = 4.dp)
+            // 上下留 8dp：焦点放大是绘制缩放，首末行贴边时需要余量，否则焦点环被列表视口裁掉
+            contentPadding = PaddingValues(vertical = 8.dp)
         ) {
             items(allItems, key = { it }) { group ->
                 val isSelected = selectedGroup == group
