@@ -1234,6 +1234,7 @@
   "server_not_running_hint": "服务未运行，请先在“工具 > 服务”中启动服务",
   "server_open_api": "打开API",
   "server_port": "端口:",
+  "server_port_shifted": "端口 {requested} 已被占用，已改用 {port}",
   "server_running": "服务运行中",
   "server_settings": "服务设置",
   "server_start": "启动服务",

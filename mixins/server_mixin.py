@@ -28,11 +28,15 @@ class ServerMixin:
                 return
             tr = self.language_manager.tr
             token = get_auth_token()
-            self.status_bar_show_message(
-                tr('server_started', '服务已启动') + f' http://localhost:{port}  ' +
-                tr('server_auth_token', '认证码') + f': {token}', 10000
-            )
-            logger.info(f"HTTP 服务器已按用户设置启动: http://{host}:{port}, 认证码: {token}")
+            # server.port 是绑定成功后的实际端口：配置端口被占用时会自动顺延
+            actual_port = server.port
+            msg = (tr('server_started', '服务已启动') + f' http://localhost:{actual_port}  ' +
+                   tr('server_auth_token', '认证码') + f': {token}')
+            if server.requested_port != actual_port:
+                msg += '  ' + tr('server_port_shifted', '端口 {requested} 已被占用，已改用 {port}').format(
+                    requested=server.requested_port, port=actual_port)
+            self.status_bar_show_message(msg, 10000)
+            logger.info(f"HTTP 服务器已按用户设置启动: http://{host}:{actual_port}, 认证码: {token}")
             if self._server_action is not None:
                 self._server_action.setText(tr('server_stop', '停止服务'))
         except Exception as e:
@@ -61,10 +65,14 @@ class ServerMixin:
                     logger.error(f"启动服务失败: {err or '端口未绑定成功'}")
                     return
                 token = get_auth_token()
-                self.status_bar_show_message(
-                    tr('server_started', '服务已启动') + f' http://localhost:{port}  ' +
-                    tr('server_auth_token', '认证码') + f': {token}', 10000
-                )
+                actual_port = server.port
+                msg = (tr('server_started', '服务已启动') + f' http://localhost:{actual_port}  ' +
+                       tr('server_auth_token', '认证码') + f': {token}')
+                if server.requested_port != actual_port:
+                    msg += '  ' + tr(
+                        'server_port_shifted', '端口 {requested} 已被占用，已改用 {port}').format(
+                        requested=server.requested_port, port=actual_port)
+                self.status_bar_show_message(msg, 10000)
                 self._server_action.setText(tr('server_stop', '停止服务'))
         except Exception as e:
             logger.error(f"切换服务失败: {e}")
@@ -106,16 +114,23 @@ class ServerMixin:
         from server.routes import get_auth_token
         server = get_server()
         is_running = server.is_running()
-        port = server.port if is_running else settings.get('port', 8080)
+        configured_port = settings.get('port', 8080)
+        # 运行中显示实际绑定端口：配置端口被占用时会自动顺延
+        port = server.port if is_running else configured_port
 
         status_label = QLabel()
         token = get_auth_token()
         if is_running:
-            status_label.setText(
+            text = (
                 f"● {tr('server_running', '服务运行中')}\n"
                 f"  {tr('server_address', '地址')}: http://localhost:{port}\n"
                 f"  {tr('server_auth_token', '认证码')}: {token}"
             )
+            if configured_port != port:
+                text += "\n  " + tr(
+                    'server_port_shifted', '端口 {requested} 已被占用，已改用 {port}').format(
+                    requested=configured_port, port=port)
+            status_label.setText(text)
             status_label.setStyleSheet(AppStyles.status_label_style(True))
         else:
             # 未启动时也把地址与认证码显示出来，方便先配置好客户端再启动服务
@@ -140,7 +155,8 @@ class ServerMixin:
         port_layout.addWidget(port_label)
         port_spin = QSpinBox()
         port_spin.setRange(1024, 65535)
-        port_spin.setValue(port)
+        # 端口框保留配置值（起始端口），实际端口见上方状态；避免把顺延后的端口写回配置
+        port_spin.setValue(configured_port)
         port_layout.addWidget(port_spin, 1)
         layout.addLayout(port_layout)
 
