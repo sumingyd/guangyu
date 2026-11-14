@@ -1249,6 +1249,7 @@ showOsd("播放器设置", "反交错: ${if (value == "auto") "自动" else "关
 internal fun AppViewModel.hideControls() {
         _controlsVisible.value = false
         _controlsPinned.value = false
+        _tvProgressOnly.value = false
         tvControlsAutoHideJob?.cancel()
     }
 

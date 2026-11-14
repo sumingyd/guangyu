@@ -204,6 +204,7 @@ fun TvPlayerLayout(
     // TV 模式底栏只做信息展示：不放控制按钮，也不参与焦点遍历
     val barReadOnly = uiMode.isTV
     val controlsVisible by viewModel.controlsVisible.collectAsState()
+    val tvProgressOnly by viewModel.tvProgressOnly.collectAsState()
     val controlsPinned by viewModel.controlsPinned.collectAsState()
     val displayInfo by viewModel.channelDisplayInfo.collectAsState()
     val paused by viewModel.mpv.paused.collectAsState()
@@ -370,7 +371,8 @@ fun TvPlayerLayout(
                     epgList = currentEpg,
                     style = stylePreview ?: bottomBarStyle,
                     readOnly = barReadOnly,
-                    grabFocus = !barReadOnly && stylePreview == null && !stylePickerOpen && !anyPanelOpen
+                    grabFocus = !barReadOnly && stylePreview == null && !stylePickerOpen && !anyPanelOpen && !tvProgressOnly,
+                    progressOnly = tvProgressOnly && stylePreview == null && !stylePickerOpen && !anyPanelOpen
                 )
             }
             }
@@ -527,7 +529,8 @@ private fun TvBottomBar(
     epgList: List<IptvEpgProgram>,
     style: Int = 0,
     readOnly: Boolean = false,
-    grabFocus: Boolean = true
+    grabFocus: Boolean = true,
+    progressOnly: Boolean = false
 ) {
     // 底栏呼出时把焦点落到播放/暂停键：DPAD 直接在底栏内移动焦点（Activity dispatchKeyEvent 已放行），
     // 不再需要 TAB 键临时导航。AnimatedVisibility 内每次呼出都是新组合，effect 重新执行。
@@ -539,6 +542,11 @@ private fun TvBottomBar(
             kotlinx.coroutines.delay(80)
             runCatching { barFocus.requestFocus() }
         }
+    }
+    if (progressOnly) {
+        // 第 18C 条：电视端只留进度条与播放状态，不铺整条控制层
+        TvProgressOnlyBar(viewModel, currentProgram)
+        return
     }
     CompositionLocalProvider(LocalTvBottomBarReadOnly provides readOnly) {
     when (style) {
@@ -561,6 +569,56 @@ private fun TvBottomBar(
         17 -> TvBottomBarStyleR(viewModel, displayInfo, paused, fileLoaded, videoWidth, videoHeight, showExitCatchup, playbackMode, currentProgram, epgList, barFocus)
         else -> TvBottomBarStyleA(viewModel, displayInfo, paused, fileLoaded, videoWidth, videoHeight, showExitCatchup, playbackMode, currentProgram, epgList, barFocus)
     }
+    }
+}
+
+/**
+ * 电视端「只留进度」模式（第 18C 条）。
+ * 只渲染一条进度、播放状态与百分比，标题/频道信息/按钮全部收起，
+ * 左右键 seek 唤醒时尽量少遮挡画面；按其他任意键退出该模式。
+ */
+@Composable
+private fun TvProgressOnlyBar(viewModel: AppViewModel, currentProgram: IptvEpgProgram?) {
+    val timePos by viewModel.mpv.timePos.collectAsState()
+    val duration by viewModel.mpv.duration.collectAsState()
+    val paused by viewModel.mpv.paused.collectAsState()
+    val progress = computeTvBarProgress(currentProgram, timePos, duration)
+    val oc = rememberPlayerOverlayColors()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = if (paused) "已暂停" else "正在播放",
+            color = oc.textSecondary,
+            fontSize = 12.sp
+        )
+        Spacer(Modifier.width(14.dp))
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(4.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(oc.trackInactive)
+        ) {
+            if (progress != null) {
+                Box(
+                    Modifier
+                        .fillMaxHeight()
+                        .fillMaxWidth(progress)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(oc.accent)
+                )
+            }
+        }
+        Spacer(Modifier.width(14.dp))
+        Text(
+            text = if (progress != null) "${(progress * 100).toInt()}%" else "直播",
+            color = oc.textSecondary,
+            fontSize = 12.sp
+        )
     }
 }
 

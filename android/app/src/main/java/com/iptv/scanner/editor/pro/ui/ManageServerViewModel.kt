@@ -148,6 +148,8 @@ internal fun AppViewModel.showControlsAutoHide() {
             if (current.paused.value) return@launch
             if ((current as? MpvSpecificPlayer)?.getPropertyBoolean("paused-for-cache") == true) return@launch
             _controlsVisible.value = false
+            // 进度模式与底栏一起收起，下次唤醒回到常规底栏
+            _tvProgressOnly.value = false
         }
     }
 }

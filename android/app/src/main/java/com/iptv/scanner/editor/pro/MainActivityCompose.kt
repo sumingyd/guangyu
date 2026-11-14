@@ -537,6 +537,12 @@ class MainActivityCompose : ComponentActivity() {
             screenSaverKeyCode = -1
             return true
         }
+        // 进度模式（只留进度条）下按其他任意键：退出进度模式，恢复常规底栏路由
+        if (event.action == KeyEvent.ACTION_DOWN && viewModel.tvProgressOnly.value &&
+            event.keyCode != KeyEvent.KEYCODE_DPAD_LEFT && event.keyCode != KeyEvent.KEYCODE_DPAD_RIGHT
+        ) {
+            viewModel.exitTvProgressOnly()
+        }
         // 全屏播放页 OSD 隐藏时：任意方向键/确认键先唤醒 OSD。
         // 根因：底栏可见时 DPAD/OK 交给 Compose 焦点系统，隐藏后既没有可聚焦节点
         // （PHONE 模式整组 DPAD 落到空焦点树，表现为完全无响应），
@@ -560,6 +566,12 @@ class MainActivityCompose : ComponentActivity() {
         ) {
             Log.i(TAG, "dispatchKeyEvent: OSD hidden, wake + pass through by ${KeyEvent.keyCodeToString(event.keyCode)}")
             viewModel.showControlsAutoHide()
+            // 电视端左右键唤醒：只留一条进度条，不铺整条控制层（第 18C 条）
+            if (isTvMode() && (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
+                    event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)
+            ) {
+                viewModel.showTvProgressOnly()
+            }
             // controlsVisible 已在上一步同步置位，同一按键不会再次进入唤醒分支。
             // 平板模式底栏按钮可聚焦：这一下唤醒后继续下发给 Compose 焦点系统，
             // 不能吞键（否则遥控器每按一下有效操作前都要多按一次）。

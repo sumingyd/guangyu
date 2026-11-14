@@ -1080,6 +1080,20 @@ internal fun AppViewModel.clearQueue() {
     showOsd("队列已清空")
 }
 
+/**
+ * 电视端「只留进度」模式（第 18C 条）：左右键 seek 唤醒 OSD 时，
+ * 只显示一条进度条与播放状态，不铺整条控制层，避免遮挡画面。
+ */
+internal fun AppViewModel.showTvProgressOnly() {
+    _tvProgressOnly.value = true
+    showControlsAutoHide()
+}
+
+/** 退出「只留进度」模式：按其他任意键恢复常规底栏路由 */
+internal fun AppViewModel.exitTvProgressOnly() {
+    _tvProgressOnly.value = false
+}
+
 internal fun AppViewModel.showOsd(title: String, subtitle: String = "", extra: String = "") {
     _osd.value = OsdInfo(title, subtitle, extra)
     // 普通触发的 OSD 清除持久模式

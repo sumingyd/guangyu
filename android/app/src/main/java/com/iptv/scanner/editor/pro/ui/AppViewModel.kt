@@ -569,6 +569,10 @@ internal var switchPlayJob: Job? = null
     internal val _controlsVisible = MutableStateFlow(true)
     val controlsVisible: StateFlow<Boolean> = _controlsVisible.asStateFlow()
 
+    /** 电视端「只留进度」模式：左右键 seek 唤醒时只画一条进度条，不铺整条控制层（第 18C 条） */
+    internal val _tvProgressOnly = MutableStateFlow(false)
+    val tvProgressOnly: StateFlow<Boolean> = _tvProgressOnly.asStateFlow()
+
     /** 横屏沉浸侧边栏可见性 */
     internal val _landscapeSidebarVisible = MutableStateFlow(false)
     val landscapeSidebarVisible: StateFlow<Boolean> = _landscapeSidebarVisible.asStateFlow()
