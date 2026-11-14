@@ -191,7 +191,28 @@ class SettingsFileOperations:
         tab_widget = QTabWidget()
         tab_widget.setObjectName("settings_tab_widget")
 
-        # ===== Tab 1：播放设置（回放协议 + 关闭行为，可滚动）=====
+        # ===== Tab 1：常规（关闭行为 + 屏保，应用级设置）=====
+        general_tab = QWidget()
+        general_tab_layout = QVBoxLayout(general_tab)
+        general_tab_layout.setContentsMargins(0, 0, 0, 0)
+
+        general_content = QWidget()
+        general_content_layout = QVBoxLayout(general_content)
+        general_content_layout.setContentsMargins(0, 0, 0, 0)
+        screensaver_section = self._build_screensaver_section(tr)
+        general_content_layout.addWidget(self._build_close_behavior_section(tr))
+        general_content_layout.addWidget(screensaver_section)
+        general_content_layout.addStretch()
+
+        general_scroll = QScrollArea()
+        general_scroll.setWidgetResizable(True)
+        general_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        general_scroll.setWidget(general_content)
+        general_tab_layout.addWidget(general_scroll)
+
+        tab_widget.addTab(general_tab, tr("general_settings_tab", "常规"))
+
+        # ===== Tab 2：播放设置（只保留播放/解码相关项，可滚动）=====
         playback_tab = QWidget()
         playback_tab_layout = QVBoxLayout(playback_tab)
         playback_tab_layout.setContentsMargins(0, 0, 0, 0)
@@ -199,11 +220,7 @@ class SettingsFileOperations:
         playback_content = QWidget()
         playback_content_layout = QVBoxLayout(playback_content)
         playback_content_layout.setContentsMargins(0, 0, 0, 0)
-        screensaver_section = self._build_screensaver_section(tr)
         playback_content_layout.addWidget(self._build_protocol_section(tr, playback_settings))
-        playback_content_layout.addWidget(self._build_close_behavior_section(tr))
-        playback_content_layout.addWidget(screensaver_section)
-        playback_content_layout.addWidget(self._build_github_proxy_section(tr))
         playback_content_layout.addStretch()
 
         playback_scroll = QScrollArea()
@@ -214,7 +231,27 @@ class SettingsFileOperations:
 
         tab_widget.addTab(playback_tab, tr("playback_settings_tab", "播放设置"))
 
-        # ===== Tab 2：订阅源管理（播放列表 + EPG）=====
+        # ===== Tab 3：网络（连接相关 + GitHub 加速代理）=====
+        network_tab = QWidget()
+        network_tab_layout = QVBoxLayout(network_tab)
+        network_tab_layout.setContentsMargins(0, 0, 0, 0)
+
+        network_content = QWidget()
+        network_content_layout = QVBoxLayout(network_content)
+        network_content_layout.setContentsMargins(0, 0, 0, 0)
+        network_content_layout.addWidget(self._build_connection_section(tr, playback_settings))
+        network_content_layout.addWidget(self._build_github_proxy_section(tr))
+        network_content_layout.addStretch()
+
+        network_scroll = QScrollArea()
+        network_scroll.setWidgetResizable(True)
+        network_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        network_scroll.setWidget(network_content)
+        network_tab_layout.addWidget(network_scroll)
+
+        tab_widget.addTab(network_tab, tr("network_settings_tab", "网络"))
+
+        # ===== Tab 4：订阅源管理（播放列表 + EPG）=====
         subscription_tab = QWidget()
         subscription_tab_layout = QVBoxLayout(subscription_tab)
         subscription_tab_layout.setContentsMargins(0, 0, 0, 0)
@@ -230,8 +267,8 @@ class SettingsFileOperations:
 
         tab_widget.addTab(subscription_tab, tr("subscription_sources_tab", "订阅源管理"))
 
-        # ===== Tab 3：外观（字号档位 + 界面缩放）=====
-        # 单独成页：播放设置页已承载协议/关闭行为/屏保，外观不属于播放语义，
+        # ===== Tab 5：外观（字号档位 + 界面缩放）=====
+        # 单独成页：常规页承载关闭行为/屏保，播放设置页承载解码参数，外观不属于两者，
         # 且用户反馈「字小」时第一眼就能在 Tab 上看到「外观」。
         appearance_tab = QWidget()
         appearance_tab_layout = QVBoxLayout(appearance_tab)
@@ -304,12 +341,13 @@ class SettingsFileOperations:
         dialog.resize(width, height)
 
         if focus == 'screensaver':
+            # 屏保已迁到「常规」页签（索引 0），打开后滚动到屏保分组
             tab_widget.setCurrentIndex(0)
 
             def _reveal_screensaver():
                 # 等对话框真正显示、滚动区几何确定后再定位，避免打开后停在顶部
                 if dialog.isVisible():
-                    playback_scroll.ensureWidgetVisible(screensaver_section, 0, 0)
+                    general_scroll.ensureWidgetVisible(screensaver_section, 0, 0)
 
             QTimer.singleShot(0, _reveal_screensaver)
 
@@ -479,7 +517,7 @@ class SettingsFileOperations:
         """
         from utils import github_proxy
 
-        group = QGroupBox(tr("network_settings_group", "网络"))
+        group = QGroupBox(tr("github_proxy_settings", "GitHub 加速代理"))
         layout = QFormLayout()
 
         enabled_check = QCheckBox(tr("github_proxy_enabled", "启用 GitHub 加速代理"))
@@ -508,6 +546,39 @@ class SettingsFileOperations:
         hint.setWordWrap(True)
         hint.setStyleSheet(AppStyles.hint_label_style())
         layout.addRow(hint)
+
+        group.setLayout(layout)
+        return group
+
+    def _build_connection_section(self, tr, playback_settings):
+        """连接相关设置：TLS 校验与网络超时。
+
+        配置键与原来保持一致（Playback.tls_verify / Playback.network_timeout_sec），
+        仅界面位置从「播放设置」迁到「网络」，老配置无需迁移。
+        """
+        group = QGroupBox(tr("connection_settings", "连接"))
+        layout = QFormLayout()
+
+        tls_check = QCheckBox(tr("tls_verify_label", "TLS Verify"))
+        tls_check.setObjectName("tls_check")
+        tls_check.setChecked(playback_settings.get('tls_verify', False))
+        layout.addRow(tls_check)
+
+        timeout_combo = QComboBox()
+        timeout_combo.setObjectName("network_timeout_combo")
+        timeout_items = [
+            (0, tr("auto_timeout", "Auto")),
+            (5, "5s"), (10, "10s"), (15, "15s"), (20, "20s"),
+            (30, "30s"), (45, "45s"), (60, "60s"), (90, "90s"), (120, "120s"),
+        ]
+        current_timeout = playback_settings.get('network_timeout_sec', 0)
+        selected_idx = 0
+        for i, (val, label) in enumerate(timeout_items):
+            timeout_combo.addItem(label, val)
+            if val == current_timeout:
+                selected_idx = i
+        timeout_combo.setCurrentIndex(selected_idx)
+        layout.addRow(tr("network_timeout_colon", "Network Timeout:"), timeout_combo)
 
         group.setLayout(layout)
         return group
@@ -547,27 +618,6 @@ class SettingsFileOperations:
                 hwdec_combo.setCurrentIndex(i)
                 break
         layout.addRow(tr("hwdec_label", "Hardware Decoding"), hwdec_combo)
-
-        tls_check = QCheckBox(tr("tls_verify_label", "TLS Verify"))
-        tls_check.setObjectName("tls_check")
-        tls_check.setChecked(playback_settings.get('tls_verify', False))
-        layout.addRow(tls_check)
-
-        timeout_combo = QComboBox()
-        timeout_combo.setObjectName("network_timeout_combo")
-        timeout_items = [
-            (0, tr("auto_timeout", "Auto")),
-            (5, "5s"), (10, "10s"), (15, "15s"), (20, "20s"),
-            (30, "30s"), (45, "45s"), (60, "60s"), (90, "90s"), (120, "120s"),
-        ]
-        current_timeout = playback_settings.get('network_timeout_sec', 0)
-        selected_idx = 0
-        for i, (val, label) in enumerate(timeout_items):
-            timeout_combo.addItem(label, val)
-            if val == current_timeout:
-                selected_idx = i
-        timeout_combo.setCurrentIndex(selected_idx)
-        layout.addRow(tr("network_timeout_colon", "Network Timeout:"), timeout_combo)
 
         passthrough_combo = QComboBox()
         passthrough_combo.setObjectName("audio_passthrough_combo")
