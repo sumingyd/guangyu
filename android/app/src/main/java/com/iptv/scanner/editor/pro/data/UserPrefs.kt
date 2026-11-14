@@ -191,6 +191,8 @@ class UserPrefs private constructor() {
     fun setScreenLock(enabled: Boolean) = playerSettingsStore.setScreenLock(enabled)
     fun getLiquidGlass(): Boolean = playerSettingsStore.getLiquidGlass()
     fun setLiquidGlass(enabled: Boolean) = playerSettingsStore.setLiquidGlass(enabled)
+    fun getGlassRefraction(): Boolean = playerSettingsStore.getGlassRefraction()
+    fun setGlassRefraction(enabled: Boolean) = playerSettingsStore.setGlassRefraction(enabled)
     fun getSpeedParams(): String = playerSettingsStore.getSpeedParams()
     fun setSpeedParams(params: String) = playerSettingsStore.setSpeedParams(params)
     fun getSpeedConfig(): SpeedConfig = playerSettingsStore.getSpeedConfig()

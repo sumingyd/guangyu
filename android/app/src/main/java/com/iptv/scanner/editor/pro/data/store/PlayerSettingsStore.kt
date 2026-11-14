@@ -387,6 +387,13 @@ class PlayerSettingsStore(
         prefs.edit().putBoolean(KEY_LIQUID_GLASS, enabled).apply()
     }
 
+    /** 液态玻璃边缘折射（默认开启；设备不支持时自动走回流兜底） */
+    fun getGlassRefraction(): Boolean = prefs.getBoolean(KEY_GLASS_REFRACTION, true)
+
+    fun setGlassRefraction(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_GLASS_REFRACTION, enabled).apply()
+    }
+
     // -----------------------------------------------------------------
     // 倍速双步进参数
     // -----------------------------------------------------------------
@@ -509,6 +516,9 @@ class PlayerSettingsStore(
         private const val DEFAULT_RECONNECT_INDEX = 0
         private const val KEY_SCREEN_LOCK = "screen_lock"
         private const val KEY_LIQUID_GLASS = "liquid_glass"
+
+        /** 液态玻璃边缘折射开关（默认开启） */
+        private const val KEY_GLASS_REFRACTION = "glass_refraction"
         private const val KEY_SPEED_PARAMS = "speed_params"
         private const val DEFAULT_SPEED_PARAMS = "0.5,3,0.25,0.5,1,2"
         private const val KEY_RTSP_TRANSPORT = "rtsp_transport"

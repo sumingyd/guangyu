@@ -64,6 +64,7 @@ import androidx.compose.material.icons.filled.Web
 import androidx.compose.material.icons.filled.BrightnessAuto
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.BlurOn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -126,6 +127,7 @@ fun MainMenuPanel(viewModel: AppViewModel) {
     val currentChannel by viewModel.currentChannel.collectAsState()
     val currentIdx by viewModel.currentIdx.collectAsState()
     val liquidGlass by viewModel.liquidGlass.collectAsState()
+    val glassRefraction by viewModel.glassRefraction.collectAsState()
     val bottomBarStyle by viewModel.bottomBarStyle.collectAsState()
     val favorites by viewModel.favorites.collectAsState()
     val osdShowTime by viewModel.osdShowTime.collectAsState()
@@ -344,6 +346,7 @@ fun MainMenuPanel(viewModel: AppViewModel) {
             onToggleShowListIcon = { viewModel.setOsdShowListIcon(!osdShowListIcon) },
             onToggleShowBottomIcon = { viewModel.setOsdShowBottomIcon(!osdShowBottomIcon) },
             onToggleLiquidGlass = { viewModel.setLiquidGlass(!liquidGlass) },
+            onToggleGlassRefraction = { viewModel.setGlassRefraction(!glassRefraction) },
             showTime = osdShowTime,
             showNetSpeed = osdShowNetSpeed,
             hideChannelNum = osdHideChannelNum,
@@ -352,6 +355,7 @@ fun MainMenuPanel(viewModel: AppViewModel) {
             showListIcon = osdShowListIcon,
             showBottomIcon = osdShowBottomIcon,
             liquidGlassValue = liquidGlass,
+            glassRefractionValue = glassRefraction,
             bottomBarStyleValue = bottomBarStyle,
             onSelectBottomBarStyle = {
                 stylePickerIdx = bottomBarStyle
@@ -901,6 +905,7 @@ private fun buildMenuSections(
     onToggleShowListIcon: () -> Unit,
     onToggleShowBottomIcon: () -> Unit,
     onToggleLiquidGlass: () -> Unit,
+    onToggleGlassRefraction: () -> Unit,
     bottomBarStyleValue: Int = 0,
     onSelectBottomBarStyle: () -> Unit = {},
     showTime: Boolean,
@@ -911,6 +916,7 @@ private fun buildMenuSections(
     showListIcon: Boolean,
     showBottomIcon: Boolean,
     liquidGlassValue: Boolean,
+    glassRefractionValue: Boolean,
     hasCurrentChannel: Boolean,
     isFavorite: Boolean,
     sources: List<com.iptv.scanner.editor.pro.data.IptvSource>,
@@ -1011,6 +1017,7 @@ private fun buildMenuSections(
             MenuEntry(Icons.Default.Info, "列表图标", "频道列表显示台标", onToggleShowListIcon, isToggle = true, toggleValue = showListIcon),
             MenuEntry(Icons.Default.Info, "底部图标", "底部信息栏显示图标", onToggleShowBottomIcon, isToggle = true, toggleValue = showBottomIcon),
             MenuEntry(Icons.Default.AutoAwesome, "液态玻璃", "UI背景半透明玻璃质感", onToggleLiquidGlass, isToggle = true, toggleValue = liquidGlassValue),
+            MenuEntry(Icons.Default.BlurOn, "液态玻璃折射", "边缘折射与玻璃厚度", onToggleGlassRefraction, isToggle = true, toggleValue = glassRefractionValue),
             MenuEntry(
                 Icons.Default.AspectRatio,
                 "全屏底栏样式",

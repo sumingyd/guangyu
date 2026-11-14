@@ -312,7 +312,7 @@ internal fun PortraitBottomTabBar(
         }
     }
 
-    val useGlass = liquidGlass && com.iptv.scanner.editor.pro.ui.theme.isLiquidBlurSupported()
+    val useGlass = liquidGlass && com.iptv.scanner.editor.pro.ui.theme.isLiquidGlassSupported()
     // centered=true：TV/横屏首页用——底部居中悬浮胶囊，只包住 4 个按钮，不占整行；
     // false（默认）：竖屏全宽底栏，含导航栏避让
     val barModifier = if (centered) {

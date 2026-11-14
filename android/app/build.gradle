@@ -42,6 +42,12 @@ if (vMajor > 209) {
     throw new GradleException("主版本号过大，versionCode 将超出 Android 上限 2100000000: ${versionNameStr}")
 }
 def versionCodeVal = vMajor * 10000000 + vMinor * 100000 + vPatch * 100 + vBuild
+// 仅用于本地测试覆盖 versionCode（华为等 ROM 拒绝降级安装时需要），
+// 不影响正式构建：不传该参数时行为完全不变
+def versionCodeOverride = project.findProperty('versionCodeOverride')
+if (versionCodeOverride != null) {
+    versionCodeVal = versionCodeOverride.toInteger()
+}
 if (versionCodeVal > 2100000000) {
     throw new GradleException("计算出的 versionCode 超出 Android 上限: ${versionCodeVal}")
 }

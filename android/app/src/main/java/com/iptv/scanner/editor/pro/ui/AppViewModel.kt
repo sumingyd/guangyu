@@ -1071,6 +1071,23 @@ internal var currentIsLocalFile: Boolean
         userPrefs.setLiquidGlass(enabled)
     }
 
+    /**
+     * 液态玻璃边缘折射开关（默认开启）。
+     * 玻璃组件分散在大量面板里，通过全局状态下发，避免把开关值逐层穿过各布局。
+     */
+    internal val _glassRefraction = MutableStateFlow(userPrefs.getGlassRefraction())
+    val glassRefraction: StateFlow<Boolean> = _glassRefraction.asStateFlow()
+
+    fun setGlassRefraction(enabled: Boolean) {
+        _glassRefraction.value = enabled
+        com.iptv.scanner.editor.pro.ui.theme.GlassRefractionSettings.enabled = enabled
+        userPrefs.setGlassRefraction(enabled)
+    }
+
+    init {
+        com.iptv.scanner.editor.pro.ui.theme.GlassRefractionSettings.enabled = _glassRefraction.value
+    }
+
     // 侧边栏风格显示设置开关项
     internal val _osdShowTime = MutableStateFlow(userPrefs.isOsdShowTime())
     val osdShowTime: StateFlow<Boolean> = _osdShowTime.asStateFlow()
