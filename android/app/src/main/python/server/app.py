@@ -1,4 +1,5 @@
 import asyncio
+import errno
 import logging
 import threading
 import time
@@ -50,10 +51,21 @@ def get_language_manager():
     return None
 
 
+def _is_address_in_use(exc: OSError) -> bool:
+    """端口被占用：Windows 是 WSAEADDRINUSE(10048)，类 Unix 是 EADDRINUSE(98)。"""
+    return getattr(exc, 'errno', None) in (errno.EADDRINUSE, 10048) or \
+        getattr(exc, 'winerror', None) == 10048
+
+
 class IPTVServer:
+    # 允许从起始端口向后顺延的次数（8080 -> 8099）
+    MAX_PORT_SHIFT = 20
+
     def __init__(self, host='0.0.0.0', port=8080):
         self.host = host
         self.port = port
+        # 用户/配置里指定的端口，用于提示「端口被占用后顺延到了哪个」
+        self.requested_port = port
         self.app: Optional[web.Application] = None
         self.runner: Optional[web.AppRunner] = None
         self.site: Optional[web.TCPSite] = None
@@ -74,7 +86,7 @@ class IPTVServer:
         self._thread.start()
         self._running = True
         self._start_time = time.time()
-        logger.info(f"IPTV Server 启动于 http://{self.host}:{self.port}")
+        logger.info(f"IPTV Server 正在启动: http://{self.host}:{self.port}")
 
     def stop(self):
         global _shutting_down
@@ -136,6 +148,7 @@ class IPTVServer:
             self._loop.run_until_complete(self._async_start())
             self._running = True
             self._started_event.set()
+            logger.info(f"IPTV Server 已启动: http://{self.host}:{self.port}")
             self._loop.run_forever()
         except Exception as e:
             self._start_error = str(e)
@@ -153,8 +166,45 @@ class IPTVServer:
         self.app = create_app()
         self.runner = web.AppRunner(self.app)
         await self.runner.setup()
-        self.site = web.TCPSite(self.runner, self.host, self.port)
-        await self.site.start()
+        try:
+            await self._bind_site()
+        except Exception:
+            # 绑定失败时把已 setup 的 runner 收掉，避免下一次启动留下半初始化状态
+            try:
+                await self.runner.cleanup()
+            except Exception:
+                pass
+            raise
+
+    async def _bind_site(self):
+        """从配置端口开始向后找可用端口，命中后把实际端口写回 self.port。
+
+        多开时第二个实例的配置端口通常已被第一个实例占用；这里直接顺延，
+        而不是让服务起不来或误报「已启动」。
+        """
+        requested = self.requested_port
+        last_error = None
+        for offset in range(self.MAX_PORT_SHIFT + 1):
+            candidate = requested + offset
+            if candidate > 65535:
+                break
+            site = web.TCPSite(self.runner, self.host, candidate)
+            try:
+                await site.start()
+            except OSError as e:
+                if not _is_address_in_use(e):
+                    raise
+                last_error = e
+                logger.warning(f"端口 {candidate} 已被占用，尝试 {candidate + 1}")
+                continue
+            self.site = site
+            self.port = candidate
+            if candidate != requested:
+                logger.info(
+                    f"端口 {requested} 已被占用，服务改用 {candidate}（http://{self.host}:{candidate}）")
+            return
+        raise last_error or OSError(
+            f"从 {requested} 起连续 {self.MAX_PORT_SHIFT + 1} 个端口均被占用")
 
     async def _async_stop(self):
         try:
