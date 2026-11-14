@@ -868,6 +868,15 @@ class ScanChannelDialog(FloatingDialog):
         # Referer（标签与输入框同一行）
         scan_settings_section.addLayout(self.referer_layout)
 
+        scan_scope_hint = QtWidgets.QLabel(tr(
+            "scan_network_scope_hint",
+            "这里的 User-Agent / Referer 用于扫描以及订阅源、EPG 等下载请求，不影响播放器；"
+            "播放器的 UA / Referer 请在「设置 → 网络」中配置。"
+        ))
+        scan_scope_hint.setWordWrap(True)
+        scan_scope_hint.setStyleSheet(AppStyles.hint_label_style())
+        scan_settings_section.addWidget(scan_scope_hint)
+
         # 超时和线程数
         if hasattr(self, 'timeout_threads_layout'):
             scan_settings_section.addLayout(self.timeout_threads_layout)

@@ -5,6 +5,7 @@
 
 import os
 import re
+from urllib.parse import urlparse
 
 
 from PySide6 import QtCore, QtGui
@@ -669,6 +670,14 @@ class SettingsFileOperations:
         timeout_combo.setCurrentIndex(selected_idx)
         layout.addRow(tr("network_timeout_colon", "Network Timeout:"), timeout_combo)
 
+        scope_hint = QLabel(tr(
+            "connection_scope_hint",
+            "TLS 校验只作用于播放器；网络超时同时用于播放器与订阅源/EPG 下载。"
+        ))
+        scope_hint.setWordWrap(True)
+        scope_hint.setStyleSheet(AppStyles.hint_label_style())
+        layout.addRow(scope_hint)
+
         group.setLayout(layout)
         return group
 
@@ -687,6 +696,12 @@ class SettingsFileOperations:
         proxy_edit.setText(playback_settings.get('http_proxy', '') or '')
         layout.addRow(tr("network_enhance_proxy", "代理 URL"), proxy_edit)
 
+        ua_edit = QLineEdit()
+        ua_edit.setObjectName("user_agent_edit")
+        ua_edit.setPlaceholderText("Mozilla/5.0 ...")
+        ua_edit.setText(playback_settings.get('user_agent', '') or '')
+        layout.addRow(tr("network_user_agent_label", "User-Agent"), ua_edit)
+
         referer_edit = QLineEdit()
         referer_edit.setObjectName("http_referer_edit")
         referer_edit.setPlaceholderText("https://example.com/")
@@ -702,15 +717,21 @@ class SettingsFileOperations:
 
         hint = QLabel(tr(
             "network_stream_hint",
-            "代理仅支持 HTTP/HTTPS（http:// 或 https:// 开头），由 mpv/FFmpeg 的 "
-            "http-proxy 下发；SOCKS5 不被 mpv 的 HTTP 协议栈支持，填写 socks5:// "
-            "地址不会生效。只有 SOCKS5 时，请在本机用 gost/Privoxy 等把 SOCKS5 转为 "
-            "本地 HTTP 端口后再填 http://127.0.0.1:端口。Referer 用于绕过防盗链，"
-            "请求头每行一个 Key: Value。"
+            "代理只支持 http:// 或 https://；socks5:// 会被 mpv 忽略，保存时也会被拦下。"
+            "Referer 与自定义请求头同时用于播放器和订阅源/EPG 下载；User-Agent 用于播放器，"
+            "下载 UA 请在「扫描整理 → 网络参数」中设置。"
         ))
         hint.setWordWrap(True)
         hint.setStyleSheet(AppStyles.hint_label_style())
         layout.addRow(hint)
+
+        timing_hint = QLabel(tr(
+            "network_stream_timing_hint",
+            "以上修改对当前正在播放的流不生效：切换到该频道或重新打开频道后才会用新的请求参数。"
+        ))
+        timing_hint.setWordWrap(True)
+        timing_hint.setStyleSheet(AppStyles.hint_label_style())
+        layout.addRow(timing_hint)
 
         group.setLayout(layout)
         return group
@@ -959,7 +980,8 @@ class SettingsFileOperations:
             tr("vo_desc",
                "Selects the video output. 'Auto' derives vo from HDR mode (gpu/gpu-next). "
                "On macOS, vo is always forced to libmpv (mpv v0.41+ no longer supports wid embedding). "
-               "gpu-next is required for HDR passthrough/scRGB on Windows.")
+               "gpu-next is required for HDR passthrough/scRGB on Windows. "
+               "Changes take effect only after restarting the app.")
         )
 
         vsync_combo = QComboBox()
@@ -1693,6 +1715,24 @@ class SettingsFileOperations:
 
     def _save_and_close_settings(self, dialog):
         try:
+            # 代理协议校验：Socks5 等 mpv 不支持的协议不允许保存成功，
+            # 否则用户会以为已生效（实际 mpv 会忽略）。
+            proxy_edit = dialog.findChild(QLineEdit, "http_proxy_edit")
+            if isinstance(proxy_edit, QLineEdit):
+                bad_proxy = self._invalid_proxy_text(proxy_edit.text())
+                if bad_proxy:
+                    QMessageBox.warning(
+                        dialog,
+                        self._tr("warning", "警告"),
+                        self._tr(
+                            "invalid_proxy_url",
+                            "代理地址只支持 http:// 或 https://（当前为：{url}）。\n"
+                            "socks5:// 不被 mpv 支持，请先在本机转成本地 HTTP 代理端口。"
+                        ).format(url=bad_proxy)
+                    )
+                    proxy_edit.setFocus()
+                    return
+
             # 订阅源在对话框内只改列表，因此用「打开对话框时」的配置做对比基线；
             # 保存时再读配置会拿到已改动后的值，导致改 URL 后不触发重新下载。
             old_playlist = getattr(dialog, '_old_playlist_sources', None)
@@ -1742,6 +1782,19 @@ class SettingsFileOperations:
         except Exception as e:
             logger.error(f"保存订阅设置失败: {e}")
             dialog.close()
+
+    @staticmethod
+    def _invalid_proxy_text(text: str) -> str:
+        """返回不合法的代理地址原文；合法或留空时返回空串。"""
+        if not isinstance(text, str):
+            return ''
+        text = text.strip()
+        if not text:
+            return ''
+        parsed = urlparse(text)
+        if parsed.scheme.lower() not in ('http', 'https') or not parsed.netloc:
+            return text
+        return ''
 
     def _extract_sources_from_ui(self, source_type):
         widget = getattr(self.window, f'{source_type}_list_widget', None)
@@ -1802,6 +1855,9 @@ class SettingsFileOperations:
         edit = dialog.findChild(QPlainTextEdit, "http_headers_edit")
         if edit is not None:
             settings['http_headers'] = edit.toPlainText().strip()
+        edit = dialog.findChild(QLineEdit, "user_agent_edit")
+        if edit is not None:
+            settings['user_agent'] = edit.text().strip()
 
         # 播放页「播放行为」
         combo = dialog.findChild(QComboBox, "queue_mode_combo")
