@@ -611,7 +611,9 @@ fun ChannelTabsRow(
                     selected = isSelected,
                     onClick = { onTabSelected(tab) },
                     label = { Text(label, fontSize = 12.sp) },
-                    modifier = Modifier.weight(1f),
+                    // FilterChip 自身不参与焦点反馈，遥控器落到页签上看不出落点；
+                    // 补一层与其它 TV 控件一致的描边+轻微放大（1.04 避免相邻页签互相压住）
+                    modifier = Modifier.weight(1f).tvFocusBorder(focusedScale = 1.04f),
                     colors = androidx.compose.material3.FilterChipDefaults.filterChipColors(
                         selectedContainerColor = MaterialTheme.colorScheme.primary,
                         selectedLabelColor = MaterialTheme.colorScheme.onSurface,
