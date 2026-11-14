@@ -209,7 +209,8 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
             setOptionChecked("target-colorspace-hint", "yes")
         }
 
-        setOptionChecked("framedrop", "all")
+        // mpv 合法值：no/vo/decoder/decoder+vo；'all' 会被 option 解析拒绝并退回默认
+        setOptionChecked("framedrop", "decoder+vo")
         setOptionChecked("video-sync", "audio")
         setOptionChecked("cache-pause-initial", "no")
 

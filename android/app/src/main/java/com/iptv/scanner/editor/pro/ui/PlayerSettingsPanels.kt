@@ -545,13 +545,12 @@ fun AudioSettingsPanel(viewModel: AppViewModel) {
     var eqPreset by remember { mutableStateOf("normal") }
 
     // 音调（变调不变速，0.5~2.0，1.0=正常）
-    // audio-pitch-correction 是 mpv Flag（yes/no），用 getPropertyString 解析
+    // 实际值来自 af 链里的 @iptv_pitch rubberband 滤镜
     var audioPitch by remember {
+        val af = mpv.getPropertyString("af") ?: ""
+        val hit = Regex("iptv_pitch.*?pitch=([0-9]*\\.?[0-9]+)").find(af)
         mutableStateOf(
-            when ((mpv.getPropertyString("audio-pitch-correction") ?: "yes").lowercase()) {
-                "no", "false", "0" -> 0.0
-                else -> 1.0
-            }
+            hit?.groupValues?.get(1)?.toDoubleOrNull()?.coerceIn(0.5, 2.0) ?: 1.0
         )
     }
 
@@ -633,6 +632,7 @@ fun AudioSettingsPanel(viewModel: AppViewModel) {
         }
 
         SettingsGroup("音调（变调不变速）") {
+            DescText("0.5–2.0 倍，1.0 为原调；音频直通（SPDIF）时滤镜不生效")
             LabeledSlider(
                 label = "音调",
                 value = audioPitch.toFloat(),

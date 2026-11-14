@@ -136,6 +136,7 @@ fun NetworkPanel(viewModel: AppViewModel) {
     var referer by remember { mutableStateOf(initReferer) }
     var proxy by remember { mutableStateOf(initProxy) }
     var headers by remember { mutableStateOf(initHeaders) }
+    var errorText by remember { mutableStateOf("") }
 
     PanelScaffold(
         title = "网络增强",
@@ -163,12 +164,21 @@ fun NetworkPanel(viewModel: AppViewModel) {
         }
 
         SettingsGroup("HTTP Headers") {
-            DescText("每行一个，格式 Key: Value（mpv http-header-fields 属性）")
+            DescText("每行一个，格式 Key: Value；保存时整体一次写入（多行都会保留）")
             OutlinedTextField(
                 value = headers, onValueChange = { headers = it },
                 label = { Text("User-Agent: Mozilla/5.0\nAuthorization: Bearer xxx") },
                 modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp).tvTextField(),
                 maxLines = 5
+            )
+        }
+
+        if (errorText.isNotBlank()) {
+            Text(
+                text = errorText,
+                color = MaterialTheme.colorScheme.error,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(horizontal = 4.dp)
             )
         }
 
@@ -179,25 +189,31 @@ fun NetworkPanel(viewModel: AppViewModel) {
         ) {
             OutlinedButton(
                 onClick = {
-                    referer = ""; proxy = ""; headers = ""
+                    referer = ""; proxy = ""; headers = ""; errorText = ""
                     viewModel.clearNetworkSettings()
                 },
                 modifier = Modifier.weight(1f).tvFocusBorder()
             ) { Text("清除", color = MaterialTheme.colorScheme.onSurface) }
 
             OutlinedButton(
-                onClick = { viewModel.applyNetworkSettings(referer, proxy, headers) },
+                onClick = {
+                    val ok = viewModel.applyNetworkSettings(referer, proxy, headers)
+                    errorText = if (ok) "" else "代理地址需以 http:// 或 https:// 开头"
+                },
                 modifier = Modifier.weight(1f).tvFocusBorder()
             ) { Text("应用", color = MaterialTheme.colorScheme.onSurface) }
 
             OutlinedButton(
-                onClick = { viewModel.saveNetworkSettings(referer, proxy, headers) },
+                onClick = {
+                    val ok = viewModel.saveNetworkSettings(referer, proxy, headers)
+                    errorText = if (ok) "" else "代理地址需以 http:// 或 https:// 开头"
+                },
                 modifier = Modifier.weight(1f).tvFocusBorder()
             ) { Text("保存", color = MaterialTheme.colorScheme.primary) }
         }
 
         Spacer(modifier = Modifier.height(8.dp))
-        DescText("注意：设置在下次加载流时生效，当前播放不会立即应用。")
+        DescText("代理只支持 http:// 或 https://，socks5:// 会被拒绝；设置在下一次加载流时生效，当前播放不会立即应用。清除会同时移除 Referer、代理与自定义请求头。")
     }
 }
 

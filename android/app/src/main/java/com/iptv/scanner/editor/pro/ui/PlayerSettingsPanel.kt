@@ -484,7 +484,7 @@ private fun PlayerSettingsRightColumn(viewModel: AppViewModel) {
     Spacer(modifier = Modifier.height(6.dp))
     val deinterlaceDesc = when (currentDeinterlace) {
         "no" -> "关闭反交错：逐行视频不受影响，隔行视频可能出现梳齿。适合所有逐行视频源（大部分网络流均为逐行）"
-        "auto" -> "自动反交错：mpv 自动检测隔行内容并应用 yadif 滤镜。逐行视频不受影响，隔行视频（1080i TV）消除梳齿。与 hwdec=auto（直接输出）模式可能不兼容，需用 auto-copy 或 no"
+        "auto" -> "自动反交错：mpv 检测到隔行帧后才插入反交错滤镜。逐行视频不受影响，隔行视频（1080i TV）消除梳齿。与 hwdec=auto（直接输出）模式可能不兼容，需用 auto-copy 或 no"
         else -> "未知设置: $currentDeinterlace"
     }
     Text(text = deinterlaceDesc, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp))
@@ -919,7 +919,7 @@ private fun PlayerSettingsPanelAptv(viewModel: AppViewModel) {
                 AptvRowDivider()
                 val deinterlaceDesc = when (currentDeinterlace) {
                     "no" -> "关闭反交错：逐行视频不受影响，隔行视频可能出现梳齿。适合所有逐行视频源（大部分网络流均为逐行）"
-                    "auto" -> "自动反交错：mpv 自动检测隔行内容并应用 yadif 滤镜。逐行视频不受影响，隔行视频（1080i TV）消除梳齿。与 hwdec=auto（直接输出）模式可能不兼容，需用 auto-copy 或 no"
+                    "auto" -> "自动反交错：mpv 检测到隔行帧后才插入反交错滤镜。逐行视频不受影响，隔行视频（1080i TV）消除梳齿。与 hwdec=auto（直接输出）模式可能不兼容，需用 auto-copy 或 no"
                     else -> "未知设置: $currentDeinterlace"
                 }
                 Text(

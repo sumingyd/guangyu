@@ -36,8 +36,16 @@ class MpvAudioEqController(private val host: MpvControllerHost) {
     }
 
     fun setAudioPitch(pitch: Double): Boolean {
-        val flagVal = if (pitch >= 0.5) "yes" else "no"
-        host.postOnUiThread { MPVLib.setPropertyString("audio-pitch-correction", flagVal) }
+        // audio-pitch-correction 只是 yes/no 开关，浮点音调要用 rubberband 滤镜。
+        // 滤镜走 PCM，音频直通/硬解直出时听不到变调效果。
+        val v = pitch.coerceIn(0.5, 2.0)
+        host.postOnUiThread {
+            MPVLib.command(arrayOf("af", "remove", "@iptv_pitch"))
+            if (kotlin.math.abs(v - 1.0) < 0.005) return@postOnUiThread
+            MPVLib.command(
+                arrayOf("af", "add", "@iptv_pitch:lavfi=[rubberband=pitch=%.3f]".format(v))
+            )
+        }
         return true
     }
 

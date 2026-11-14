@@ -9,7 +9,13 @@ import `is`.xyz.mpv.MPVLib
 class MpvVideoEqController(private val host: MpvControllerHost) {
 
     fun setDeinterlace(value: String) {
-        val mpvValue = if (value == "auto") "yes" else "no"
+        // auto 必须原样交给 mpv：deinterlace=auto 才由 FFmpeg 检测隔行帧后再插滤镜；
+        // 旧实现把 auto 映射成 yes，会导致逐行片源也被强制反交错。
+        val mpvValue = when (value) {
+            "auto" -> "auto"
+            "yes" -> "yes"
+            else -> "no"
+        }
         host.postOnUiThread {
             try {
                 MPVLib.setPropertyString("deinterlace", mpvValue)
