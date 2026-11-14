@@ -303,12 +303,18 @@ fun OpenUrlPanelContent(viewModel: AppViewModel) {
  * - 进入画中画：继续在小窗口中观看
  * - 立即退出：直接退出应用
  * - 打开设置：不退出，转而打开播放器设置面板
+ * - 改回自动模式：强制 TV/平板时出现，切回按设备判断的界面模式
  * - 取消：继续使用
  */
 @Composable
 fun ExitConfirmDialog(viewModel: AppViewModel) {
     val open by viewModel.exitConfirmOpen.collectAsState()
     if (!open) return
+
+    // 强制 TV/平板时没有应用首页，设置页也进不去；退出弹窗是触摸与遥控都能到达的地方，
+    // 在这里给出切回自动模式的入口，避免只能靠 MENU 键来回切
+    val uiModePref by viewModel.uiModePref.collectAsState()
+    val forcedUiMode = uiModePref == UiModePreference.TV || uiModePref == UiModePreference.TABLET
 
     val context = androidx.compose.ui.platform.LocalContext.current
     val activity = context as? android.app.Activity
@@ -350,6 +356,14 @@ fun ExitConfirmDialog(viewModel: AppViewModel) {
                     )
                     Spacer(Modifier.height(14.dp))
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+                    // 强制 TV/平板时先给「改回自动模式」，否则用户没有其它入口回到手机布局
+                    if (forcedUiMode) {
+                        ExitOptionRow("改回自动模式（手机布局）") {
+                            viewModel.dismissExitConfirm()
+                            viewModel.setUiModePreference(UiModePreference.AUTO)
+                        }
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+                    }
                     // 画中画
                     if (activity != null &&
                         Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
