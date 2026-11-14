@@ -48,13 +48,19 @@ class PlaybackMixin:
         self.playback_ctrl._do_play_channel(channel)
 
     def on_play_error(self, error_msg):
+        from utils.playback_error import classify_playback_error
         tr = self.language_manager.tr
         logger.error(f"播放错误：{error_msg}")
+        key, default = classify_playback_error(error_msg)
+        hint = tr(key, default)
         if self.current_channel:
             channel_name = self.current_channel.get('name', tr('unknown_channel', 'Unknown Channel'))
-            self.status_bar_show_message(f"{tr('play_error', 'Play Error')}: {channel_name} - {error_msg}")
+            self.status_bar_show_message(f"{tr('play_error', 'Play Error')}: {channel_name} - {hint}")
         else:
-            self.status_bar_show_message(f"{tr('play_error', 'Play Error')}: {error_msg}")
+            self.status_bar_show_message(f"{tr('play_error', 'Play Error')}: {hint}")
+        # 状态栏只说下一步动作；原始错误留在日志与连接状态文案里
+        if hasattr(self, 'remain_label') and self.remain_label:
+            self.remain_label.setText(hint)
 
     def on_source_connecting(self, url):
         """loadfile 已发出但尚未出流：明确显示"正在连接"，避免假"正在播放"。"""

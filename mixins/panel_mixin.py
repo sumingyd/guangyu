@@ -109,6 +109,23 @@ class PanelMixin:
                 continue
         return False
 
+    def _is_playback_holding_panels(self) -> bool:
+        """暂停、缓冲或键盘长按 seek 预览期间，底栏应保持可见。"""
+        if getattr(self, '_seek_preview_active', False):
+            return True
+        pc = getattr(self, 'player_controller', None)
+        if pc is None:
+            return False
+        try:
+            if getattr(pc, 'is_paused', False):
+                return True
+            if not getattr(pc, 'is_playing', False):
+                return False
+            state = pc.get_buffer_state() or {}
+            return bool(state.get('buffering'))
+        except Exception:
+            return False
+
     def _auto_hide_panels(self):
         if not getattr(self, 'is_fullscreen', False):
             return
@@ -126,6 +143,18 @@ class PanelMixin:
         if self._is_pointer_on_floating_widgets():
             self._restart_auto_hide_timer()
             return
+        # 暂停/缓冲中、拖动进度条时、方向键长按 seek 预览时保持显示
+        if self._is_playback_holding_panels():
+            self._restart_auto_hide_timer()
+            return
+        slider = getattr(self, 'program_progress', None)
+        if slider is not None:
+            try:
+                if slider.isSliderDown():
+                    self._restart_auto_hide_timer()
+                    return
+            except RuntimeError:
+                pass
 
         self.panel_vis.auto_hide_all()
         self.setCursor(Qt.CursorShape.BlankCursor)

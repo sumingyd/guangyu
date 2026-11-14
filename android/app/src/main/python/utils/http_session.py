@@ -1,3 +1,4 @@
+import re
 import threading
 
 try:
@@ -20,6 +21,12 @@ _lock = threading.Lock()
 DEFAULT_TIMEOUT = 30.0
 # 仅对幂等请求做瞬时故障重试：4xx 不重试，5xx/限流做有限退避
 _RETRY_STATUS_CODES = (429, 500, 502, 503, 504)
+
+# 本地系统代理（Clash/V2Ray 等）进程退出后会残留监听端口，
+# 表现是所有请求立刻 Connection refused。此时记住直连，避免订阅/EPG/台标全线超时。
+_direct_mode = False
+_LOCAL_PROXY_HOST_RE = re.compile(r'127\.0\.0\.1|\[::1\]|localhost', re.IGNORECASE)
+_REFUSED_RE = re.compile(r'10061|errno\s*111|errno\s*61|connection refused|拒绝', re.IGNORECASE)
 
 
 def _build_retry():
@@ -55,12 +62,23 @@ def _apply_runtime_config(session):
     - User-Agent：下载优先用扫描整理里的值（Network.user_agent），
       为空时回落到网络页的 Playback.user_agent
     """
-    proxies = getattr(session, '_isep_proxies', None)
+    global _direct_mode
     proxy_url = str(_read_config('Playback', 'http_proxy', '') or '').strip()
-    desired = {'http': proxy_url, 'https': proxy_url} if proxy_url else {}
+    # 代理配置变更新一轮探测：用户换了代理地址后重新允许走代理
+    if proxy_url != getattr(session, '_isep_proxy_setting', None):
+        session._isep_proxy_setting = proxy_url
+        _direct_mode = False
+    proxies = getattr(session, '_isep_proxies', None)
+    if _direct_mode:
+        desired = {}
+    else:
+        desired = {'http': proxy_url, 'https': proxy_url} if proxy_url else {}
     if proxies != desired:
         session.proxies = desired
         session._isep_proxies = desired
+    # 直连模式同时绕开环境变量里的系统代理
+    if session.trust_env == _direct_mode:
+        session.trust_env = not _direct_mode
     user_agent = (_read_config('Network', 'user_agent', '')
                   or _read_config('Playback', 'user_agent', ''))
     if user_agent:
@@ -134,28 +152,44 @@ def _rewrite_github(url):
         return url
 
 
-def get(url, **kwargs):
+def _is_dead_local_proxy_error(exc) -> bool:
+    """判断异常是否指向「本地代理端口拒绝连接」。"""
+    if not _HAS_REQUESTS or not isinstance(exc, requests.exceptions.RequestException):
+        return False
+    text = str(exc)
+    return bool(_LOCAL_PROXY_HOST_RE.search(text) and _REFUSED_RE.search(text))
+
+
+def _send(method, url, **kwargs):
+    global _direct_mode
     session = get_session()
     if session is None:
         raise ImportError('requests is not available')
     _prepare_timeout(kwargs)
-    return session.get(_rewrite_github(url), **kwargs)
+    target = _rewrite_github(url)
+    try:
+        return getattr(session, method)(target, **kwargs)
+    except Exception as exc:
+        if _direct_mode or not _is_dead_local_proxy_error(exc):
+            raise
+        # 本地代理已死：本次改直连重试一次，之后所有请求都保持直连
+        _direct_mode = True
+        session.proxies = {}
+        session._isep_proxies = {}
+        session.trust_env = False
+        return getattr(session, method)(target, **kwargs)
+
+
+def get(url, **kwargs):
+    return _send('get', url, **kwargs)
 
 
 def head(url, **kwargs):
-    session = get_session()
-    if session is None:
-        raise ImportError('requests is not available')
-    _prepare_timeout(kwargs)
-    return session.head(_rewrite_github(url), **kwargs)
+    return _send('head', url, **kwargs)
 
 
 def post(url, **kwargs):
-    session = get_session()
-    if session is None:
-        raise ImportError('requests is not available')
-    _prepare_timeout(kwargs)
-    return session.post(_rewrite_github(url), **kwargs)
+    return _send('post', url, **kwargs)
 
 
 def close():

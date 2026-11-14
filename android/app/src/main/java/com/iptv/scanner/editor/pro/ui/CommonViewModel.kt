@@ -589,7 +589,7 @@ internal fun AppViewModel.playLocalVideo(uri: String) {
             }
         } catch (e: Throwable) {
             Log.e(AppViewModel.TAG, "playLocalVideo mpv.playFile failed", e)
-            showOsd("播放失败", e.message ?: "无法播放此文件")
+            showOsd("播放失败", com.iptv.scanner.editor.pro.player.playbackErrorHint(e.message))
         }
     }
 }

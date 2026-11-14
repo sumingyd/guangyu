@@ -145,7 +145,7 @@ class SubPlayer(private val context: Context) {
                             Log.e(TAG, "onPlayerError[#$instanceId]: ${error.message}", error)
                             _state.value = _state.value.copy(
                                 isError = true,
-                                errorMessage = error.message ?: "播放错误",
+                                errorMessage = playbackErrorHint(error.message, error.errorCode),
                                 isPlaying = false,
                                 isBuffering = false
                             )

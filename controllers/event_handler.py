@@ -3,6 +3,8 @@
 从 pyqt_player.py 提取的独立模块
 """
 
+import time
+
 from core.log_manager import global_logger as logger
 from PySide6.QtCore import Qt, QEvent, QTimer
 from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QDockWidget, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenuBar, QPlainTextEdit, QSpinBox, QTextEdit, QVBoxLayout, QWidget
@@ -13,9 +15,29 @@ from utils.thread_safety import safe_single_shot
 class EventHandler:
     """事件处理器 - 统一管理所有事件处理逻辑"""
 
+    # 方向键 seek：单击跳转步长、长按加速参数（与遥控器手感对齐）
+    _SEEK_STEP_SECONDS = 15.0
+    _SEEK_HOLD_DELAY_MS = 500
+    _SEEK_HOLD_TICK_MS = 50
+    _SEEK_HOLD_RATE_START = 30.0
+    _SEEK_HOLD_RATE_ACCEL = 30.0
+    _SEEK_HOLD_RATE_MAX = 240.0
+
     def __init__(self, main_window: MainWindowProtocol):
         self.window: MainWindowProtocol = main_window
         self._shortcuts = {}  # 快捷键映射表
+
+        # 方向键长按加速 seek：按下只预览，松手才向播放器提交一次
+        self._seek_hold_dir = 0          # -1 快退 / +1 快进 / 0 空闲
+        self._seek_hold_holding = False  # 是否已越过长按阈值
+        self._seek_hold_started = 0.0
+        self._seek_hold_offset = 0.0
+        self._seek_hold_base = 0.0
+        self._seek_hold_duration = 0.0
+        self._seek_hold_hud_at = 0.0
+        self._seek_hold_timer = QTimer()
+        self._seek_hold_timer.setInterval(self._SEEK_HOLD_TICK_MS)
+        self._seek_hold_timer.timeout.connect(self._tick_seek_hold)
 
     def _adjust_volume(self, delta: int):
         """调整音量（增量/减量），委托给 media_controller"""
@@ -115,6 +137,12 @@ class EventHandler:
             modifiers = event.modifiers()
             handled = self._handle_global_shortcut(key, modifiers)
             if handled:
+                return True
+
+        if event_type == QEvent.Type.KeyRelease:
+            # 方向键长按 seek：松手才真正跳转
+            if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right) and self._seek_hold_dir != 0:
+                self._finish_seek_hold()
                 return True
 
         if getattr(self.window, 'is_fullscreen', False) and not getattr(self.window, '_floating_hidden', False):
@@ -241,6 +269,14 @@ class EventHandler:
                 return False
             w = self.window
 
+            # 长按 seek 期间：同方向按键重复直接吞掉，其他按键先结算再继续分发
+            if self._seek_hold_dir != 0:
+                same_dir = ((key == Qt.Key.Key_Left and self._seek_hold_dir < 0)
+                            or (key == Qt.Key.Key_Right and self._seek_hold_dir > 0))
+                if same_dir and modifiers == Qt.KeyboardModifier.NoModifier:
+                    return True
+                self._finish_seek_hold()
+
             # 快捷键速查浮层：? 键切换；浮层开启时任意快捷键先将其关闭
             overlay = getattr(w, '_shortcut_overlay', None)
             if key == Qt.Key.Key_Question:
@@ -302,9 +338,15 @@ class EventHandler:
                     elif key == Qt.Key.Key_Down:
                         self._switch_channel(1)
                     elif key == Qt.Key.Key_Left:
-                        self._seek_relative(-10)
+                        if self._is_local_file_playing():
+                            self._begin_seek_hold(-1)
+                        else:
+                            self._seek_relative(-self._SEEK_STEP_SECONDS)
                     elif key == Qt.Key.Key_Right:
-                        self._seek_relative(10)
+                        if self._is_local_file_playing():
+                            self._begin_seek_hold(1)
+                        else:
+                            self._seek_relative(self._SEEK_STEP_SECONDS)
                     return True
                 elif key == Qt.Key.Key_F:
                     if hasattr(w, 'toggle_fullscreen'):
@@ -559,7 +601,7 @@ class EventHandler:
         rows = [
             ("Space", tr("sc_play_pause", "播放 / 暂停")),
             ("↑ / ↓", tr("sc_channel_switch", "上一 / 下一频道")),
-            ("← / →", tr("sc_seek_10s", "快退 / 快进 10 秒")),
+            ("← / →", tr("sc_seek_10s", "快退 / 快进 15 秒（按住加速）")),
             ("Backspace", tr("sc_prev_channel", "上一个频道")),
             ("F / F11", tr("sc_fullscreen", "全屏切换")),
             ("Esc", tr("sc_exit_or_stop", "退出全屏 / 收起浮层")),
@@ -676,6 +718,122 @@ class EventHandler:
         if hasattr(w, 'play_state') and w.play_state.is_catchup_or_timeshift:
             return True
         return False
+
+    def _seek_hud_text(self, label_key: str, label_default: str, seconds: float, rate: float = 0.0) -> str:
+        tr = getattr(getattr(self.window, 'language_manager', None), 'tr',
+                     lambda _key, default='': default)
+        text = f"{tr(label_key, label_default)} {self._format_seek_time(seconds)}"
+        if rate > 0:
+            text += f" · {int(rate)} {tr('seek_speed_unit', '秒/秒')}"
+        return text
+
+    @staticmethod
+    def _format_seek_time(seconds: float) -> str:
+        total = max(0, int(seconds))
+        hours, rem = divmod(total, 3600)
+        minutes, secs = divmod(rem, 60)
+        return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
+
+    def _show_seek_osd(self, text: str, duration_ms: int = 1200):
+        pc = getattr(self.window, 'player_controller', None)
+        if pc is None or not hasattr(pc, 'show_osd'):
+            return
+        try:
+            pc.show_osd(text, duration_ms)
+        except Exception as e:
+            logger.debug(f"seek OSD 显示失败: {e}")
+
+    def _begin_seek_hold(self, direction: int):
+        """按下方向键：只记录基准位置并启动预览计时，松手才提交 seek。"""
+        pc = getattr(self.window, 'player_controller', None)
+        if pc is None or not getattr(pc, 'is_playing', False):
+            return
+        self._seek_hold_dir = direction
+        self._seek_hold_holding = False
+        self._seek_hold_started = time.monotonic()
+        self._seek_hold_hud_at = 0.0
+        self._seek_hold_offset = 0.0
+        try:
+            self._seek_hold_base = float(pc.get_current_time() or 0) / 1000.0
+            self._seek_hold_duration = float(pc.get_total_time() or 0) / 1000.0
+        except Exception:
+            self._seek_hold_base = 0.0
+            self._seek_hold_duration = 0.0
+        # 预览期间进度条由本处理器驱动，禁止常规进度刷新覆盖
+        self.window._seek_preview_active = True
+        self._seek_hold_timer.start()
+
+    def _tick_seek_hold(self):
+        if self._seek_hold_dir == 0:
+            self._seek_hold_timer.stop()
+            return
+        pc = getattr(self.window, 'player_controller', None)
+        if pc is None or not getattr(pc, 'is_playing', False) or not self.window.isActiveWindow():
+            self._finish_seek_hold()
+            return
+
+        now = time.monotonic()
+        elapsed = now - self._seek_hold_started
+        hold_after = self._SEEK_HOLD_DELAY_MS / 1000.0
+        if elapsed < hold_after:
+            return
+
+        # 越过长按阈值：先给出单击步长，再按 30 秒/秒² 线性加速
+        if not self._seek_hold_holding:
+            self._seek_hold_holding = True
+            self._seek_hold_offset = self._seek_hold_dir * self._SEEK_STEP_SECONDS
+
+        rate = min(self._SEEK_HOLD_RATE_START
+                   + self._SEEK_HOLD_RATE_ACCEL * (elapsed - hold_after),
+                   self._SEEK_HOLD_RATE_MAX)
+        self._seek_hold_offset += self._seek_hold_dir * rate * (self._SEEK_HOLD_TICK_MS / 1000.0)
+        self._seek_hold_offset = self._clamp_seek_offset(self._seek_hold_offset)
+
+        target = self._seek_hold_base + self._seek_hold_offset
+        slider = getattr(self.window, 'program_progress', None)
+        if slider is not None:
+            try:
+                slider.setValue(max(0, min(int(target), slider.maximum())))
+            except RuntimeError:
+                pass
+
+        if now - self._seek_hold_hud_at >= 0.2:
+            self._seek_hold_hud_at = now
+            if self._seek_hold_dir > 0:
+                text = self._seek_hud_text('seek_forward_to', '快进至', target, rate)
+            else:
+                text = self._seek_hud_text('seek_back_to', '快退至', target, rate)
+            self._show_seek_osd(text)
+
+    def _clamp_seek_offset(self, offset: float) -> float:
+        if self._seek_hold_base > 0:
+            offset = max(offset, -self._seek_hold_base)
+        if self._seek_hold_duration > 0:
+            offset = min(offset, max(0.0, self._seek_hold_duration - self._seek_hold_base))
+        return offset
+
+    def _finish_seek_hold(self):
+        """松手/换键：把预览累计量一次性提交给播放器。"""
+        if self._seek_hold_dir == 0:
+            return
+        direction = self._seek_hold_dir
+        offset = self._seek_hold_offset
+        if not self._seek_hold_holding:
+            offset = direction * self._SEEK_STEP_SECONDS
+
+        self._seek_hold_dir = 0
+        self._seek_hold_holding = False
+        self._seek_hold_timer.stop()
+        self.window._seek_preview_active = False
+
+        if abs(offset) >= 0.5:
+            self._seek_relative(offset)
+            tr = getattr(getattr(self.window, 'language_manager', None), 'tr',
+                         lambda _key, default='': default)
+            label_key = 'seek_forward' if direction > 0 else 'seek_back'
+            label_default = '快进' if direction > 0 else '快退'
+            self._show_seek_osd(
+                f"{tr(label_key, label_default)} {int(abs(offset))} {tr('seconds_unit', '秒')}", 1000)
 
     def _seek_relative(self, seconds: float):
         """相对跳转（seconds为正快进，为负快退）"""

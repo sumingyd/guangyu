@@ -44,6 +44,9 @@ class ProgressMixin:
     def _set_progress_value(self, seconds):
         if self.program_progress.isSliderDown():
             return
+        # 方向键长按 seek 预览期间，进度条由键盘处理器驱动
+        if getattr(self, '_seek_preview_active', False):
+            return
         v = max(0, min(int(seconds), self.program_progress.maximum()))
         self.program_progress.setValue(v)
 

@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player as Media3Player
 import androidx.media3.common.TrackSelectionParameters
@@ -73,10 +74,11 @@ class ExoPlayerWrapper(
         /**
          * 缓冲档位：1080 档优先秒开；4K 档给更大的前向缓冲吸收码率抖动。
          *
-         * - 1080：min 15s / max 45s，起播 1.2s，重缓冲 2.5s，回退缓冲 15s，目标 64MiB
+         * - 1080：min 12s / max 45s，起播 0.5s，重缓冲 1.4s，回退缓冲 15s，目标 64MiB
          * - 4K：  min 30s / max 90s，起播 2.5s，重缓冲 5.0s，回退缓冲 30s，目标 160MiB
          *
-         * 之前全用 media3 默认值（50s/50s/2.5s/5s），直播起播慢且 4K 缓冲不足。
+         * 直播换台时起播等待是主要体感，1080 档把起播门槛压到 0.5s；
+         * 4K 保持较大余量，避免刚出画就反复重缓冲。
          */
         fun buildLoadControl(use4kTier: Boolean): DefaultLoadControl {
             val builder = DefaultLoadControl.Builder().setPrioritizeTimeOverSizeThresholds(true)
@@ -88,7 +90,7 @@ class ExoPlayerWrapper(
                     .build()
             } else {
                 builder
-                    .setBufferDurationsMs(15_000, 45_000, 1_200, 2_500)
+                    .setBufferDurationsMs(12_000, 45_000, 500, 1_400)
                     .setBackBuffer(15_000, false)
                     .setTargetBufferBytes(64 * 1024 * 1024)
                     .build()
@@ -99,6 +101,10 @@ class ExoPlayerWrapper(
     private var player: ExoPlayer? = null
     private var playerView: PlayerView? = null
     private var currentUrl: String = ""
+    /** 容器误判重试用的强制 MIME：null=默认探测，M3U8=强制 HLS，MP2T=强制渐进式 TS */
+    private var forcedMimeType: String? = null
+    /** 本次播放已做过的容器重试次数（每个方向最多一次） */
+    private var containerRetryCount = 0
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private fun isMainThread() = android.os.Looper.myLooper() == android.os.Looper.getMainLooper()
 
@@ -425,6 +431,23 @@ class ExoPlayerWrapper(
                             Log.e(TAG, "Player error: ${error.message}", error)
                             _fileLoaded.value = false
                             mainHandler.removeCallbacks(firstFrameWatchdogRunnable)
+                            // 容器误判：无 .m3u8 后缀或 Content-Type 错误时先按默认解析会直接判死，
+                            // 依次强制 HLS、渐进式 TS 各重试一次，不重建内核。
+                            if (currentUrl.isNotEmpty() && containerRetryCount < 2 && isContainerMismatch(error)) {
+                                val nextMime = when (forcedMimeType) {
+                                    null -> MimeTypes.APPLICATION_M3U8
+                                    MimeTypes.APPLICATION_M3U8 -> MimeTypes.VIDEO_MP2T
+                                    else -> null
+                                }
+                                if (nextMime != null) {
+                                    containerRetryCount++
+                                    forcedMimeType = nextMime
+                                    Log.w(TAG, "container mismatch (${error.errorCodeName}), retry with mime=$nextMime")
+                                    diagLog("container mismatch ${error.errorCodeName} -> mime=$nextMime")
+                                    replayCurrentUrl()
+                                    return
+                                }
+                            }
                             // 4K / HEVC 硬解初始化失败：降级到软解重建一次，不依赖 media3 默认 fallback
                             val is4kOrHevc = lastVideoHeight >= FOUR_K_HEIGHT_THRESHOLD ||
                                 lastVideoMime?.contains("hevc", ignoreCase = true) == true
@@ -621,6 +644,9 @@ class ExoPlayerWrapper(
 
     override fun playFile(url: String) {
         currentUrl = url
+        // 新地址重新开始容器探测
+        forcedMimeType = null
+        containerRetryCount = 0
         _eofReached.value = false
         _fileLoaded.value = false
         audioFocus.request()
@@ -663,7 +689,12 @@ class ExoPlayerWrapper(
         }
         try {
             Log.i(TAG, "playFile: $url"); diagLog("playFile: $url")
-            val mediaItem = MediaItem.Builder().setUri(Uri.parse(url)).build()
+            val itemBuilder = MediaItem.Builder().setUri(Uri.parse(url))
+            forcedMimeType?.let {
+                Log.i(TAG, "playFile: force mime=$it")
+                itemBuilder.setMimeType(it)
+            }
+            val mediaItem = itemBuilder.build()
             p.setMediaItem(mediaItem)
             p.prepare()
             p.playWhenReady = true
@@ -692,6 +723,28 @@ class ExoPlayerWrapper(
         } catch (e: Exception) {
             Log.e(TAG, "playFile failed: $url", e)
         }
+    }
+
+    /** 解析器认为容器格式不对：常见于直播源没有后缀或 Content-Type 不正确。 */
+    private fun isContainerMismatch(error: PlaybackException): Boolean = when (error.errorCode) {
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+        PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
+        PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED -> true
+        else -> false
+    }
+
+    /** 用当前 forcedMimeType 重新加载同一地址（不重置容器重试计数）。 */
+    private fun replayCurrentUrl() {
+        val url = currentUrl
+        if (url.isEmpty()) return
+        if (!isMainThread()) {
+            mainHandler.post { replayCurrentUrl() }
+            return
+        }
+        ensurePlayer()
+        playerView?.player = player
+        playFileOnMainThread(url)
     }
 
     override fun stop() {

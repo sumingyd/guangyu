@@ -41,6 +41,7 @@ import com.iptv.scanner.editor.pro.mpv.MpvController
 import com.iptv.scanner.editor.pro.player.CatchupHelper
 import com.iptv.scanner.editor.pro.player.CatchupProgram
 import com.iptv.scanner.editor.pro.player.ExoPlayerWrapper
+import com.iptv.scanner.editor.pro.player.MpvSpecificPlayer
 import com.iptv.scanner.editor.pro.player.PlayMode
 import com.iptv.scanner.editor.pro.player.SubPlayer
 import com.iptv.scanner.editor.pro.player.SubPlayerState
@@ -142,6 +143,10 @@ internal fun AppViewModel.showControlsAutoHide() {
             delay(4_000L)
             // 底栏样式选择弹窗打开期间：底栏作为实时预览保持显示，不自动隐藏
             if (_stylePickerOpen.value) return@launch
+            // 暂停或缓冲中保持显示：用户暂停后底栏突然消失会找不到继续播放入口
+            val current = mpv
+            if (current.paused.value) return@launch
+            if ((current as? MpvSpecificPlayer)?.getPropertyBoolean("paused-for-cache") == true) return@launch
             _controlsVisible.value = false
         }
     }
