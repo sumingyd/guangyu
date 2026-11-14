@@ -23,6 +23,7 @@ import com.iptv.scanner.editor.pro.ui.ScreenSaverOverlay
 import com.iptv.scanner.editor.pro.ui.MainPlayerScreen
 import com.iptv.scanner.editor.pro.ui.SplashScreen
 import com.iptv.scanner.editor.pro.ui.UiMode
+import com.iptv.scanner.editor.pro.ui.UiModePreference
 import com.iptv.scanner.editor.pro.ui.theme.IptvTheme
 import com.iptv.scanner.editor.pro.ui.theme.PaletteLoader
 import androidx.compose.material3.MaterialTheme
@@ -175,6 +176,13 @@ class MainActivityCompose : ComponentActivity() {
         viewModel.onEnterPip = { enterPipManual() }
         // 注入全屏切换回调（竖屏→强制横屏，横屏→跟随传感器）
         viewModel.onToggleFullscreen = { toggleFullscreen() }
+
+        // 界面模式 → 屏幕方向：手动指定 TV / 平板必须横屏。
+        // 之前只切了布局分支，没锁方向，手机竖屏下会渲染竖屏页面且切不出去（死界面）。
+        applyUiModeOrientation(viewModel.uiModePref.value)
+        lifecycleScope.launch {
+            viewModel.uiModePref.collect { applyUiModeOrientation(it) }
+        }
 
         // Android 13+ 通知运行时授权：EPG 节目提醒的后台系统通知依赖它；
         // 拒绝后仅影响后台提醒，应用内弹窗不受影响
@@ -1031,18 +1039,60 @@ class MainActivityCompose : ComponentActivity() {
     }
 
     /**
-     * 用户按 HOME 键离开应用时自动进入 PiP（如果正在播放且支持 PiP）。
+     * 界面模式 → 屏幕方向。
      *
-     * PiP 增强（与 Android 最佳实践对齐）：
-     * - setAspectRatio：按视频实际宽高比设置 PiP 窗口，消除黑边
-     * - setSourceBoundsHint：从视频区域平滑动画过渡到 PiP 窗口
-     * - Android 12+：setAutoEnterEnabled + setSeamlessResizeEnabled
+     * 手动指定「TV / 平板」必须横屏：这两种布局没有竖屏形态，手机竖屏下强制进入会渲染成
+     * 竖屏页面且进不了频道/设置，等同死界面。「自动 / 手机」恢复跟随设备方向。
+     * 大屏设备（sw>=600dp）系统会忽略 requestedOrientation，再用应用内伪横屏兜底。
      */
+    private fun applyUiModeOrientation(pref: UiModePreference) {
+        val forcedLandscape = pref == UiModePreference.TV || pref == UiModePreference.TABLET
+        // 只在「进入强制横屏」与「从强制横屏切回」时改写方向，避免把全屏按钮设置的横屏也覆盖掉
+        if (!forcedLandscape && !uiModeForcedLandscape) return
+        val target = if (forcedLandscape) {
+            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+        if (requestedOrientation != target) {
+            Log.i(TAG, "applyUiModeOrientation: pref=${pref.storageValue} -> $target")
+            try {
+                requestedOrientation = target
+                Log.i(TAG, "applyUiModeOrientation: requestedOrientation now=${requestedOrientation}")
+            } catch (e: Exception) {
+                Log.w(TAG, "applyUiModeOrientation failed: ${e.message}")
+            }
+        }
+        val portrait = resources.configuration.orientation ==
+                android.content.res.Configuration.ORIENTATION_PORTRAIT
+        val needPseudo = forcedLandscape && portrait
+        uiModeForcedLandscape = forcedLandscape
+        if (viewModel.forceLandscapeLayout.value != needPseudo) {
+            viewModel.setForceLandscapeLayout(needPseudo)
+        }
+    }
+
+    /** 是否正由界面模式强制横屏：用于区分模式切换与全屏按钮自己设置的横屏 */
+    private var uiModeForcedLandscape = false
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // Activity 声明了 configChanges=orientation|screenSize，旋转不会重建：
+        // 这里重新核对伪横屏兜底是否还需要
+        applyUiModeOrientation(viewModel.uiModePref.value)
+    }
+
     /** 全屏切换：竖屏→强制横屏，横屏→跟随传感器（可回竖屏）。
      * 大屏设备（sw>=600dp）系统会忽略 requestedOrientation，此时由
      * forceLandscapeLayout 驱动应用内伪横屏布局，保证全屏按钮始终有效。 */
     fun toggleFullscreen() {
         try {
+            // 手动指定 TV / 平板时方向已被模式锁死，全屏按钮不再解锁
+            val pref = viewModel.uiModePref.value
+            if (pref == UiModePreference.TV || pref == UiModePreference.TABLET) {
+                Log.i(TAG, "toggleFullscreen: forced ${pref.storageValue}, keep landscape")
+                return
+            }
             val portrait = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
             Log.i(TAG, "toggleFullscreen: portrait=$portrait -> forceLandscape=$portrait")
             viewModel.setForceLandscapeLayout(portrait)
@@ -1190,6 +1240,14 @@ class MainActivityCompose : ComponentActivity() {
         return builder.build()
     }
 
+    /**
+     * 用户按 HOME 键离开应用时自动进入 PiP（如果正在播放且支持 PiP）。
+     *
+     * PiP 增强（与 Android 最佳实践对齐）：
+     * - setAspectRatio：按视频实际宽高比设置 PiP 窗口，消除黑边
+     * - setSourceBoundsHint：从视频区域平滑动画过渡到 PiP 窗口
+     * - Android 12+：setAutoEnterEnabled + setSeamlessResizeEnabled
+     */
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         // 主动退出 PiP 回到全屏时会触发一次"用户离开"，此时不能再自动入小窗
