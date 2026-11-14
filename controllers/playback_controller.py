@@ -1,4 +1,5 @@
 import os
+from time import monotonic
 from typing import Dict, Any, Optional
 from PySide6.QtGui import QIcon
 from PySide6.QtCore import QTimer
@@ -16,6 +17,13 @@ class PlaybackController:
     # loadfile 之后等待 FILE_LOADED 的兜底超时；优先取播放设置中的真实网络超时
     SOURCE_TIMEOUT_MS = DEFAULT_NETWORK_TIMEOUT_SEC * 1000
 
+    # 持续缓冲降级：22 秒内 3 次缓冲，或单次连续缓冲 9 秒，才切到更低分辨率线路
+    BUFFER_WINDOW_SEC = 22.0
+    BUFFER_EPISODE_MIN_GAP = 0.7
+    BUFFER_EPISODE_COUNT = 3
+    BUFFER_CONTINUOUS_SEC = 9.0
+    BUFFER_STARTUP_GRACE_SEC = 8.0
+
     def __init__(self, main_window: MainWindowProtocol):
         self.window: MainWindowProtocol = main_window
         self._is_muted = False
@@ -29,6 +37,20 @@ class PlaybackController:
         self._last_program_id = None
         self._aspect_ratio_restored = False
         self.fcc = FCCService()
+
+        # 级联降级：已尝试过的同名线路，以及已因缓冲降级过的地址
+        self._tried_urls = set()
+        self._auto_degraded_urls = set()
+        # 持续缓冲统计
+        self._buf_was_buffering = False
+        self._buf_episode_times = []
+        self._buf_episode_ended_at = 0.0
+        self._buf_continuous_start = 0.0
+        self._buf_watch_started_at = 0.0
+        self._buffer_watch_timer = QTimer()
+        self._buffer_watch_timer.setInterval(1000)
+        self._buffer_watch_timer.timeout.connect(self._tick_buffer_watch)
+        self._buffer_watch_timer.start()
 
     def toggle_play(self):
         pc = getattr(self.window, 'player_controller', None)
@@ -210,6 +232,14 @@ class PlaybackController:
         if not channel:
             return
 
+        # 用户切到另一个频道时，重置同名线路的重试与降级记录
+        new_name = (channel.get('name') or '').strip().lower()
+        old_name = (self.current_channel or {}).get('name', '').strip().lower()
+        if new_name != old_name:
+            self._tried_urls.clear()
+            self._auto_degraded_urls.clear()
+            self._reset_buffer_tracking()
+
         if self._is_switching:
             # 300ms 切换窗口内不再静默丢弃：记录最新请求，窗口结束后补播
             self._pending_channel = channel
@@ -303,12 +333,139 @@ class PlaybackController:
                 self.window.remain_label.setText(tr('reconnecting_label', '重连中…'))
             pc._safe_emit(pc.reconnect_requested, url)
         else:
+            # 终态：先尝试同名备用线路，全部线路都失败才进入终态
+            backup = self._find_backup_channel(channel)
+            if backup is not None:
+                pc._reconnect_exhausted = False
+                pc._reconnect_count = 0
+                pc._last_reconnect_ts = 0.0
+                self._tried_urls.add(url)
+                logger.info(f"直播断流({reason})：尝试同名备用线路 {backup.get('name', '')}")
+                self.window.status_bar_show_message(
+                    f"{tr('switching_backup_source', '正在尝试备用线路')}: {backup.get('name', name)}")
+                self.play_channel(backup)
+                return
             # 终态：保留计数、置位 exhausted，等用户重试/换台；不再自动重连
             pc._reconnect_exhausted = True
             logger.error(f"直播断流({reason})：重连次数耗尽，停止重连: {name}")
             pc._safe_emit(pc.play_error, tr('reconnect_failed', '重连失败，请检查网络或更换频道'))
             if hasattr(self.window, 'remain_label') and self.window.remain_label:
                 self.window.remain_label.setText(tr('play_failed_label', '播放失败'))
+
+    @staticmethod
+    def _resolution_height(channel: Dict[str, Any]) -> int:
+        """从 resolution 字段或频道名里的 1080P/576P 后缀取高度，取不到返回 0。"""
+        import re
+        raw = str((channel or {}).get('resolution', '') or '')
+        match = re.search(r'(\d{3,4})\s*[xX*]\s*(\d{3,4})', raw)
+        if match:
+            return int(match.group(2))
+        name = str((channel or {}).get('name', '') or '')
+        match = re.search(r'(\d{3,4})\s*[pPiI]\b', name)
+        if match:
+            return int(match.group(1))
+        return 0
+
+    def _find_backup_channel(self, channel: Dict[str, Any], prefer_lower: bool = False):
+        """在同名频道里找一条未试过的备用线路；prefer_lower 时只接受更低分辨率。"""
+        name = str((channel or {}).get('name', '') or '').strip().lower()
+        url = (channel or {}).get('url', '')
+        if not name or not url:
+            return None
+        model = getattr(self.window, 'channel_model', None)
+        channels = getattr(model, 'channels', None) or []
+        current_height = self._resolution_height(channel)
+        candidates = []
+        for item in channels:
+            candidate_url = item.get('url', '')
+            if not candidate_url or candidate_url == url or candidate_url in self._tried_urls:
+                continue
+            if str(item.get('name', '') or '').strip().lower() != name:
+                continue
+            height = self._resolution_height(item)
+            if prefer_lower and current_height > 0 and not (0 < height < current_height):
+                continue
+            candidates.append((height, item))
+        if not candidates:
+            return None
+        # 降级时优先选择分辨率最低且最接近当前的一路
+        candidates.sort(key=lambda pair: pair[0] if pair[0] > 0 else 10 ** 6)
+        return candidates[0][1]
+
+    def _reset_buffer_tracking(self):
+        self._buf_was_buffering = False
+        self._buf_episode_times = []
+        self._buf_episode_ended_at = 0.0
+        self._buf_continuous_start = 0.0
+        self._buf_watch_started_at = 0.0
+
+    def _tick_buffer_watch(self):
+        """持续缓冲检测：只看直播，起播窗口内与回看/时移不参与。"""
+        w = self.window
+        if getattr(w, 'play_state', None) is None:
+            return
+        if not w.play_state.is_live or w.play_state.is_idle:
+            self._reset_buffer_tracking()
+            return
+        pc = getattr(w, 'player_controller', None)
+        channel = self.current_channel or getattr(w, 'current_channel', None)
+        if pc is None or not channel or not getattr(pc, 'is_playing', False):
+            self._reset_buffer_tracking()
+            return
+
+        now = monotonic()
+        if not self._buf_watch_started_at:
+            self._buf_watch_started_at = now
+        if now - self._buf_watch_started_at < self.BUFFER_STARTUP_GRACE_SEC:
+            return
+
+        state = pc.get_buffer_state() or {}
+        buffering = bool(state.get('buffering'))
+        if not buffering:
+            if self._buf_was_buffering:
+                self._buf_episode_ended_at = now
+            self._buf_was_buffering = False
+            self._buf_continuous_start = 0.0
+            return
+
+        if not self._buf_was_buffering:
+            self._buf_was_buffering = True
+            if now - self._buf_episode_ended_at >= self.BUFFER_EPISODE_MIN_GAP:
+                self._buf_episode_times.append(now)
+            self._buf_episode_times = [
+                t for t in self._buf_episode_times if now - t <= self.BUFFER_WINDOW_SEC]
+        if not self._buf_continuous_start:
+            self._buf_continuous_start = now
+
+        frequent = len(self._buf_episode_times) >= self.BUFFER_EPISODE_COUNT
+        continuous = (now - self._buf_continuous_start) >= self.BUFFER_CONTINUOUS_SEC
+        if frequent or continuous:
+            self._degrade_on_buffering(channel)
+
+    def _degrade_on_buffering(self, channel: Dict[str, Any]):
+        """持续缓冲才降级：切到同名更低分辨率线路，每个地址最多一次。"""
+        url = (channel or {}).get('url', '')
+        if not url or url in self._auto_degraded_urls:
+            return
+        target = self._find_backup_channel(channel, prefer_lower=True)
+        if target is None:
+            logger.debug("持续缓冲：没有更低分辨率的同名线路，保持当前线路")
+            self._reset_buffer_tracking()
+            self._buf_watch_started_at = monotonic()
+            return
+
+        self._auto_degraded_urls.add(url)
+        self._tried_urls.add(url)
+        self._reset_buffer_tracking()
+        logger.info(f"持续缓冲：{channel.get('name', '?')} 自动切换到更低分辨率线路")
+        tr = getattr(self.window.language_manager, 'tr', lambda k, d=None: d or k)
+        if hasattr(self.window, 'status_bar_show_message'):
+            self.window.status_bar_show_message(
+                tr('auto_degraded_notice', '当前线路频繁缓冲，已自动切换到更低码率线路'))
+        if hasattr(self.window, '_show_osd_feedback'):
+            self.window._show_osd_feedback(
+                tr('auto_degraded_notice', '当前线路频繁缓冲，已自动切换到更低码率线路'))
+        self.play_channel(target)
 
     def _do_play_channel(self, channel: Dict[str, Any]):
         if not (hasattr(self.window, 'player_controller') and self.window.player_controller and channel):
@@ -359,6 +516,19 @@ class PlaybackController:
 
         self.window.player_controller.play(url)
 
+        # 新频道从干净的断流计数开始：否则上一个频道耗尽的重连次数会带走本频道的重试机会
+        pc = self.window.player_controller
+        pc._reconnect_exhausted = False
+        pc._reconnect_count = 0
+        pc._last_reconnect_ts = 0.0
+
+        # 换台期间只更新文案，不清空画面：旧画面保留到新流首帧
+        tr = self.window.language_manager.tr
+        loading_text = tr('loading_channel', '正在加载：{name}').format(name=name)
+        self.window.status_bar_show_message(loading_text)
+        if hasattr(self.window, 'remain_label') and self.window.remain_label:
+            self.window.remain_label.setText(loading_text)
+
         if not self._aspect_ratio_restored:
             self._aspect_ratio_restored = True
             try:
@@ -371,7 +541,7 @@ class PlaybackController:
         self.current_channel = channel
         self.window.play_state.set_live()
         # loadfile 后启动看门狗：超过网络超时仍未 FILE_LOADED 即判定拉流失败
-        self._start_source_timeout(channel)
+        self._start_source_timeout(channel, self._switch_token)
 
         # 重置媒体信息缓存，确保新频道的媒体信息和质量评分被重新计算
         # 不重置会导致：切到相同分辨率的频道时 static_key 不变，评分条不更新
@@ -391,7 +561,7 @@ class PlaybackController:
             pass
         return self.SOURCE_TIMEOUT_MS
 
-    def _start_source_timeout(self, channel: Dict[str, Any]):
+    def _start_source_timeout(self, channel: Dict[str, Any], token: int = 0):
         """loadfile 后启动源超时看门狗（FILE_LOADED / END_FILE / stop 时取消）。"""
         w = self.window
         if not hasattr(w, 'player_controller') or not w.player_controller:
@@ -409,8 +579,15 @@ class PlaybackController:
                 timer.timeout.disconnect()
             except (RuntimeError, TypeError):
                 pass
-        timer.timeout.connect(lambda ch=channel: w._on_source_timeout(ch))
+        timer.timeout.connect(lambda ch=channel, tok=token: self._on_source_timeout_stale_guard(ch, tok))
         timer.start(self._source_timeout_ms())
+
+    def _on_source_timeout_stale_guard(self, channel, token):
+        """过期代次的看门狗直接丢弃，避免旧频道超时打断新频道。"""
+        if token != self._switch_token:
+            logger.debug("源超时看门狗已过期（期间已切换频道），忽略")
+            return
+        self.window._on_source_timeout(channel)
 
     def _exit_catchup_mode(self):
         catchup_ctrl = getattr(self.window, 'catchup_ctrl', None)
