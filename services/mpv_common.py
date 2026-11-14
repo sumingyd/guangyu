@@ -17,6 +17,16 @@ DEFAULT_USER_AGENT = (
 # 避免出现 mpv 等 60s（其默认值）而 UI 10s 就判失败的口径分裂。
 DEFAULT_NETWORK_TIMEOUT_SEC = 10
 
+# mpv 的 audio-spdif 只认这些编码名（官方文档：ac3, dts, dts-hd, eac3, truehd, dsd）。
+# 'yes' 不是合法编码名；FLAC/ALAC 不在列表中，SPDIF/HDMI 也不承载 FLAC，
+# 因此界面与配置映射都必须落在上面的合法集合内。
+AUDIO_SPDIF_MAP = {
+    'spdif_only': 'ac3,eac3,dts',
+    'hd_codecs': 'ac3,eac3,dts,dts-hd,truehd',
+    'lossless': 'truehd,dts-hd',
+    'all': 'ac3,eac3,dts,dts-hd,truehd,dsd',
+}
+
 _mpv_loaded = False
 _env_initialized = False
 

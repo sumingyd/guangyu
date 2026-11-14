@@ -45,7 +45,7 @@ from ui.theme_manager import get_theme_manager
 from utils.delay_constants import DelayMs
 from core.version import CURRENT_VERSION
 from services.m3u_parser import load_m3u_file
-from services.mpv_common import DEFAULT_NETWORK_TIMEOUT_SEC
+from services.mpv_common import DEFAULT_NETWORK_TIMEOUT_SEC, AUDIO_SPDIF_MAP
 from controllers.main_window_protocol import MainWindowProtocol
 
 
@@ -656,7 +656,7 @@ class SettingsFileOperations:
         timeout_combo = QComboBox()
         timeout_combo.setObjectName("network_timeout_combo")
         timeout_items = [
-            (0, tr("auto_timeout", "Auto")),
+            (0, tr("auto_timeout", "Auto (10s)")),
             (5, "5s"), (10, "10s"), (15, "15s"), (20, "20s"),
             (30, "30s"), (45, "45s"), (60, "60s"), (90, "90s"), (120, "120s"),
         ]
@@ -897,9 +897,9 @@ class SettingsFileOperations:
         passthrough_items = [
             ('never', tr("passthrough_never", "Never (Decode)")),
             ('spdif_only', tr("passthrough_spdif", "SPDIF (AC3/EAC3/DTS)")),
-            ('hd_codecs', tr("passthrough_hd", "HD Codecs (DTS-HD/TrueHD)")),
-            ('lossless', tr("passthrough_lossless", "Lossless Only (FLAC/ALAC/TrueHD)")),
-            ('all', tr("passthrough_all", "All Codecs")),
+            ('hd_codecs', tr("passthrough_hd", "HD + Core (AC3/EAC3/DTS/DTS-HD/TrueHD)")),
+            ('lossless', tr("passthrough_lossless", "Lossless (TrueHD/DTS-HD)")),
+            ('all', tr("passthrough_all", "All supported (incl. DSD)")),
         ]
         current_passthrough = playback_settings.get('audio_passthrough', 'never')
         selected_pt_idx = 0
@@ -968,7 +968,6 @@ class SettingsFileOperations:
             ('audio', tr("vsync_audio", "audio (Default, sync to audio clock)")),
             ('display-resample', tr("vsync_display_resample", "display-resample (Resample audio to display)")),
             ('display-tempo', tr("vsync_display_tempo", "display-tempo (Tempo-scale audio)")),
-            ('resample', tr("vsync_resample", "resample (Resample audio, may cause drift)")),
             ('display-desync', tr("vsync_display_desync", "display-desync (No sync, may drop/dup)")),
             ('desync', tr("vsync_desync", "desync (Completely asynchronous)")),
         ]
@@ -993,9 +992,8 @@ class SettingsFileOperations:
         fd_items = [
             ('vo', tr("framedrop_vo", "vo (Default, drop when VO is slow)")),
             ('decoder', tr("framedrop_decoder", "decoder (Drop at decoder, lower CPU)")),
-            ('insert', tr("framedrop_insert", "insert (Insert 1:1 frame, may stutter)")),
-            ('none', tr("framedrop_none", "none (Never drop)")),
-            ('never', tr("framedrop_never", "never (Alias of none)")),
+            ('decoder+vo', tr("framedrop_decoder_vo", "decoder+vo (Drop at both stages)")),
+            ('no', tr("framedrop_no", "no (Never drop, testing only)")),
         ]
         current_fd = str(playback_settings.get('framedrop', 'vo')).lower()
         selected_fd_idx = 0
@@ -1019,7 +1017,7 @@ class SettingsFileOperations:
         deinterlace_combo.setObjectName("deinterlace_combo")
         di_items = [
             ('no', tr("deinterlace_no", "Off (No deinterlacing)")),
-            ('auto', tr("deinterlace_auto", "Auto (Yadif, detect interlaced frames)")),
+            ('auto', tr("deinterlace_auto", "Auto (detect interlaced frames)")),
         ]
         current_di = str(playback_settings.get('deinterlace', 'no')).lower()
         if current_di == 'yes':
@@ -1035,9 +1033,10 @@ class SettingsFileOperations:
             tr("deinterlace_label", "Deinterlace:"),
             deinterlace_combo,
             tr("deinterlace_desc",
-               "Deinterlacing for interlaced video (channels with horizontal lines/comb artifacts). "
-               "'Auto' uses Yadif Bob mode (mode=1), 50i->50p, maintains original framerate for smooth motion. "
-               "Requires copy-back hwdec or software decoding.")
+               "Deinterlacing for interlaced video. 'Auto' lets mpv/FFmpeg detect interlaced "
+               "frames and only then insert the deinterlace filter, so progressive sources pay "
+               "no filtering cost. With native hardware decoding the filter may not be insertable; "
+               "switch hardware decoding to copy-back (or software) if combing remains.")
         )
 
         # 缓存 override：留空或 0 表示保持播放器内部动态计算值（按流类型/HDR/分辨率自适应）
@@ -2151,6 +2150,19 @@ class SettingsFileOperations:
                             new_val = 'auto-copy'
                         else:
                             new_val = 'no'
+                elif cfg_key == 'framedrop':
+                    # 旧配置可能残留 insert/none/never（mpv 不认），即时应用时一并纠正
+                    fd = str(new_val).lower()
+                    if fd == 'yes':
+                        fd = 'decoder+vo'
+                    new_val = fd if fd in ('no', 'vo', 'decoder', 'decoder+vo') else 'vo'
+                elif cfg_key == 'video_sync':
+                    vs = str(new_val).lower()
+                    if vs not in ('audio', 'display-resample', 'display-resample-vdrop',
+                                  'display-resample-desync', 'display-tempo',
+                                  'display-vdrop', 'display-adrop', 'display-desync', 'desync'):
+                        vs = 'audio'
+                    new_val = vs
                 pc.set_property_string(mpv_prop, str(new_val))
             except Exception as e:
                 global_logger.debug(f"即时应用 {mpv_prop}={new_val} 失败: {e}")
@@ -2174,15 +2186,21 @@ class SettingsFileOperations:
             except Exception as e:
                 global_logger.debug(f"即时应用 network-timeout={new_net} 失败: {e}")
 
-        # 反交错：使用 vf 滤镜（yadif=mode=1 bob）代替 deinterlace 属性，保持帧率不变
+        # 反交错：auto 用 mpv 的 deinterlace=auto（FFmpeg 检测到隔行帧才插滤镜），
+        # yes（旧配置）仍用 yadif bob 滤镜。
         old_di = old_playback.get('deinterlace', 'no')
         new_di = new_playback.get('deinterlace', 'no')
         if old_di != new_di:
             try:
                 di_val = str(new_di).lower()
-                if di_val in ('yes', 'auto'):
+                if di_val == 'auto':
+                    pc._disable_deinterlace_filter()
+                    pc.set_property_string('deinterlace', 'auto')
+                elif di_val == 'yes':
+                    pc.set_property_string('deinterlace', 'no')
                     pc._enable_deinterlace_filter()
                 else:
+                    pc.set_property_string('deinterlace', 'no')
                     pc._disable_deinterlace_filter()
             except Exception as e:
                 global_logger.debug(f"即时应用 deinterlace={new_di} 失败: {e}")
@@ -2192,18 +2210,8 @@ class SettingsFileOperations:
         new_pt = new_playback.get('audio_passthrough', 'never')
         if old_pt != new_pt:
             try:
-                if new_pt and new_pt != 'never':
-                    passthrough_map = {
-                        'all': 'yes',
-                        'hd_codecs': 'ac3,eac3,dts,dts-hd,truehd',
-                        'lossless': 'flac,alac,truehd,dts-hd',
-                        'spdif_only': 'ac3,eac3,dts',
-                    }
-                    pt_val = passthrough_map.get(new_pt, '')
-                    if pt_val:
-                        pc.set_property_string('audio-spdif', pt_val)
-                else:
-                    pc.set_property_string('audio-spdif', '')
+                pt_val = AUDIO_SPDIF_MAP.get(new_pt, '') if new_pt else ''
+                pc.set_property_string('audio-spdif', pt_val)
             except Exception as e:
                 global_logger.debug(f"即时应用 audio-passthrough={new_pt} 失败: {e}")
 

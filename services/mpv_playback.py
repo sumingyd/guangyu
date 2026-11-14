@@ -42,6 +42,7 @@ from services.mpv_common import (
     get_property_node as _mpv_get_property_node,
     DEFAULT_USER_AGENT,
     DEFAULT_NETWORK_TIMEOUT_SEC,
+    AUDIO_SPDIF_MAP,
 )
 
 
@@ -529,35 +530,42 @@ class MpvPlayback:
             # - framedrop：视频输出慢时丢帧策略，默认 vo（VO 慢时丢帧），用户可配置
             # - cache-pause-initial=no：初始缓存阶段不暂停，避免直播流启动卡顿
             # - video-sync：音画同步基准，默认 audio（以音频时钟为基准），用户可配置
+            # mpv 合法取值：no / vo / decoder / decoder+vo（yes 为 decoder+vo 的别名）。
+            # 旧配置里的 insert/none/never 不是 mpv 认的值，会整条被拒绝，这里回落到默认 vo。
             framedrop_raw = str(self._facade._playback_settings.get('framedrop', 'vo')).lower()
-            if framedrop_raw not in ('vo', 'decoder', 'insert', 'none', 'never'):
+            if framedrop_raw == 'yes':
+                framedrop_raw = 'decoder+vo'
+            if framedrop_raw not in ('no', 'vo', 'decoder', 'decoder+vo'):
                 framedrop_raw = 'vo'
             _mpv_set_property_string(self._facade.mpv_handle, 'framedrop', framedrop_raw)
             _mpv_set_property_string(self._facade.mpv_handle, 'cache-pause-initial', 'no')
+            # mpv 合法取值不含 'resample'（旧界面遗留），非法值整条被拒绝，回落 audio。
             video_sync_raw = str(self._facade._playback_settings.get('video_sync', 'audio')).lower()
-            if video_sync_raw not in ('audio', 'display-resample', 'display-tempo', 'resample',
-                                      'display-desync', 'desync'):
+            if video_sync_raw not in ('audio', 'display-resample', 'display-resample-vdrop',
+                                      'display-resample-desync', 'display-tempo',
+                                      'display-vdrop', 'display-adrop', 'display-desync', 'desync'):
                 video_sync_raw = 'audio'
             _mpv_set_property_string(self._facade.mpv_handle, 'video-sync', video_sync_raw)
 
-            # 反交错：使用 yadif=mode=1 (bob) vf 滤镜代替 mpv 的 deinterlace 属性
-            # 原因：deinterlace=yes 内部用 yadif mode=0（frame mode），50i→25p 帧率减半，运动卡顿
-            # yadif=mode=1 (field/bob mode) 输出 50i→50p，保持运动流畅同时消除梳齿条纹
+            # 反交错：
+            # - auto：交给 mpv 的 deinterlace=auto，由 FFmpeg 判断帧是否隔行后再插 bwdif，
+            #   逐行片源不付滤镜开销（这才是「自动」的真实语义）。
+            # - yes（旧配置）：保留 yadif=mode=1（bob）滤镜，50i→50p，运动比 bwdif 帧模式更顺。
             deinterlace_raw = str(self._facade._playback_settings.get('deinterlace', 'no')).lower()
             if deinterlace_raw not in ('yes', 'no', 'auto'):
                 deinterlace_raw = 'no'
-            if deinterlace_raw in ('yes', 'auto'):
+            if deinterlace_raw == 'auto':
+                self._facade._disable_deinterlace_filter()
+                self._facade._set_mpv_string('deinterlace', 'auto')
+            elif deinterlace_raw == 'yes':
+                self._facade._set_mpv_string('deinterlace', 'no')
                 self._facade._enable_deinterlace_filter()
+            else:
+                self._facade._set_mpv_string('deinterlace', 'no')
 
             passthrough = self._facade._playback_settings.get('audio_passthrough', 'never')
             if passthrough and passthrough != 'never':
-                passthrough_map = {
-                    'all': 'yes',
-                    'hd_codecs': 'ac3,eac3,dts,dts-hd,truehd',
-                    'lossless': 'flac,alac,truehd,dts-hd',
-                    'spdif_only': 'ac3,eac3,dts',
-                }
-                pt_val = passthrough_map.get(passthrough, '')
+                pt_val = AUDIO_SPDIF_MAP.get(passthrough, '')
                 if pt_val:
                     _mpv_set_property_string(self._facade.mpv_handle, 'audio-spdif', pt_val)
                     self._facade.logger.info(f"音频直通已启用: {passthrough} -> {pt_val}")
