@@ -12,6 +12,7 @@
 import os
 import sys
 import time
+import types
 from datetime import datetime, timedelta
 
 import pytest
@@ -402,3 +403,48 @@ def test_widget_paints_offscreen(env):
         assert image.width() == 640 and image.height() == 360
     finally:
         widget.hide()
+
+
+class _FakeTimer:
+    def __init__(self, interval_ms=1000):
+        self.interval_ms = interval_ms
+        self.active = True
+
+    def setInterval(self, value):
+        self.interval_ms = value
+
+    def stop(self):
+        self.active = False
+
+    def start(self):
+        self.active = True
+
+    def isActive(self):
+        return self.active
+
+
+def test_evaluate_error_backs_off_limits_logs_and_recovers(monkeypatch):
+    # 只驱动异常处理本身，不创建控件（判定失败发生在进入屏保之前）
+    timer = _FakeTimer()
+    ctrl = types.SimpleNamespace(
+        _eval_failures=0, _last_eval_error_log=0.0, _degraded=False,
+        _started=False, _base_poll_ms=1000, _poll_timer=timer)
+    warnings = []
+    monkeypatch.setattr('controllers.screensaver_controller.logger.warning',
+                        lambda msg, *a, **k: warnings.append(msg))
+
+    ScreenSaverController._on_evaluate_error(ctrl, TypeError('boom'))
+    assert timer.interval_ms == 1000
+    ScreenSaverController._on_evaluate_error(ctrl, TypeError('boom'))
+    assert timer.interval_ms == 2000
+    assert len(warnings) == 1, '连续失败不重复刷日志'
+
+    for _ in range(3):
+        ScreenSaverController._on_evaluate_error(ctrl, TypeError('boom'))
+    assert ctrl._degraded and not timer.isActive()
+    assert len(warnings) == 2
+
+    # 用户操作后恢复轮询与配置间隔
+    ScreenSaverController._recover_after_error(ctrl)
+    assert not ctrl._degraded and ctrl._eval_failures == 0
+    assert timer.interval_ms == 1000

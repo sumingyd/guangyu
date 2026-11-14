@@ -15,6 +15,7 @@
 """
 
 from dataclasses import dataclass
+from typing import NamedTuple
 
 __all__ = ['IdleSnapshot', 'IdleDecision', 'IdlePolicy']
 
@@ -39,8 +40,14 @@ class IdleSnapshot:
             object.__setattr__(self, 'seconds_since_input', 0.0)
 
 
-@dataclass(frozen=True)
-class IdleDecision:
+class IdleDecision(NamedTuple):
+    """一次判定结果。
+
+    刻意用 NamedTuple 而不是 dataclass：构造走 ``__new__``，不经过 Python 层
+    ``__init__``。运行期即使类对象被替换/装饰，也不会再触发
+    ``TypeError: __init__() should return None`` 这类构造期错误。
+    """
+
     idle: bool
     reason: str
 

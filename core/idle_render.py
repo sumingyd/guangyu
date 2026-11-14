@@ -15,6 +15,7 @@
 
 import os
 import time
+import traceback
 
 from PySide6.QtCore import QEvent, QObject, QTimer
 from PySide6.QtWidgets import QApplication
@@ -26,6 +27,13 @@ __all__ = ['IdleRenderController', 'POLICY_STOP', 'POLICY_SLOW']
 
 POLICY_STOP = 'stop'
 POLICY_SLOW = 'slow'
+
+# 判定异常时的退避/限流参数：连续失败按 2 的幂退避，上限 30s；
+# 日志 5 分钟最多一条；连续失败到阈值后停止轮询（保持正常刷新），
+# 用户再次操作时自动重试，避免异常在定时器里无限刷屏。
+_ERROR_LOG_INTERVAL_S = 300.0
+_MAX_BACKOFF_MS = 30000
+_MAX_FAILURES_BEFORE_DEGRADE = 5
 
 _INPUT_EVENTS = {
     QEvent.Type.KeyPress,
@@ -98,8 +106,13 @@ class IdleRenderController(QObject):
         self.paused_timers = 0
 
         self._poll_timer = QTimer(self)
-        self._poll_timer.setInterval(max(200, int(poll_interval_ms)))
+        self._base_poll_ms = max(200, int(poll_interval_ms))
+        self._poll_timer.setInterval(self._base_poll_ms)
         self._poll_timer.timeout.connect(self._evaluate)
+        # 判定异常退避状态：连续失败计数、上次写日志时间、是否已降级停轮询
+        self._eval_failures = 0
+        self._last_eval_error_log = 0.0
+        self._degraded = False
 
         self._last_snapshot = None
 
@@ -183,8 +196,22 @@ class IdleRenderController(QObject):
     def note_activity(self):
         """标记一次用户输入；空闲中会立即恢复刷新。"""
         self._last_input_ts = time.monotonic()
+        self._recover_after_error()
         if self._idle:
             self._apply_active('input')
+
+    def _recover_after_error(self):
+        """判定曾因异常降级时，等下一次用户操作再恢复轮询。"""
+        if not self._degraded and not self._eval_failures:
+            return
+        self._degraded = False
+        self._eval_failures = 0
+        try:
+            self._poll_timer.setInterval(self._base_poll_ms)
+            if self._started and not self._poll_timer.isActive():
+                self._poll_timer.start()
+        except RuntimeError:
+            pass
 
     def start(self):
         if self._started:
@@ -196,6 +223,7 @@ class IdleRenderController(QObject):
                 app.installEventFilter(self)
             except Exception:
                 pass
+        self._recover_after_error()
         self._poll_timer.start()
         logger.info(f"[idle] 空闲停绘已启用（阈值 {self._policy.idle_after_seconds:.0f}s，"
                     f"轮询 {self._poll_timer.interval()}ms）")
@@ -293,17 +321,46 @@ class IdleRenderController(QObject):
         if self._hold_reasons:
             # 屏保等动画源在运行：不做空闲判定，也不降频任何定时器
             return
-        snapshot = self._sample()
-        self._last_snapshot = snapshot
-        decision = self._policy.evaluate(snapshot, time.monotonic())
-        if decision.idle and not self._idle:
-            self._apply_idle(decision.reason)
-        elif not decision.idle and self._idle:
-            self._apply_active(decision.reason)
-        elif self._idle:
-            # 空闲期间按需创建的定时器（如歌词组件）也要立即降频/停止，
-            # 否则用户暂停后打开新面板会漏掉一个 60fps 定时器。
-            self._quiesce_lazy_entries()
+        try:
+            snapshot = self._sample()
+            self._last_snapshot = snapshot
+            decision = self._policy.evaluate(snapshot, time.monotonic())
+            if decision.idle and not self._idle:
+                self._apply_idle(decision.reason)
+            elif not decision.idle and self._idle:
+                self._apply_active(decision.reason)
+            elif self._idle:
+                # 空闲期间按需创建的定时器（如歌词组件）也要立即降频/停止，
+                # 否则用户暂停后打开新面板会漏掉一个 60fps 定时器。
+                self._quiesce_lazy_entries()
+        except Exception as e:
+            self._on_evaluate_error(e)
+            return
+        if self._eval_failures:
+            # 恢复：把轮询间隔还原成配置值
+            self._eval_failures = 0
+            self._poll_timer.setInterval(self._base_poll_ms)
+
+    def _on_evaluate_error(self, exc):
+        """判定/执行异常时退避并限流日志，避免定时器里每帧刷屏。"""
+        self._eval_failures += 1
+        now = time.monotonic()
+        if self._eval_failures == 1 or now - self._last_eval_error_log >= _ERROR_LOG_INTERVAL_S:
+            self._last_eval_error_log = now
+            logger.warning(
+                f"[idle] 空闲判定失败（连续 {self._eval_failures} 次，已退避）: "
+                f"{type(exc).__name__}: {exc}")
+            logger.debug(traceback.format_exc())
+        if self._eval_failures >= _MAX_FAILURES_BEFORE_DEGRADE:
+            if not self._degraded:
+                self._degraded = True
+                self._poll_timer.stop()
+                logger.warning("[idle] 空闲判定连续失败，已暂停判定并保持正常刷新；"
+                               "用户再次操作后重新启用")
+            return
+        backoff = min(_MAX_BACKOFF_MS,
+                      self._base_poll_ms * (2 ** min(self._eval_failures - 1, 5)))
+        self._poll_timer.setInterval(backoff)
 
     def _quiesce_lazy_entries(self):
         for entry in list(self._entries.values()):

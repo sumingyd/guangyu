@@ -5,7 +5,17 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.idle_policy import IdlePolicy, IdleSnapshot
+from core.idle_policy import IdleDecision, IdlePolicy, IdleSnapshot
+
+
+def test_idle_decision_constructs_without_custom_init():
+    # 之前运行期出现 "__init__() should return None, not 'NoneType'"；
+    # 用 NamedTuple 后构造只经过 __new__，类里也不再定义 __init__
+    assert '__init__' not in IdleDecision.__dict__
+    active = IdleDecision(False, 'active')
+    assert active.idle is False and active.reason == 'active'
+    assert not active
+    assert bool(IdleDecision(True, 'inactive')) is True
 
 
 def _snapshot(**kwargs):

@@ -172,3 +172,41 @@ def test_status_snapshot_is_observable(app):
     assert status['idle'] is False
     assert status['registered'] == ['a']
     assert {'enter_count', 'exit_count', 'paused_timers', 'reason'} <= set(status)
+
+
+class _BrokenPolicy:
+    """模拟运行期判定对象被替换成会抛异常的版本。"""
+
+    idle_after_seconds = 60.0
+
+    def evaluate(self, snapshot, now):
+        raise TypeError("__init__() should return None, not 'NoneType'")
+
+
+def test_evaluate_error_backs_off_limits_logs_and_degrades(app, monkeypatch):
+    window = _WindowStub()
+    ctrl = IdleRenderController(window, idle_after_seconds=0, poll_interval_ms=1000)
+    ctrl._policy = _BrokenPolicy()
+    warnings = []
+    monkeypatch.setattr('core.idle_render.logger.warning',
+                        lambda msg, *a, **k: warnings.append(msg))
+    ctrl.start()
+    try:
+        ctrl._evaluate()  # 不向上抛
+        assert ctrl._poll_timer.interval() == 1000
+        ctrl._evaluate()
+        assert ctrl._poll_timer.interval() == 2000
+        # 连续失败不重复刷日志
+        assert len(warnings) == 1
+        for _ in range(3):
+            ctrl._evaluate()
+        assert ctrl._degraded and not ctrl._poll_timer.isActive()
+        assert len(warnings) == 2
+
+        # 用户操作后恢复轮询与配置间隔
+        ctrl.note_activity()
+        assert not ctrl._degraded
+        assert ctrl._poll_timer.isActive()
+        assert ctrl._poll_timer.interval() == 1000
+    finally:
+        ctrl.shutdown(restore=False)

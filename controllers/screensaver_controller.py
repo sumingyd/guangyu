@@ -16,6 +16,7 @@
 """
 
 import time
+import traceback
 from datetime import datetime
 
 from PySide6.QtCore import QEvent, QLocale, QObject, QTimer
@@ -55,6 +56,13 @@ for _name in ('TouchBegin', 'TouchEnd', 'TouchUpdate'):
         _INPUT_EVENTS.add(getattr(QEvent.Type, _name))
 
 _SWALLOW_WINDOW_SECONDS = 2.0
+
+# 判定异常时的退避/限流参数：连续失败按 2 的幂退避，上限 30s；
+# 日志 5 分钟最多一条；连续失败到阈值后停止轮询，用户再次操作时自动重试，
+# 避免异常在定时器里无限刷屏。
+_ERROR_LOG_INTERVAL_S = 300.0
+_MAX_BACKOFF_MS = 30000
+_MAX_FAILURES_BEFORE_DEGRADE = 5
 
 
 def parse_enabled(value, default=True):
@@ -127,8 +135,13 @@ class ScreenSaverController(QObject):
         self.exit_count = 0
 
         self._poll_timer = QTimer(self)
-        self._poll_timer.setInterval(max(200, int(poll_interval_ms)))
+        self._base_poll_ms = max(200, int(poll_interval_ms))
+        self._poll_timer.setInterval(self._base_poll_ms)
         self._poll_timer.timeout.connect(self._evaluate)
+        # 判定异常退避状态：连续失败计数、上次写日志时间、是否已降级停轮询
+        self._eval_failures = 0
+        self._last_eval_error_log = 0.0
+        self._degraded = False
 
     # ---- 公共 API ----
     @property
@@ -170,6 +183,7 @@ class ScreenSaverController(QObject):
             except Exception:
                 pass
         self._last_input_ts = time.monotonic()
+        self._recover_after_error()
         self._poll_timer.start()
         logger.info(f"[screensaver] 已启用（开关={self._enabled} 等待={self._minutes} 分钟）")
 
@@ -209,8 +223,22 @@ class ScreenSaverController(QObject):
 
     def note_activity(self):
         self._last_input_ts = time.monotonic()
+        self._recover_after_error()
         if self._active:
             self._deactivate('input')
+
+    def _recover_after_error(self):
+        """判定曾因异常降级时，等下一次用户操作再恢复轮询。"""
+        if not self._degraded and not self._eval_failures:
+            return
+        self._degraded = False
+        self._eval_failures = 0
+        try:
+            self._poll_timer.setInterval(self._base_poll_ms)
+            if self._started and not self._poll_timer.isActive():
+                self._poll_timer.start()
+        except RuntimeError:
+            pass
 
     # ---- 事件过滤：输入即退出，并吞掉这一下输入 ----
     def eventFilter(self, obj, event):
@@ -355,6 +383,36 @@ class ScreenSaverController(QObject):
     def _evaluate(self):
         if not self._started:
             return
+        try:
+            self._evaluate_once()
+        except Exception as e:
+            self._on_evaluate_error(e)
+            return
+        if self._eval_failures:
+            self._eval_failures = 0
+            self._poll_timer.setInterval(self._base_poll_ms)
+
+    def _on_evaluate_error(self, exc):
+        """判定异常时退避并限流日志，避免定时器里每帧刷屏。"""
+        self._eval_failures += 1
+        now = time.monotonic()
+        if self._eval_failures == 1 or now - self._last_eval_error_log >= _ERROR_LOG_INTERVAL_S:
+            self._last_eval_error_log = now
+            logger.warning(
+                f"[screensaver] 空闲判定失败（连续 {self._eval_failures} 次，已退避）: "
+                f"{type(exc).__name__}: {exc}")
+            logger.debug(traceback.format_exc())
+        if self._eval_failures >= _MAX_FAILURES_BEFORE_DEGRADE:
+            if not self._degraded:
+                self._degraded = True
+                self._poll_timer.stop()
+                logger.warning("[screensaver] 空闲判定连续失败，已暂停判定；用户再次操作后重新启用")
+            return
+        self._poll_timer.setInterval(
+            min(_MAX_BACKOFF_MS,
+                self._base_poll_ms * (2 ** min(self._eval_failures - 1, 5))))
+
+    def _evaluate_once(self):
         if not self._enabled:
             if self._active:
                 self._deactivate('disabled')
