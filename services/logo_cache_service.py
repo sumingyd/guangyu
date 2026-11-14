@@ -347,7 +347,9 @@ class LogoCacheService(ThreadSafeQObject):
 
     def _start_download(self, url):
         try:
-            request = QNetworkRequest(QUrl(url))
+            # 台标等 GitHub 图片按「GitHub 加速代理」配置改写；缓存键仍用原始 URL
+            from utils.github_proxy import rewrite_url
+            request = QNetworkRequest(QUrl(rewrite_url(url)))
             request.setHeader(QNetworkRequest.KnownHeaders.UserAgentHeader,
                               'Mozilla/5.0 (Windows NT 10.0; Win64; x64)')
             try:

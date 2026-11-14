@@ -5,9 +5,13 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.disk.DiskCache
 import coil.imageLoader
+import coil.intercept.Interceptor
 import coil.memory.MemoryCache
 import coil.request.CachePolicy
+import coil.request.ImageResult
 import com.chaquo.python.android.PyApplication
+import com.iptv.scanner.editor.pro.data.GithubProxy
+import com.iptv.scanner.editor.pro.data.GithubProxyRuntime
 import org.acra.ACRA
 import org.acra.config.CoreConfigurationBuilder
 import org.acra.data.StringFormat
@@ -139,6 +143,28 @@ class IptvApplication : PyApplication(), ImageLoaderFactory {
         return ImageLoader.Builder(this)
             .crossfade(true)
             .crossfade(200)
+            // 台标等 GitHub 图片同样按用户选择的加速代理加载
+            .components {
+                add(object : Interceptor {
+                    override suspend fun intercept(chain: Interceptor.Chain): ImageResult {
+                        val data = chain.request.data
+                        if (GithubProxyRuntime.enabled && data is String &&
+                            GithubProxy.isGithubUrl(data)) {
+                            val rewritten = GithubProxy.rewrite(
+                                data,
+                                GithubProxyRuntime.enabled,
+                                GithubProxyRuntime.proxy
+                            )
+                            if (rewritten != data) {
+                                return chain.proceed(
+                                    chain.request.newBuilder().data(rewritten).build()
+                                )
+                            }
+                        }
+                        return chain.proceed(chain.request)
+                    }
+                })
+            }
             // 内存缓存：50MB 上限
             .memoryCache {
                 MemoryCache.Builder(this)

@@ -1067,6 +1067,7 @@ internal fun AppViewModel.resetAllPanelStates() {
         _mappingPanelOpen.value = false
         _avSyncPanelOpen.value = false
         _networkPanelOpen.value = false
+        _githubProxyPanelOpen.value = false
         _toolsPanelOpen.value = false
         _playerToolsOpen.value = false
         _scanPanelOpen.value = false

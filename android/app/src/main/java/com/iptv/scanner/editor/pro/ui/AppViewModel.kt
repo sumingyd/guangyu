@@ -18,6 +18,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.iptv.scanner.editor.pro.data.IptvChannel
+import com.iptv.scanner.editor.pro.data.GithubProxy
+import com.iptv.scanner.editor.pro.data.GithubProxySettings
 import com.iptv.scanner.editor.pro.data.IptvEpgList
 import com.iptv.scanner.editor.pro.data.IptvEpgProgram
 import com.iptv.scanner.editor.pro.data.IptvEpgSource
@@ -811,6 +813,20 @@ internal var _channelInputJob: kotlinx.coroutines.Job? = null
     internal val _updateDialogOpen = MutableStateFlow(false)
     val updateDialogOpen: StateFlow<Boolean> = _updateDialogOpen.asStateFlow()
 
+    // GitHub 加速代理（配置存 config.ini，与 PC 端共用同一份设置）
+    internal val _githubProxyEnabled = MutableStateFlow(true)
+    val githubProxyEnabled: StateFlow<Boolean> = _githubProxyEnabled.asStateFlow()
+
+    internal val _githubProxySelected = MutableStateFlow(GithubProxy.DEFAULT_PROXY)
+    val githubProxySelected: StateFlow<String> = _githubProxySelected.asStateFlow()
+
+    internal val _githubProxyOptions = MutableStateFlow(GithubProxy.PROXY_LIST)
+    val githubProxyOptions: StateFlow<List<String>> = _githubProxyOptions.asStateFlow()
+
+    /** 配置是否已从 Python 侧读过；未读到时按默认（开启 + 默认代理）处理 */
+    @Volatile
+    internal var githubProxyReady: Boolean = false
+
     // 应用内 APK 下载更新（替代浏览器跳转，TV 端友好）
     /** 下载状态：空闲 / 下载中 / 下载完成 / 下载失败 */
 
@@ -888,6 +904,10 @@ internal var _channelInputJob: kotlinx.coroutines.Job? = null
     // 网络增强面板
     internal val _networkPanelOpen = MutableStateFlow(false)
     val networkPanelOpen: StateFlow<Boolean> = _networkPanelOpen.asStateFlow()
+
+    // GitHub 加速代理设置面板（设置 → 网络）
+    internal val _githubProxyPanelOpen = MutableStateFlow(false)
+    val githubProxyPanelOpen: StateFlow<Boolean> = _githubProxyPanelOpen.asStateFlow()
 
     // 工具面板
     internal val _toolsPanelOpen = MutableStateFlow(false)
@@ -1253,7 +1273,7 @@ internal var currentIsLocalFile: Boolean
         _fileBrowserOpen, _sourceManagerOpen, _playerSettingsOpen, _videoSettingsOpen,
         _audioSettingsOpen, _subtitleSettingsOpen, _subtitleSearchOpen, _playbackPanelOpen,
         _screenshotPanelOpen, _viewSettingsOpen, _aboutPanelOpen, _mappingPanelOpen,
-        _avSyncPanelOpen, _networkPanelOpen, _toolsPanelOpen, _scanPanelOpen,
+        _avSyncPanelOpen, _networkPanelOpen, _githubProxyPanelOpen, _toolsPanelOpen, _scanPanelOpen,
         _reminderPanelOpen, _resumePanelOpen, _bookmarkPanelOpen, _epgTimelineOpen,
         _searchPanelOpen, _streamQualityPanelOpen, _recentPanelOpen, _clipExportPanelOpen,
         _audioVisualizerOpen, _lyricsOpen, _exitConfirmOpen, _channelInfoOpen,
@@ -1627,7 +1647,7 @@ internal var currentIsLocalFile: Boolean
                 _screenshotPanelOpen.value || _viewSettingsOpen.value ||
                 _aboutPanelOpen.value || _updateDialogOpen.value || _exitConfirmOpen.value || _openUrlDialogOpen.value ||
                 _mappingPanelOpen.value || _avSyncPanelOpen.value ||
-                _networkPanelOpen.value || _toolsPanelOpen.value || _scanPanelOpen.value ||
+                _networkPanelOpen.value || _githubProxyPanelOpen.value || _toolsPanelOpen.value || _scanPanelOpen.value ||
                 _reminderPanelOpen.value || _resumePanelOpen.value || _bookmarkPanelOpen.value ||
                 _epgTimelineOpen.value || _searchPanelOpen.value ||
                 _streamQualityPanelOpen.value ||

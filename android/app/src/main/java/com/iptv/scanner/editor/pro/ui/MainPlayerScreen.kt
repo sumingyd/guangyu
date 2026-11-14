@@ -219,6 +219,7 @@ fun MainPlayerScreen(viewModel: AppViewModel) {
     val mappingPanelOpen by viewModel.mappingPanelOpen.collectAsState()
     val avSyncPanelOpen by viewModel.avSyncPanelOpen.collectAsState()
     val networkPanelOpen by viewModel.networkPanelOpen.collectAsState()
+    val githubProxyPanelOpen by viewModel.githubProxyPanelOpen.collectAsState()
     val toolsPanelOpen by viewModel.toolsPanelOpen.collectAsState()
     val playerToolsOpen by viewModel.playerToolsOpen.collectAsState()
     val scanPanelOpen by viewModel.scanPanelOpen.collectAsState()
@@ -269,7 +270,7 @@ fun MainPlayerScreen(viewModel: AppViewModel) {
             fileBrowserOpen || sourceManagerOpen || playerSettingsOpen || videoSettingsOpen ||
             audioSettingsOpen || subtitleSettingsOpen || subtitleSearchOpen || playbackPanelOpen ||
             screenshotPanelOpen || viewSettingsOpen || aboutPanelOpen || mappingPanelOpen ||
-            avSyncPanelOpen || networkPanelOpen || toolsPanelOpen || playerToolsOpen || scanPanelOpen ||
+            avSyncPanelOpen || networkPanelOpen || githubProxyPanelOpen || toolsPanelOpen || playerToolsOpen || scanPanelOpen ||
             reminderPanelOpen || resumePanelOpen || bookmarkPanelOpen || epgTimelineOpen ||
             searchPanelOpen || streamQualityPanelOpen || recentPanelOpen || clipExportPanelOpen ||
             audioVisualizerOpen || lyricsOpen || channelInfoOpen || openUrlDialogOpen -> {
@@ -392,7 +393,7 @@ fun MainPlayerScreen(viewModel: AppViewModel) {
             menuPanelOpen || sourceManagerOpen || playerSettingsOpen ||
                     videoSettingsOpen || audioSettingsOpen || subtitleSettingsOpen || subtitleSearchOpen ||
                     playbackPanelOpen || screenshotPanelOpen || viewSettingsOpen || aboutPanelOpen ||
-                    mappingPanelOpen || avSyncPanelOpen || networkPanelOpen || toolsPanelOpen || playerToolsOpen || scanPanelOpen ||
+                    mappingPanelOpen || avSyncPanelOpen || networkPanelOpen || githubProxyPanelOpen || toolsPanelOpen || playerToolsOpen || scanPanelOpen ||
                     reminderPanelOpen || resumePanelOpen || bookmarkPanelOpen ||
                     epgTimelineOpen || searchPanelOpen || streamQualityPanelOpen ||
                     recentPanelOpen || clipExportPanelOpen || audioVisualizerOpen || lyricsOpen ||
@@ -1151,6 +1152,13 @@ viewModel.mpv.setMute(savedMute)
         if (networkPanelOpen) {
             PortraitPanelDialog(onDismiss = { viewModel.toggleNetworkPanel() }) {
                 NetworkPanel(viewModel = viewModel)
+            }
+        }
+
+        // GitHub 加速代理（设置 → 网络）
+        if (githubProxyPanelOpen) {
+            PortraitPanelDialog(onDismiss = { viewModel.toggleGithubProxyPanel() }) {
+                GithubProxyPanel(viewModel = viewModel)
             }
         }
 

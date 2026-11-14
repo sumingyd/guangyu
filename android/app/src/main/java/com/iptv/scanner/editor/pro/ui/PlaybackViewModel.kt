@@ -205,6 +205,7 @@ internal fun AppViewModel.startInitialization() {
                             // 加载频道列表和用户偏好
                             loadChannels()
                             loadUserPrefs()
+                            loadGithubProxySettings()
                             // 初始化完成后延迟 5 秒自动检查更新（避免影响启动性能）
                             viewModelScope.launch {
                                 delay(5000)

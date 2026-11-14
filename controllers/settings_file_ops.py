@@ -203,6 +203,7 @@ class SettingsFileOperations:
         playback_content_layout.addWidget(self._build_protocol_section(tr, playback_settings))
         playback_content_layout.addWidget(self._build_close_behavior_section(tr))
         playback_content_layout.addWidget(screensaver_section)
+        playback_content_layout.addWidget(self._build_github_proxy_section(tr))
         playback_content_layout.addStretch()
 
         playback_scroll = QScrollArea()
@@ -468,6 +469,46 @@ class SettingsFileOperations:
 
         layout.addRow(enabled_check)
         layout.addRow(tr("screensaver_wait_label", "等待时间:"), idle_combo)
+        group.setLayout(layout)
+        return group
+
+    def _build_github_proxy_section(self, tr):
+        """GitHub 加速代理：启用开关 + 代理地址列表。
+
+        只影响 GitHub 域名的请求；用户自己的订阅源/EPG 源等非 GitHub 地址不受影响。
+        """
+        from utils import github_proxy
+
+        group = QGroupBox(tr("network_settings_group", "网络"))
+        layout = QFormLayout()
+
+        enabled_check = QCheckBox(tr("github_proxy_enabled", "启用 GitHub 加速代理"))
+        enabled_check.setObjectName("github_proxy_enabled_check")
+
+        proxy_combo = QComboBox()
+        proxy_combo.setObjectName("github_proxy_combo")
+        for proxy in github_proxy.PROXY_LIST:
+            proxy_combo.addItem(proxy, proxy)
+
+        settings = github_proxy.load_settings()
+        enabled_check.setChecked(settings['enabled'])
+        index = proxy_combo.findData(settings['proxy'])
+        proxy_combo.setCurrentIndex(max(0, index))
+        proxy_combo.setEnabled(settings['enabled'])
+        enabled_check.toggled.connect(proxy_combo.setEnabled)
+
+        layout.addRow(enabled_check)
+        layout.addRow(QLabel(tr("github_proxy_label", "代理地址:")), proxy_combo)
+
+        hint = QLabel(tr(
+            "github_proxy_hint",
+            "仅加速检查更新、在线更新、远程映射、订阅源与 EPG 的 GitHub 请求；"
+            "其他地址不受影响。修改后立即生效。"
+        ))
+        hint.setWordWrap(True)
+        hint.setStyleSheet(AppStyles.hint_label_style())
+        layout.addRow(hint)
+
         group.setLayout(layout)
         return group
 
@@ -935,11 +976,15 @@ class SettingsFileOperations:
         pick('video_sync_combo', 'audio')
         pick('close_behavior_combo', 'ask')
         pick('screensaver_idle_combo', 5)
+        pick('github_proxy_combo', 'gh-proxy.com')
 
         check = dialog.findChild(QCheckBox, "tls_check")
         if check is not None:
             check.setChecked(False)
         check = dialog.findChild(QCheckBox, "screensaver_enabled_check")
+        if check is not None:
+            check.setChecked(True)
+        check = dialog.findChild(QCheckBox, "github_proxy_enabled_check")
         if check is not None:
             check.setChecked(True)
 
@@ -968,6 +1013,7 @@ class SettingsFileOperations:
             self._save_intervals(dialog)
             self._save_close_behavior(dialog)
             self._save_screensaver_settings(dialog)
+            self._save_github_proxy_settings(dialog)
             self._apply_playback_settings(new_playback)
 
             playlist_changed, new_active_index = self._check_playlist_changed(old_playlist, new_playlist, old_active_index)
@@ -1098,6 +1144,18 @@ class SettingsFileOperations:
                 ctrl.reload_config()
             except Exception as e:
                 logger.debug(f"屏保配置热更新失败: {e}")
+
+    def _save_github_proxy_settings(self, dialog):
+        """写入 GitHub 加速代理开关与代理地址，立即生效（下次请求即按新配置改写）。"""
+        check = dialog.findChild(QCheckBox, "github_proxy_enabled_check")
+        combo = dialog.findChild(QComboBox, "github_proxy_combo")
+        if check is None and combo is None:
+            return
+        from utils import github_proxy
+        current = github_proxy.load_settings()
+        enabled = check.isChecked() if check is not None else current['enabled']
+        proxy = combo.currentData() if combo is not None and combo.currentData() else current['proxy']
+        github_proxy.save_settings(enabled, proxy)
 
     def _apply_playback_settings(self, new_playback):
         if not new_playback or not self.window.config:

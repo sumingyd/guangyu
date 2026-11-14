@@ -273,6 +273,16 @@ class IptvRepository private constructor() {
         callPyTyped("get_source_status_json")
 
     // -----------------------------------------------------------------
+    // GitHub 加速代理（配置存 config.ini，与 PC 端共用）
+    // -----------------------------------------------------------------
+
+    suspend fun getGithubProxy(): Result<GithubProxySettings> =
+        callPyTyped("get_github_proxy_json")
+
+    suspend fun setGithubProxy(enabled: Boolean, proxy: String): Result<GithubProxySettings> =
+        callPyTyped("set_github_proxy", enabled.toString(), proxy)
+
+    // -----------------------------------------------------------------
     // EPG 订阅源
     // -----------------------------------------------------------------
 

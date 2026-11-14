@@ -13,6 +13,7 @@ import com.iptv.scanner.editor.pro.data.SubtitleItem
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -34,6 +35,8 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -77,6 +80,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -89,6 +93,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -96,6 +101,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -108,6 +114,7 @@ import com.iptv.scanner.editor.pro.data.MappingEntry
 import com.iptv.scanner.editor.pro.ui.theme.tvFocusBorder
 import com.iptv.scanner.editor.pro.ui.theme.tvTextField
 import com.iptv.scanner.editor.pro.ui.theme.rememberPlayerOverlayColors
+import kotlinx.coroutines.launch
 import org.json.JSONArray
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -191,5 +198,73 @@ fun NetworkPanel(viewModel: AppViewModel) {
 
         Spacer(modifier = Modifier.height(8.dp))
         DescText("注意：设置在下次加载流时生效，当前播放不会立即应用。")
+    }
+}
+
+// -----------------------------------------------------------------
+// GitHub 加速代理（设置 -> 网络）
+// -----------------------------------------------------------------
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun GithubProxyPanel(viewModel: AppViewModel) {
+    val enabled by viewModel.githubProxyEnabled.collectAsState()
+    val selected by viewModel.githubProxySelected.collectAsState()
+    val options by viewModel.githubProxyOptions.collectAsState()
+
+    LaunchedEffect(Unit) { viewModel.loadGithubProxySettings() }
+
+    PanelScaffold(
+        title = "GitHub 加速代理",
+        subtitle = "用于检查更新、在线更新、远程映射、订阅源与 EPG",
+        onClose = { viewModel.toggleGithubProxyPanel() }
+    ) {
+        SettingsGroup("加速开关") {
+            AptvSwitchRow(
+                Icons.Default.Link,
+                "启用 GitHub 加速代理",
+                checked = enabled,
+                onCheckedChange = { viewModel.setGithubProxyEnabled(it) }
+            )
+            DescText("只改写 GitHub 域名请求；订阅源、EPG 等非 GitHub 地址不受影响。")
+        }
+
+        SettingsGroup("代理地址") {
+            val scope = rememberCoroutineScope()
+            options.forEach { proxy ->
+                // 遥控器上下移动时把当前项滚进可视区，避免 25 个代理里后段永远够不到
+                val bring = remember(proxy) { BringIntoViewRequester() }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 2.dp)
+                        .bringIntoViewRequester(bring)
+                        .onFocusChanged {
+                            if (it.isFocused) scope.launch { bring.bringIntoView() }
+                        }
+                        .tvFocusBorder()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(enabled = enabled) { viewModel.setGithubProxySelected(proxy) }
+                        .padding(horizontal = 8.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(
+                        selected = proxy == selected,
+                        onClick = null,
+                        enabled = enabled
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = proxy,
+                        color = if (proxy == selected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface,
+                        fontSize = 14.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            DescText("修改后立即生效，无需重启。")
+        }
     }
 }

@@ -18,6 +18,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.iptv.scanner.editor.pro.data.IptvChannel
+import com.iptv.scanner.editor.pro.data.GithubProxy
+import com.iptv.scanner.editor.pro.data.GithubProxySettings
 import com.iptv.scanner.editor.pro.data.IptvEpgList
 import com.iptv.scanner.editor.pro.data.IptvEpgProgram
 import com.iptv.scanner.editor.pro.data.IptvEpgSource
@@ -276,8 +278,9 @@ internal fun AppViewModel.checkForUpdates(auto: Boolean = false) {
     viewModelScope.launch {
         try {
             val currentVersion = getCurrentVersion()
+            val proxySettings = withContext(Dispatchers.IO) { fetchGithubProxySettings() }
             val (latestVersion, downloadUrl, releaseUrl) = withContext(Dispatchers.IO) {
-                fetchLatestRelease()
+                fetchLatestRelease(proxySettings)
             }
             if (latestVersion.isNullOrEmpty()) {
                 if (!auto) {
@@ -328,13 +331,17 @@ internal fun AppViewModel.downloadAndInstallApk(url: String) {
         return
     }
     val scheme = parsedUrl.scheme?.lowercase()
-    val host = parsedUrl.host?.lowercase() ?: ""
-    if (scheme != "https" || (host != "github.com" && !host.endsWith(".github.com") &&
-            !host.endsWith(".githubusercontent.com"))) {
+    if (scheme != "https" || !GithubProxy.isGithubUrl(url)) {
         _apkDownloadState.value = ApkDownloadState.Error("仅允许从 GitHub 下载更新")
         Log.w(AppViewModel.TAG, "downloadAndInstallApk: blocked non-GitHub URL: $url")
         return
     }
+    // 开关开启时下载请求同样走加速代理（下载地址本身必须是 GitHub，避免被任意地址绕过）
+    val requestUrl = GithubProxy.rewrite(
+        url,
+        _githubProxyEnabled.value,
+        _githubProxySelected.value
+    )
     if (_apkDownloadState.value is ApkDownloadState.Downloading) {
         Log.w(AppViewModel.TAG, "downloadAndInstallApk: already downloading, ignored")
         return
@@ -361,11 +368,11 @@ internal fun AppViewModel.downloadAndInstallApk(url: String) {
     // 删除旧文件避免 DownloadManager 报错 FILE_ALREADY_EXISTS
     if (apkFile.exists()) apkFile.delete()
 
-    Log.i(AppViewModel.TAG, "downloadAndInstallApk: starting download, url=$url, target=${apkFile.absolutePath}")
+    Log.i(AppViewModel.TAG, "downloadAndInstallApk: starting download, url=$requestUrl, target=${apkFile.absolutePath}")
 
     // 构建下载请求
     val request = try {
-        DownloadManager.Request(Uri.parse(url)).apply {
+        DownloadManager.Request(Uri.parse(requestUrl)).apply {
             setTitle("光屿 更新")
             setDescription("正在下载最新版 APK...")
             setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
@@ -567,8 +574,13 @@ internal fun AppViewModel.dismissExitConfirm() {
     _exitConfirmOpen.value = false
 }
 
-internal fun AppViewModel.fetchLatestRelease(): Triple<String?, String?, String?> {
-    val conn = java.net.URL(AppViewModel.GITHUB_LATEST_API).openConnection() as java.net.HttpURLConnection
+internal fun AppViewModel.fetchLatestRelease(
+    proxy: GithubProxySettings? = null
+): Triple<String?, String?, String?> {
+    val proxyEnabled = proxy?.enabled ?: _githubProxyEnabled.value
+    val proxyHost = proxy?.proxy ?: _githubProxySelected.value
+    val apiUrl = GithubProxy.rewrite(AppViewModel.GITHUB_LATEST_API, proxyEnabled, proxyHost)
+    val conn = java.net.URL(apiUrl).openConnection() as java.net.HttpURLConnection
     try {
         conn.requestMethod = "GET"
         conn.setRequestProperty("User-Agent", "GuangYu")
@@ -688,6 +700,11 @@ internal fun AppViewModel.toggleAvSyncPanel() {
 internal fun AppViewModel.toggleNetworkPanel() {
     _networkPanelOpen.value = !_networkPanelOpen.value
     if (!_networkPanelOpen.value) showControlsAutoHide()
+}
+
+internal fun AppViewModel.toggleGithubProxyPanel() {
+    _githubProxyPanelOpen.value = !_githubProxyPanelOpen.value
+    if (!_githubProxyPanelOpen.value) showControlsAutoHide()
 }
 
 internal fun AppViewModel.toggleToolsPanel() {

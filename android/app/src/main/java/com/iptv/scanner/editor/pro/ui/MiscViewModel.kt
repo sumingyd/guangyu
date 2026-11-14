@@ -18,6 +18,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.iptv.scanner.editor.pro.data.IptvChannel
+import com.iptv.scanner.editor.pro.data.GithubProxyRuntime
+import com.iptv.scanner.editor.pro.data.GithubProxySettings
 import com.iptv.scanner.editor.pro.data.IptvEpgList
 import com.iptv.scanner.editor.pro.data.IptvEpgProgram
 import com.iptv.scanner.editor.pro.data.IptvEpgSource
@@ -917,6 +919,48 @@ internal fun AppViewModel.stopSubSync() {
     subSyncJob?.cancel()
     subSyncJob = null
     subSyncWindow.clear()
+}
+
+internal fun AppViewModel.loadGithubProxySettings() {
+    if (githubProxyReady) return
+    viewModelScope.launch {
+        repository.getGithubProxy().onSuccess { applyGithubProxySettings(it) }
+    }
+}
+
+internal fun AppViewModel.applyGithubProxySettings(settings: GithubProxySettings) {
+    _githubProxyEnabled.value = settings.enabled
+    _githubProxySelected.value = settings.proxy
+    if (settings.proxies.isNotEmpty()) {
+        _githubProxyOptions.value = settings.proxies
+    }
+    // 同步给 Coil 台标加载等非 ViewModel 场景
+    GithubProxyRuntime.enabled = settings.enabled
+    GithubProxyRuntime.proxy = settings.proxy
+    githubProxyReady = true
+}
+
+/** 更新检查前确保拿到最新配置（拿不到时返回 null，按默认开启处理） */
+internal suspend fun AppViewModel.fetchGithubProxySettings(): GithubProxySettings? {
+    val settings = repository.getGithubProxy().getOrNull() ?: return null
+    applyGithubProxySettings(settings)
+    return settings
+}
+
+internal fun AppViewModel.setGithubProxyEnabled(enabled: Boolean) {
+    _githubProxyEnabled.value = enabled
+    persistGithubProxy(enabled, _githubProxySelected.value)
+}
+
+internal fun AppViewModel.setGithubProxySelected(proxy: String) {
+    _githubProxySelected.value = proxy
+    persistGithubProxy(_githubProxyEnabled.value, proxy)
+}
+
+private fun AppViewModel.persistGithubProxy(enabled: Boolean, proxy: String) {
+    viewModelScope.launch {
+        repository.setGithubProxy(enabled, proxy).onSuccess { applyGithubProxySettings(it) }
+    }
 }
 
 internal fun AppViewModel.loadNetworkSettings(): Triple<String, String, String> {

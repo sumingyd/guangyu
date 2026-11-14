@@ -1392,6 +1392,27 @@ def refresh_mappings():
         return _err(str(e))
 
 
+def get_github_proxy_json():
+    """读取 GitHub 加速代理配置。返回 {enabled, proxy, proxies}"""
+    try:
+        from utils import github_proxy
+        return _ok(github_proxy.load_settings())
+    except Exception as e:
+        _ab_logger.exception('get_github_proxy_json failed')
+        return _err(str(e))
+
+
+def set_github_proxy(enabled='true', proxy='gh-proxy.com'):
+    """保存 GitHub 加速代理配置（配置写入 config.ini，重启后保留）。返回最新配置"""
+    try:
+        from utils import github_proxy
+        is_enabled = str(enabled).strip().lower() in ('1', 'true', 'yes', 'on', 'y')
+        return _ok(github_proxy.save_settings(is_enabled, proxy))
+    except Exception as e:
+        _ab_logger.exception('set_github_proxy failed')
+        return _err(str(e))
+
+
 # -------------------------------------------------------------------
 # 字幕
 # -------------------------------------------------------------------

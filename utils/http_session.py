@@ -88,12 +88,21 @@ def _prepare_timeout(kwargs):
         kwargs['timeout'] = float(kwargs['timeout'])
 
 
+def _rewrite_github(url):
+    """GitHub 加速代理：只改写 GitHub 域名，其余地址保持原样。"""
+    try:
+        from .github_proxy import rewrite_url
+        return rewrite_url(url)
+    except Exception:
+        return url
+
+
 def get(url, **kwargs):
     session = get_session()
     if session is None:
         raise ImportError('requests is not available')
     _prepare_timeout(kwargs)
-    return session.get(url, **kwargs)
+    return session.get(_rewrite_github(url), **kwargs)
 
 
 def head(url, **kwargs):
@@ -101,7 +110,7 @@ def head(url, **kwargs):
     if session is None:
         raise ImportError('requests is not available')
     _prepare_timeout(kwargs)
-    return session.head(url, **kwargs)
+    return session.head(_rewrite_github(url), **kwargs)
 
 
 def post(url, **kwargs):
@@ -109,7 +118,7 @@ def post(url, **kwargs):
     if session is None:
         raise ImportError('requests is not available')
     _prepare_timeout(kwargs)
-    return session.post(url, **kwargs)
+    return session.post(_rewrite_github(url), **kwargs)
 
 
 def close():

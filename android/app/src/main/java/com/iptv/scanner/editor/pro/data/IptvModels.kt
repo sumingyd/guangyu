@@ -27,6 +27,14 @@ data class IptvStatus(
     @SerialName("source_warning") val sourceWarning: String = "",
 )
 
+/** GitHub 加速代理配置（与 Python 端 config.ini [Network] 段共用同一份数据） */
+@Serializable
+data class GithubProxySettings(
+    @SerialName("enabled") val enabled: Boolean = true,
+    @SerialName("proxy") val proxy: String = "gh-proxy.com",
+    @SerialName("proxies") val proxies: List<String> = emptyList(),
+)
+
 @Serializable
 data class IptvChannel(
     @SerialName("id") val id: Int = 0,

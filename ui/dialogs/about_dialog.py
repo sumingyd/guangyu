@@ -268,9 +268,10 @@ class AboutDialog(FloatingDialog):
         tr = self.language_manager.tr
         try:
             import aiohttp
+            from utils.github_proxy import rewrite_url
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    "https://api.github.com/repos/sumingyd/guangyu/releases/latest",
+                    rewrite_url("https://api.github.com/repos/sumingyd/guangyu/releases/latest"),
                     headers={'User-Agent': APP_USER_AGENT}
                 ) as response:
                     if response.status == 200:

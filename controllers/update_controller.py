@@ -266,9 +266,10 @@ class UpdateCheckThread(QThread):
         """从GitHub获取最新版本信息，返回 (版本号, 下载链接或None, Release页面链接)"""
         try:
             import aiohttp
+            from utils.github_proxy import rewrite_url
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    GITHUB_LATEST_API,
+                    rewrite_url(GITHUB_LATEST_API),
                     headers={'User-Agent': APP_USER_AGENT},
                     timeout=aiohttp.ClientTimeout(total=10)
                 ) as response:
@@ -340,10 +341,12 @@ class UpdateDownloadThread(QThread):
         import aiohttp
         import hashlib
         from core.language_manager import LanguageManager
+        from utils.github_proxy import rewrite_url
         tr = LanguageManager().tr
 
         asset_name = _get_platform_asset_name() or "isep_update_file"
         filepath = os.path.join(tempfile.gettempdir(), asset_name)
+        target_url = rewrite_url(self._url)
 
         self.progress.emit(0, tr('connecting_server', '正在连接服务器...'))
 
@@ -351,7 +354,7 @@ class UpdateDownloadThread(QThread):
             # 优先从 Release 下载 SHA256 校验文件
             expected_sha256 = None
             try:
-                sha256_url = self._url + '.sha256'
+                sha256_url = target_url + '.sha256'
                 async with session.get(
                     sha256_url,
                     headers={'User-Agent': APP_USER_AGENT},
@@ -369,7 +372,7 @@ class UpdateDownloadThread(QThread):
                 logger.warning(f"获取 SHA256 校验值失败，将跳过完整性校验: {e}")
 
             async with session.get(
-                self._url,
+                target_url,
                 headers={'User-Agent': APP_USER_AGENT},
                 timeout=aiohttp.ClientTimeout(total=600)
             ) as response:
