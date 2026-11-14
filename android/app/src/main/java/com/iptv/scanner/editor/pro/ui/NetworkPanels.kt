@@ -153,10 +153,10 @@ fun NetworkPanel(viewModel: AppViewModel) {
         }
 
         SettingsGroup("HTTP/HTTPS 代理") {
-            DescText("支持 http:// / https:// / socks5:// / socks5h://（mpv http-proxy 属性）")
+            DescText("仅支持 http:// / https://（mpv http-proxy）；SOCKS5 不被 mpv 的 HTTP 协议栈支持，socks5:// 不会生效。只有 SOCKS5 时请在本机用 gost/Privoxy 转成本地 HTTP 端口后再填。")
             OutlinedTextField(
                 value = proxy, onValueChange = { proxy = it },
-                label = { Text("如 socks5://127.0.0.1:1080") },
+                label = { Text("如 http://127.0.0.1:8080") },
                 modifier = Modifier.fillMaxWidth().tvTextField(),
                 singleLine = true
             )
