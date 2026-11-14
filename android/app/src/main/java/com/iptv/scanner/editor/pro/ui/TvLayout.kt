@@ -180,10 +180,14 @@ fun TvPlayerLayout(
             controller?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
             onDispose { }
         }
-        // DPI 自适应缩放（基准 900dp、下限 0.60，与横屏首页一致）：
-        // 手机横屏/小平板缩小分屏 UI 提升内容密度，TV 端 ≥900dp 不缩放
+        // DPI 自适应缩放（第 21 条）：基准改为左侧播放视口（约 58% 宽、整高），
+        // 而不是整屏高度；分屏/窄屏下随视口收一档，上限 1.0 保持现有观感
         val splitOrigDensity = LocalDensity.current
-        val splitDpiScale = (LocalConfiguration.current.screenHeightDp / 900f).coerceIn(0.60f, 1f)
+        val splitConfig = LocalConfiguration.current
+        val splitDpiScale = playbackViewportScale(
+            splitConfig.screenWidthDp * 0.58f,
+            splitConfig.screenHeightDp.toFloat()
+        ).coerceAtMost(1f)
         androidx.compose.runtime.CompositionLocalProvider(
             LocalDensity provides Density(splitOrigDensity.density * splitDpiScale, splitOrigDensity.fontScale)
         ) {
@@ -331,10 +335,18 @@ fun TvPlayerLayout(
             }
         }
 
-        // 大屏（车机/电视）视距远、屏幕高：底栏整体再缩 0.9，配合样式内的内边距压缩，
+        // 大屏（车机/电视）视距远、屏幕高：底栏整体再缩，配合样式内的内边距压缩，
         // 把底栏高度从约 66dp 降到约 52dp，减少对画面的遮挡。手机横屏高度不足 700dp，不额外缩放。
-        val barDensity = if (configuration.screenHeightDp >= 700) {
-            Density(scaledDensity.density * 0.9f, scaledDensity.fontScale)
+        // 第 21 条：缩放基准改为播放视口（整屏去掉系统栏后的可视区），
+        // 不再只看屏幕高度；上限仍是 0.9，保持电视上的现有观感。
+        val viewportScale = if (configuration.screenHeightDp >= 700) {
+            playbackViewportScale(
+                configuration.screenWidthDp.toFloat(),
+                configuration.screenHeightDp.toFloat()
+            ).coerceAtMost(0.9f)
+        } else 1f
+        val barDensity = if (abs(viewportScale - 1f) > 0.02f) {
+            Density(scaledDensity.density * viewportScale, scaledDensity.fontScale)
         } else scaledDensity
         Box(
             modifier = Modifier
@@ -570,6 +582,18 @@ private fun TvBottomBar(
         else -> TvBottomBarStyleA(viewModel, displayInfo, paused, fileLoaded, videoWidth, videoHeight, showExitCatchup, playbackMode, currentProgram, epgList, barFocus)
     }
     }
+}
+
+/**
+ * 播放视口缩放系数（第 21 条）：控件尺寸以「播放层」为基准，而不是整屏。
+ * 以 960×540dp 为 1.0，长短边同时约束，避免只有一边变窄时控件仍按大屏渲染；
+ * 结果限制在 0.6~1.2，防止小窗按钮跑出安全区、大屏无限放大。
+ */
+internal fun playbackViewportScale(widthDp: Float, heightDp: Float): Float {
+    if (widthDp <= 0f || heightDp <= 0f) return 1f
+    val longSide = maxOf(widthDp, heightDp)
+    val shortSide = minOf(widthDp, heightDp)
+    return minOf(longSide / 960f, shortSide / 540f).coerceIn(0.6f, 1.2f)
 }
 
 /**
