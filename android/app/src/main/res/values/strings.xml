@@ -93,6 +93,9 @@
     <string name="tools_av_sync_desc">Audio-video synchronization</string>
 
     <!-- Portrait Settings Content -->
+    <string name="settings_group_general">General</string>
+    <string name="settings_group_playback">Playback</string>
+    <string name="settings_group_network">Network</string>
     <string name="settings_playback">Playback</string>
     <string name="settings_player">Player Settings</string>
     <string name="settings_player_desc">%1$s Config%2$s</string>

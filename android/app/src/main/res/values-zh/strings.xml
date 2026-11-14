@@ -93,6 +93,9 @@
     <string name="tools_av_sync_desc">音视频同步</string>
 
     <!-- Portrait Settings Content -->
+    <string name="settings_group_general">常规</string>
+    <string name="settings_group_playback">播放设置</string>
+    <string name="settings_group_network">网络</string>
     <string name="settings_playback">播放</string>
     <string name="settings_player">播放器设置</string>
     <string name="settings_player_desc">%1$s 配置%2$s</string>
