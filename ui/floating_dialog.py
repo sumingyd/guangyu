@@ -642,7 +642,34 @@ class FloatingDialog(_GlassSurfaceMixin, QDialog):
         self._cached_frosted_colors = None
         self._cached_frosted_theme = None
         self._centered = False
+        self._previous_focus = None
         self._init_glass_surface()
+
+    # ------------------------------------------------------------------
+    # 关闭后焦点归还：工具窗口不会像模态对话框那样自动把焦点还给原控件
+    # ------------------------------------------------------------------
+    def showEvent(self, event):
+        if self._previous_focus is None:
+            focus = QApplication.focusWidget()
+            if focus is not None and focus is not self and not self.isAncestorOf(focus):
+                self._previous_focus = focus
+        super().showEvent(event)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        target = self._previous_focus
+        self._previous_focus = None
+        if target is None:
+            return
+
+        def _restore(widget=target):
+            try:
+                if widget is not None and widget.isVisible():
+                    widget.setFocus(Qt.FocusReason.PopupFocusReason)
+            except RuntimeError:
+                pass
+
+        safe_single_shot(0, self, _restore)
 
     # ------------------------------------------------------------------
     # 主题样式钩子（DRY）：子类只需覆写 _extra_theme_css() 返回差异 CSS

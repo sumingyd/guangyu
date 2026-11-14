@@ -473,6 +473,16 @@ class PlaylistPanelMixin:
             self.sub_channel_list, tr("no_channels", "No channels")
         )
 
+        def _paste_subscription(_=None):
+            ctrl = getattr(self, 'subscription_ui_ctrl', None)
+            if ctrl is not None:
+                ctrl.add_playlist_source_from_clipboard()
+
+        self.sub_empty_label.set_actions([
+            (tr("open_playlist_file", "Open file"), self.open_playlist),
+            (tr("paste_subscription", "Paste address"), _paste_subscription),
+        ])
+
         return sub_tab
 
     def _create_local_tab(self, tr):
@@ -504,6 +514,9 @@ class PlaylistPanelMixin:
         self.local_empty_label = EmptyStateLabel(
             self.local_channel_list, tr("no_channels", "No channels")
         )
+        self.local_empty_label.set_actions([
+            (tr("open_playlist_file", "Open file"), self.open_playlist),
+        ])
 
         return local_tab
 

@@ -100,6 +100,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -281,6 +284,34 @@ fun SubtitleSettingsPanel(viewModel: AppViewModel) {
         // -----------------------------------------------------------------
         SettingsGroup("字幕样式") {
             DescText("颜色/字体/边框/阴影高级设置")
+
+            // 实时预览：调字号/颜色/边框时不用退出面板回看画面
+            val previewColor = runCatching {
+                Color(android.graphics.Color.parseColor(subColor))
+            }.getOrDefault(Color.White)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .background(Color(0x55000000), RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "字幕预览 Subtitle Preview",
+                    color = previewColor,
+                    fontSize = (subFontSize * 0.5f).coerceAtLeast(10f).sp,
+                    fontWeight = if (subBold) FontWeight.Bold else FontWeight.Normal,
+                    fontStyle = if (subItalic) FontStyle.Italic else FontStyle.Normal,
+                    style = TextStyle(
+                        shadow = Shadow(
+                            color = Color.Black,
+                            offset = Offset(subShadowOffset.toFloat(), subShadowOffset.toFloat()),
+                            blurRadius = subBorderSize.toFloat()
+                        )
+                    )
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
 
             // 快速预设
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {

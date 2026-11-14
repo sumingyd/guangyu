@@ -125,14 +125,13 @@ class ContextMenuController:
 
         menu.addSeparator()
 
-        menu.addAction(tr("ctx_fullscreen", "Fullscreen\tF11"), lambda *a: self._facade.window.toggle_fullscreen())
-        pip_action = menu.addAction(tr("ctx_pip", "Picture-in-Picture\tP"), lambda *a: self._facade.window.pip_ctrl.toggle())
-        pip_action.setEnabled(is_playing)
-
-        menu.addSeparator()
-
         view_menu = menu.addMenu(tr("ctx_view", "View"))
         view_menu.setStyleSheet(AppStyles.player_menu_bar_style())
+        # 窗口形态类操作收进「视图」，不再占用一级菜单项
+        view_menu.addAction(tr("ctx_fullscreen", "Fullscreen\tF11"), lambda *a: self._facade.window.toggle_fullscreen())
+        pip_action = view_menu.addAction(tr("ctx_pip", "Picture-in-Picture\tP"), lambda *a: self._facade.window.pip_ctrl.toggle())
+        pip_action.setEnabled(is_playing)
+        view_menu.addSeparator()
         epg_action = view_menu.addAction(tr("ctx_epg", "EPG List\tE"))
         epg_action.setCheckable(True)
         epg_action.setChecked(self._facade.window.epg_visible)
@@ -151,10 +150,13 @@ class ContextMenuController:
 
         menu.addSeparator()
 
-        menu.addAction(tr("ctx_open_stream", "Open Stream\tCtrl+U"), lambda *a: self._facade.window._open_stream())
-        menu.addAction(tr("ctx_open_video", "Open Video\tCtrl+Shift+O"), lambda *a: self._facade.window._open_video_file())
-        menu.addSeparator()
-        menu.addAction(tr("ctx_scan", "Scan & Organize"), lambda *a: self._facade.window.open_scan_ui())
+        # 打开文件/流与扫描属于低频操作，收进二级菜单
+        open_menu = menu.addMenu(tr("ctx_open", "Open"))
+        open_menu.setStyleSheet(AppStyles.player_menu_bar_style())
+        open_menu.addAction(tr("ctx_open_stream", "Open Stream\tCtrl+U"), lambda *a: self._facade.window._open_stream())
+        open_menu.addAction(tr("ctx_open_video", "Open Video\tCtrl+Shift+O"), lambda *a: self._facade.window._open_video_file())
+        open_menu.addSeparator()
+        open_menu.addAction(tr("ctx_scan", "Scan & Organize"), lambda *a: self._facade.window.open_scan_ui())
 
 
         menu.exec(self._facade.window.video_frame.mapToGlobal(pos))

@@ -1,5 +1,7 @@
 package com.iptv.scanner.editor.pro.ui
 
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.res.Configuration
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -371,6 +373,7 @@ private fun AddSourceRow(
 ) {
     var url by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
+    val context = LocalContext.current
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -399,6 +402,25 @@ private fun AddSourceRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.End
         ) {
+            OutlinedButton(
+                onClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                    val pasted = clipboard?.primaryClip?.takeIf { it.itemCount > 0 }
+                        ?.getItemAt(0)?.text?.toString()?.trim().orEmpty()
+                    if (pasted.startsWith("http://", true) || pasted.startsWith("https://", true)) {
+                        url = pasted
+                        onAdd(pasted, name.trim())
+                        url = ""
+                        name = ""
+                    } else {
+                        url = pasted
+                    }
+                },
+                modifier = Modifier.tvFocusBorder()
+            ) {
+                Text("读取剪贴板")
+            }
+            Spacer(modifier = Modifier.width(8.dp))
             OutlinedButton(
                 onClick = {
                     if (url.isNotBlank()) {

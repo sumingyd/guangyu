@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
 )
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPainterPath, QPen
 from PySide6.QtCore import QThread
 
 from ui.floating_dialog import FloatingDialog
@@ -96,6 +96,72 @@ class ColorButton(QPushButton):
         self._update_swatches()
 
 
+class _SubtitlePreview(QLabel):
+    """字幕样式预览：按当前颜色/字号/边框/阴影绘制示例字幕。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumHeight(76)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._text = '字幕预览 Subtitle Preview'
+        self._text_color = QColor(255, 255, 255)
+        self._border_color = QColor(0, 0, 0)
+        self._shadow_color = QColor(0, 0, 0)
+        self._font_family = ''
+        self._font_size = 55
+        self._border_size = 3
+        self._shadow_offset = 1
+        self._bold = False
+        self._italic = False
+
+    def set_style(self, style: dict):
+        self._text_color = _mpv_to_color(style.get('color', '#FFFFFFFF'))
+        self._border_color = _mpv_to_color(style.get('border_color', '#FF000000'))
+        self._shadow_color = _mpv_to_color(style.get('shadow_color', '#FF000000'))
+        self._font_family = style.get('font', '') or ''
+        self._font_size = int(style.get('font_size', 55) or 55)
+        self._border_size = int(style.get('border_size', 3) or 0)
+        self._shadow_offset = int(style.get('shadow_offset', 1) or 0)
+        self._bold = bool(style.get('bold', False))
+        self._italic = bool(style.get('italic', False))
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 120))
+
+        font = QFont(self._font_family) if self._font_family else QFont(self.font())
+        # 面板里的字号是 mpv 的 55 基准，预览按面板高度折算
+        font.setPixelSize(max(12, int(self._font_size * 0.55)))
+        font.setBold(self._bold)
+        font.setItalic(self._italic)
+        painter.setFont(font)
+
+        metrics = QFontMetricsF(font)
+        text_width = metrics.horizontalAdvance(self._text)
+        x = (self.width() - text_width) / 2
+        y = (self.height() + metrics.ascent() - metrics.descent()) / 2
+
+        path = QPainterPath()
+        path.addText(x, y, font, self._text)
+
+        if self._shadow_offset > 0:
+            shadow = QPainterPath(path)
+            shadow.translate(self._shadow_offset, self._shadow_offset)
+            shadow_color = QColor(self._shadow_color)
+            shadow_color.setAlpha(180)
+            painter.fillPath(shadow, shadow_color)
+
+        if self._border_size > 0:
+            painter.setPen(QPen(self._border_color, self._border_size))
+        else:
+            painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(self._text_color)
+        painter.drawPath(path)
+        painter.end()
+
+
 class SubtitleStyleDialog(FloatingDialog):
     """字幕样式调整对话框
     修改时实时应用到 mpv；保存按钮持久化到 config
@@ -147,6 +213,10 @@ class SubtitleStyleDialog(FloatingDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
+
+        # 顶部实时预览：调样式时不必回到画面确认
+        self.preview_label = _SubtitlePreview(self)
+        layout.addWidget(self.preview_label)
 
         # ===== 字幕样式组 =====
         style_group = QGroupBox(tr('sub_style_group', '字幕样式'))
@@ -400,8 +470,15 @@ class SubtitleStyleDialog(FloatingDialog):
             self.pos_slider.setValue(int(style.get('sub_pos', 100)))
             self.pos_label.setText(str(int(style.get('sub_pos', 100))))
             self.visibility_check.setChecked(bool(style.get('sub_visibility', True)))
+            self._refresh_preview()
         except Exception as e:
             logger.warning(f"回填字幕样式 UI 失败: {e}")
+
+    def _refresh_preview(self):
+        try:
+            self.preview_label.set_style(self._collect_style())
+        except Exception:
+            pass
 
     def _collect_style(self) -> dict:
         """从 UI 控件收集样式字典"""
@@ -429,6 +506,7 @@ class SubtitleStyleDialog(FloatingDialog):
     def _on_style_changed(self, key, value):
         if self._loading:
             return
+        self._refresh_preview()
         # 实时应用（仅 mpv，不持久化）
         pc = self.window.player_controller
         if pc and pc.is_playing:

@@ -3,7 +3,7 @@
 从 pyqt_player.py 提取的独立模块
 """
 
-from PySide6.QtWidgets import QListWidgetItem
+from PySide6.QtWidgets import QApplication, QInputDialog, QListWidgetItem
 from PySide6 import QtCore
 from controllers.main_window_protocol import MainWindowProtocol
 
@@ -133,6 +133,30 @@ class SubscriptionUIController:
 
     def add_or_update_playlist_source(self):
         self._add_or_update_source('playlist')
+
+    def add_playlist_source_from_clipboard(self):
+        """空态主操作：自动读取剪贴板里的订阅地址并一键添加。"""
+        tr = self._tr
+        text = QApplication.clipboard().text().strip()
+        if not text.lower().startswith(('http://', 'https://')):
+            text = ''
+        url, ok = QInputDialog.getText(
+            self.window,
+            tr('add_subscription_title', 'Add live source'),
+            tr('add_subscription_prompt', 'Subscription URL (clipboard prefilled)'),
+            text=text)
+        url = (url or '').strip()
+        if not ok or not url:
+            return
+        try:
+            from core.subscription_manager import SubscriptionManager
+            SubscriptionManager().add_playlist_source(url, None)
+        except Exception as e:
+            from core.log_manager import global_logger as logger
+            logger.error(f"从剪贴板添加直播源失败: {e}")
+            return
+        if hasattr(self.window, 'reload_subscription'):
+            self.window.reload_subscription()
 
     def edit_playlist_source(self, item):
         self._edit_source('playlist', item)
