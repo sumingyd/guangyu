@@ -152,6 +152,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.platform.LocalContext
+import coil.request.ImageRequest
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.ui.focus.FocusRequester
@@ -810,6 +815,12 @@ private fun ChannelListPanel(
     // 同名多路流（同一频道的高清/标清等不同码流）在名称后追加分辨率后缀，
     // 否则两条同名频道在列表里完全一样，看起来像少了一条
     val duplicateNames = remember(displayChannels) { duplicateChannelNames(displayChannels) }
+    // 频道→原始下标映射，避免列表行重组时做 O(n) 查找
+    val channelIndexMap = remember(channels) {
+        HashMap<IptvChannel, Int>(channels.size * 2).apply {
+            channels.forEachIndexed { index, ch -> if (!containsKey(ch)) put(ch, index) }
+        }
+    }
     val listState = rememberLazyListState()
     LaunchedEffect(displayChannels, currentIdx) {
         if (currentIdx >= 0) {
@@ -826,7 +837,7 @@ private fun ChannelListPanel(
         contentPadding = PaddingValues(bottom = 130.dp, top = 4.dp)
     ) {
         items(displayChannels) { channel ->
-            val idx = channels.indexOf(channel)
+            val idx = channelIndexMap[channel] ?: -1
             val isCurrent = fileLoaded && idx == currentIdx
             val isFav = favorites.contains(idx)
             val canCatchup = CatchupHelper.isCatchupEnabled(channel)
@@ -834,7 +845,7 @@ private fun ChannelListPanel(
                 remember(epgCacheVersion, idx) { viewModel.getCachedCurrentProgram(idx) }
             } else null
             val thumbPath = thumbnailPaths[channel.url]
-            val hasThumb = thumbPath != null && File(thumbPath).exists()
+            val hasThumb = remember(thumbPath) { thumbPath != null && File(thumbPath).exists() }
             val latency = latencyMap[channel.url]
 
             // 频道行：圆角玻璃卡片（磨砂+光斑+描边），当前播放行叠加品牌色高亮
@@ -878,14 +889,14 @@ private fun ChannelListPanel(
                     ) {
                         if (hasThumb) {
                             AsyncImage(
-                                model = thumbPath,
+                                model = rememberSizedImageRequest(thumbPath!!, 144, 80),
                                 contentDescription = channel.name,
                                 modifier = Modifier.fillMaxSize(),
                                 contentScale = ContentScale.Crop
                             )
                         } else if (channel.logo.isNotEmpty()) {
                             AsyncImage(
-                                model = channel.logo,
+                                model = rememberSizedImageRequest(channel.logo, 144, 80),
                                 contentDescription = channel.name,
                                 modifier = Modifier.fillMaxSize().padding(4.dp),
                                 contentScale = ContentScale.Fit
@@ -968,7 +979,7 @@ private fun ChannelListPanel(
                         Spacer(modifier = Modifier.width(6.dp))
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             AsyncImage(
-                                model = channel.logo,
+                                model = rememberSizedImageRequest(channel.logo, 64, 64),
                                 contentDescription = null,
                                 modifier = Modifier.size(22.dp).clip(RoundedCornerShape(2.dp)),
                                 contentScale = ContentScale.Fit
@@ -985,6 +996,23 @@ private fun ChannelListPanel(
         }
     }
 }
+/**
+ * 台标/缩略图按固定目标尺寸解码。
+ *
+ * Coil 的内存缓存键包含尺寸（AsyncImage 默认按布局约束取尺寸），约束的细微差异会
+ * 让同一张图产生多份解码结果，滚动时反复解码。统一成固定尺寸后同一 URL 只解一张。
+ */
+@Composable
+private fun rememberSizedImageRequest(path: String, widthPx: Int, heightPx: Int): ImageRequest {
+    val context = LocalContext.current
+    return remember(path, widthPx, heightPx) {
+        ImageRequest.Builder(context)
+            .data(path)
+            .size(widthPx, heightPx)
+            .build()
+    }
+}
+
 /** 右侧频道列表（缩略图模式）；横屏首页（LandscapeHomeScreen）左列宫格复用 */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -1009,8 +1037,23 @@ internal fun ChannelThumbnailPanel(
     val epgCacheVersion by viewModel.epgCacheVersion.collectAsState()
     // 同名多路流（同一频道的不同分辨率/码流）在名称后追加分辨率后缀，便于区分
     val duplicateNames = remember(displayChannels) { duplicateChannelNames(displayChannels) }
+    // 频道→原始下标一次建成映射（等价于 channels.indexOf，但不必每张卡滚动重组时做 O(n) 查找）
+    val channelIndexMap = remember(channels) {
+        HashMap<IptvChannel, Int>(channels.size * 2).apply {
+            channels.forEachIndexed { index, ch -> if (!containsKey(ch)) put(ch, index) }
+        }
+    }
+    val gridState = rememberLazyGridState()
+    // 滚动期间通知首页背景跳过光斑重绘，松手后恢复
+    LaunchedEffect(gridState) {
+        snapshotFlow { gridState.isScrollInProgress }.collect { GridScrollActive.value = it }
+    }
+    DisposableEffect(Unit) {
+        onDispose { GridScrollActive.value = false }
+    }
 
     LazyVerticalGrid(
+        state = gridState,
         columns = GridCells.Fixed(2),
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 6.dp, top = 4.dp, end = 6.dp, bottom = bottomContentPadding),
@@ -1018,12 +1061,13 @@ internal fun ChannelThumbnailPanel(
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         gridItemsIndexed(displayChannels) { cardIndex, channel ->
-            val idx = channels.indexOf(channel)
+            val idx = channelIndexMap[channel] ?: -1
             val isCurrent = fileLoaded && idx == currentIdx
             val isFav = favorites.contains(idx)
             val canCatchup = CatchupHelper.isCatchupEnabled(channel)
             val thumbPath = thumbnailPaths[channel.url]
-            val hasThumb = thumbPath != null && File(thumbPath).exists()
+            // 文件存在性检查是磁盘 IO：只在路径变化时做一次，避免滚动重组反复 stat
+            val hasThumb = remember(thumbPath) { thumbPath != null && File(thumbPath).exists() }
             val latency = latencyMap[channel.url]
             val currentProgram = if (idx >= 0) {
                 remember(epgCacheVersion, idx) { viewModel.getCachedCurrentProgram(idx) }
@@ -1072,14 +1116,14 @@ internal fun ChannelThumbnailPanel(
                     ) {
                         if (hasThumb) {
                             AsyncImage(
-                                model = thumbPath,
+                                model = rememberSizedImageRequest(thumbPath!!, 480, 270),
                                 contentDescription = channel.name,
                                 modifier = Modifier.fillMaxSize(),
                                 contentScale = ContentScale.Crop
                             )
                         } else if (channel.logo.isNotEmpty()) {
                             AsyncImage(
-                                model = channel.logo,
+                                model = rememberSizedImageRequest(channel.logo, 480, 270),
                                 contentDescription = channel.name,
                                 modifier = Modifier.fillMaxSize().padding(12.dp),
                                 contentScale = ContentScale.Fit
@@ -1200,7 +1244,7 @@ internal fun ChannelThumbnailPanel(
                                 contentAlignment = Alignment.Center
                             ) {
                                 AsyncImage(
-                                    model = channel.logo,
+                                    model = rememberSizedImageRequest(channel.logo, 96, 60),
                                     contentDescription = null,
                                     modifier = Modifier.fillMaxSize().padding(2.dp),
                                     contentScale = ContentScale.Fit

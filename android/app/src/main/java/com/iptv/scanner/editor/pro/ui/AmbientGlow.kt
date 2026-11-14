@@ -5,6 +5,7 @@ import android.graphics.Color as AndroidColor
 import android.graphics.drawable.BitmapDrawable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -21,6 +22,15 @@ import coil.request.SuccessResult
  * 只解码 24x14 的缩略图采样，颜色按 URL 缓存；取不到台标时调用方回落到主题色。
  */
 data class AmbientColors(val primary: Color, val secondary: Color)
+
+/**
+ * 首页宫格是否正在滚动。
+ *
+ * 光斑是三个大半径径向渐变，滚动时随页面每帧重绘，在低端 SoC 上开销明显。
+ * 由宫格侧写入，首页背景在滚动期间只画底层渐变、跳过光斑，松手后恢复。
+ * 同一时刻页面上只有一个频道宫格，用全局状态即可，不必逐层传递。
+ */
+val GridScrollActive: MutableState<Boolean> = mutableStateOf(false)
 
 private object AmbientColorCache {
     private const val MAX = 48

@@ -52,6 +52,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -144,38 +147,44 @@ internal fun LandscapeHomeScreen(
                         .liquidGlassSource(hazeState)
                 ) {
                     // 环境画布：深/浅主题渐变底 + 三色光斑（与竖屏首页一致）
+                    // 光斑按尺寸/取色缓存为 Brush，避免每帧新建渐变 Shader；滚动中只画渐变底
                     val canvasDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
                     Box(
                         modifier = Modifier
                             .matchParentSize()
-                            .drawBehind {
-                                drawRect(
-                                    androidx.compose.ui.graphics.Brush.verticalGradient(
-                                        listOf(tvPalette.canvasStart, tvPalette.canvasEnd)
-                                    )
-                                )
+                            .drawWithCache {
                                 val g = if (canvasDark) 0.32f else 0.24f
-                                drawCircle(
-                                    brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                        listOf(spotA.copy(alpha = g), androidx.compose.ui.graphics.Color.Transparent)
-                                    ),
-                                    radius = size.width * 0.85f,
-                                    center = androidx.compose.ui.geometry.Offset(size.width * 0.15f, size.height * 0.12f)
+                                val backdrop = Brush.verticalGradient(
+                                    listOf(tvPalette.canvasStart, tvPalette.canvasEnd)
                                 )
-                                drawCircle(
-                                    brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                        listOf(spotB.copy(alpha = g * 0.85f), androidx.compose.ui.graphics.Color.Transparent)
-                                    ),
-                                    radius = size.width * 0.75f,
-                                    center = androidx.compose.ui.geometry.Offset(size.width * 0.95f, size.height * 0.52f)
+                                val centerA = Offset(size.width * 0.15f, size.height * 0.12f)
+                                val centerB = Offset(size.width * 0.95f, size.height * 0.52f)
+                                val centerC = Offset(size.width * 0.2f, size.height * 0.95f)
+                                val radiusA = size.width * 0.85f
+                                val radiusB = size.width * 0.75f
+                                val radiusC = size.width * 0.7f
+                                val glowA = Brush.radialGradient(
+                                    listOf(spotA.copy(alpha = g), Color.Transparent),
+                                    center = centerA,
+                                    radius = radiusA
                                 )
-                                drawCircle(
-                                    brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                        listOf(tvPalette.spotGreen.copy(alpha = g * 0.7f), androidx.compose.ui.graphics.Color.Transparent)
-                                    ),
-                                    radius = size.width * 0.7f,
-                                    center = androidx.compose.ui.geometry.Offset(size.width * 0.2f, size.height * 0.95f)
+                                val glowB = Brush.radialGradient(
+                                    listOf(spotB.copy(alpha = g * 0.85f), Color.Transparent),
+                                    center = centerB,
+                                    radius = radiusB
                                 )
+                                val glowC = Brush.radialGradient(
+                                    listOf(tvPalette.spotGreen.copy(alpha = g * 0.7f), Color.Transparent),
+                                    center = centerC,
+                                    radius = radiusC
+                                )
+                                onDrawBehind {
+                                    drawRect(backdrop)
+                                    if (GridScrollActive.value) return@onDrawBehind
+                                    drawCircle(brush = glowA, radius = radiusA, center = centerA)
+                                    drawCircle(brush = glowB, radius = radiusB, center = centerB)
+                                    drawCircle(brush = glowC, radius = radiusC, center = centerC)
+                                }
                             }
                     ) {}
 
