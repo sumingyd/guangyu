@@ -139,6 +139,12 @@ class TestServerMixin:
             self.host._toggle_server()
             mock_start.assert_called_once()
 
+    def test_show_server_settings_opens_network_tab(self):
+        """服务设置并入网络页签后，原菜单入口改为定位到该页。"""
+        self.host.player_settings = MagicMock()
+        self.host._show_server_settings()
+        self.host.player_settings.assert_called_once_with('network')
+
     @patch('mixins.server_mixin.logger')
     def test_open_server_api(self, mock_logger):
         mock_server = MagicMock()

@@ -520,6 +520,42 @@ class TestSubscriptionDialogIsolation:
         reload_mock.assert_called_once()
 
 
+class TestServerSettingsInNetworkTab:
+    """HTTP 服务设置并入网络页签后，保存语义与独立对话框保持一致。"""
+
+    @staticmethod
+    def _ensure_app():
+        from PySide6.QtWidgets import QApplication
+        return QApplication.instance() or QApplication([])
+
+    def test_save_persists_auto_start_enabled_port_host(self):
+        from PySide6.QtWidgets import QCheckBox, QComboBox, QSpinBox, QWidget
+        from controllers.settings_file_ops import SettingsFileOperations
+
+        self._ensure_app()
+        w = MagicMock()
+        w.language_manager = None
+        dialog = QWidget()
+        check = QCheckBox(dialog)
+        check.setObjectName('server_auto_start_check')
+        check.setChecked(True)
+        spin = QSpinBox(dialog)
+        spin.setObjectName('server_port_spin')
+        spin.setRange(1024, 65535)
+        spin.setValue(9091)
+        combo = QComboBox(dialog)
+        combo.setObjectName('server_host_combo')
+        combo.addItem('0.0.0.0', '0.0.0.0')
+        combo.addItem('127.0.0.1', '127.0.0.1')
+        combo.setCurrentIndex(0)
+
+        SettingsFileOperations(w)._save_server_settings(dialog)
+
+        # enabled 与 auto_start 同值：与原独立对话框的保存逻辑一致
+        w.config.save_server_settings.assert_called_once_with(
+            enabled=True, port=9091, host='0.0.0.0', auto_start=True)
+
+
 class TestReconnectTerminalStatusBar:
     """断流重连耗尽后，状态栏不能显示成用户主动“已暂停”。"""
 

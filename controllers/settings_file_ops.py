@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QLineEdit,
+    QSpinBox,
     QGroupBox,
     QListWidget,
     QWidget,
@@ -241,6 +242,8 @@ class SettingsFileOperations:
         network_content_layout.setContentsMargins(0, 0, 0, 0)
         network_content_layout.addWidget(self._build_connection_section(tr, playback_settings))
         network_content_layout.addWidget(self._build_github_proxy_section(tr))
+        server_section = self._build_server_section(tr)
+        network_content_layout.addWidget(server_section)
         network_content_layout.addStretch()
 
         network_scroll = QScrollArea()
@@ -350,6 +353,16 @@ class SettingsFileOperations:
                     general_scroll.ensureWidgetVisible(screensaver_section, 0, 0)
 
             QTimer.singleShot(0, _reveal_screensaver)
+
+        elif focus == 'network':
+            # HTTP 服务设置已并入「网络」页签（索引 2），入口直接定位到服务分组
+            tab_widget.setCurrentIndex(2)
+
+            def _reveal_server():
+                if dialog.isVisible():
+                    network_scroll.ensureWidgetVisible(server_section, 0, 0)
+
+            QTimer.singleShot(0, _reveal_server)
 
         if self.window._center_dialog_on_screen:
             self.window._center_dialog_on_screen(dialog)
@@ -579,6 +592,147 @@ class SettingsFileOperations:
                 selected_idx = i
         timeout_combo.setCurrentIndex(selected_idx)
         layout.addRow(tr("network_timeout_colon", "Network Timeout:"), timeout_combo)
+
+        group.setLayout(layout)
+        return group
+
+    def _build_server_section(self, tr):
+        """HTTP 服务：运行状态、认证码、启动/停止、自启动、端口与监听地址。
+
+        原先放在独立对话框里，现并入「网络」页签；配置键沿用
+        Server.enabled/port/host/auto_start，老配置无需迁移。
+        """
+        from server.app import get_server, start_server, stop_server, set_main_window
+        from server.routes import get_auth_token
+
+        settings = self.window.config.load_server_settings()
+
+        group = QGroupBox(tr("server_settings", "服务设置"))
+        layout = QVBoxLayout(group)
+
+        status_label = QLabel()
+        status_label.setObjectName("server_status_label")
+        status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(status_label)
+
+        auto_start_check = QCheckBox(tr("server_auto_start", "启动时自动运行服务"))
+        auto_start_check.setObjectName("server_auto_start_check")
+        auto_start_check.setChecked(settings.get("auto_start", False))
+        layout.addWidget(auto_start_check)
+
+        port_row = QHBoxLayout()
+        port_label = QLabel(tr("server_port", "端口:"))
+        port_label.setFixedWidth(70)
+        port_row.addWidget(port_label)
+        port_spin = QSpinBox()
+        port_spin.setObjectName("server_port_spin")
+        port_spin.setRange(1024, 65535)
+        # 端口框保留配置值（起始端口），实际端口见上方状态；避免把顺延后的端口写回配置
+        port_spin.setValue(settings.get("port", 8080))
+        port_row.addWidget(port_spin, 1)
+        layout.addLayout(port_row)
+
+        host_row = QHBoxLayout()
+        host_label = QLabel(tr("server_host", "监听地址:"))
+        host_label.setFixedWidth(70)
+        host_row.addWidget(host_label)
+        host_combo = QComboBox()
+        host_combo.setObjectName("server_host_combo")
+        host_combo.addItem(f"0.0.0.0 ({tr('all_interfaces', '所有接口')})", "0.0.0.0")
+        host_combo.addItem(f"127.0.0.1 ({tr('localhost_only', '仅本机')})", "127.0.0.1")
+        host_idx = host_combo.findData(settings.get("host", "127.0.0.1"))
+        if host_idx >= 0:
+            host_combo.setCurrentIndex(host_idx)
+        host_row.addWidget(host_combo, 1)
+        layout.addLayout(host_row)
+
+        host_hint = QLabel(tr(
+            "server_host_hint",
+            "仅本机：只有这台电脑能访问；所有接口：同一局域网的其他设备也能访问。"
+        ))
+        host_hint.setWordWrap(True)
+        host_hint.setStyleSheet(AppStyles.hint_label_style())
+        layout.addWidget(host_hint)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch()
+        toggle_button = QPushButton()
+        toggle_button.setObjectName("server_toggle_button")
+        toggle_button.setStyleSheet(AppStyles.common_button_style())
+        button_row.addWidget(toggle_button)
+        layout.addLayout(button_row)
+
+        def _sync_menu_action(is_running):
+            action = getattr(self.window, "_server_action", None)
+            if action is not None:
+                action.setText(tr("server_stop", "停止服务") if is_running
+                               else tr("server_start", "启动服务"))
+
+        def _refresh_status():
+            server = get_server()
+            is_running = server.is_running()
+            configured_port = port_spin.value()
+            # 运行中显示实际绑定端口：配置端口被占用时会自动顺延
+            port = server.port if is_running else configured_port
+            token = get_auth_token()
+            if is_running:
+                text = (
+                    f"● {tr('server_running', '服务运行中')}\n"
+                    f"  {tr('server_address', '地址')}: http://localhost:{port}\n"
+                    f"  {tr('server_auth_token', '认证码')}: {token}"
+                )
+                if configured_port != port:
+                    text += "\n  " + tr(
+                        "server_port_shifted", "端口 {requested} 已被占用，已改用 {port}").format(
+                        requested=configured_port, port=port)
+                status_label.setStyleSheet(AppStyles.status_label_style(True))
+            else:
+                # 未启动时也显示地址与认证码，方便先配置客户端再启动服务
+                text = (
+                    f"○ {tr('server_not_running', '服务未运行')}\n"
+                    f"  {tr('server_address', '地址')}: http://localhost:{port}\n"
+                    f"  {tr('server_auth_token', '认证码')}: {token}"
+                )
+                status_label.setStyleSheet(AppStyles.status_label_style(False))
+            status_label.setText(text)
+            toggle_button.setText(tr("server_stop", "停止服务") if is_running
+                                  else tr("server_start", "启动服务"))
+            _sync_menu_action(is_running)
+
+        def _on_toggle():
+            try:
+                set_main_window(self.window)
+                server = get_server()
+                if server.is_running():
+                    stop_server()
+                    self.window.status_bar_show_message(tr("server_stopped", "服务已停止"), 3000)
+                    _refresh_status()
+                    return
+                requested_port = port_spin.value()
+                server = start_server(host=host_combo.currentData(), port=requested_port)
+                if not (server is not None and server.wait_started(2.0)):
+                    err = getattr(server, "start_error", "") if server is not None else ""
+                    self.window.status_bar_show_message(
+                        tr("server_start_failed", "服务启动失败") + (f": {err}" if err else ""), 8000)
+                    logger.error(f"启动服务失败: {err or '端口未绑定成功'}")
+                    _refresh_status()
+                    return
+                actual_port = server.port
+                msg = (tr("server_started", "服务已启动") + f" http://localhost:{actual_port}  " +
+                       tr("server_auth_token", "认证码") + f": {get_auth_token()}")
+                if requested_port != actual_port:
+                    msg += "  " + tr(
+                        "server_port_shifted", "端口 {requested} 已被占用，已改用 {port}").format(
+                        requested=requested_port, port=actual_port)
+                self.window.status_bar_show_message(msg, 10000)
+                logger.info(f"HTTP 服务器已启动: http://localhost:{actual_port}")
+                _refresh_status()
+            except Exception as e:
+                logger.error(f"切换服务失败: {e}")
+                _refresh_status()
+
+        toggle_button.clicked.connect(_on_toggle)
+        _refresh_status()
 
         group.setLayout(layout)
         return group
@@ -1027,8 +1181,16 @@ class SettingsFileOperations:
         pick('close_behavior_combo', 'ask')
         pick('screensaver_idle_combo', 5)
         pick('github_proxy_combo', 'gh-proxy.com')
+        pick('server_host_combo', '127.0.0.1')
+
+        spin = dialog.findChild(QSpinBox, "server_port_spin")
+        if spin is not None:
+            spin.setValue(8080)
 
         check = dialog.findChild(QCheckBox, "tls_check")
+        if check is not None:
+            check.setChecked(False)
+        check = dialog.findChild(QCheckBox, "server_auto_start_check")
         if check is not None:
             check.setChecked(False)
         check = dialog.findChild(QCheckBox, "screensaver_enabled_check")
@@ -1064,6 +1226,7 @@ class SettingsFileOperations:
             self._save_close_behavior(dialog)
             self._save_screensaver_settings(dialog)
             self._save_github_proxy_settings(dialog)
+            self._save_server_settings(dialog)
             self._apply_playback_settings(new_playback)
 
             playlist_changed, new_active_index = self._check_playlist_changed(old_playlist, new_playlist, old_active_index)
@@ -1206,6 +1369,21 @@ class SettingsFileOperations:
         enabled = check.isChecked() if check is not None else current['enabled']
         proxy = combo.currentData() if combo is not None and combo.currentData() else current['proxy']
         github_proxy.save_settings(enabled, proxy)
+
+    def _save_server_settings(self, dialog):
+        """写入 HTTP 服务设置（原独立对话框的保存逻辑，行为不变）。"""
+        check = dialog.findChild(QCheckBox, "server_auto_start_check")
+        spin = dialog.findChild(QSpinBox, "server_port_spin")
+        combo = dialog.findChild(QComboBox, "server_host_combo")
+        if check is None or spin is None or combo is None:
+            return
+        auto_start = check.isChecked()
+        self.window.config.save_server_settings(
+            enabled=auto_start,
+            port=spin.value(),
+            host=combo.currentData() or '127.0.0.1',
+            auto_start=auto_start
+        )
 
     def _apply_playback_settings(self, new_playback):
         if not new_playback or not self.window.config:
