@@ -168,6 +168,9 @@ class ChannelMixin:
                     item.setHidden(False)
             # 清空搜索回到完整列表时，滚动位置应回到顶部，而不是停在搜索结果处
             list_widget.scrollToTop()
+            # 可见行集合变化（隐藏行恢复），按新视口补行控件与台标
+            self.channel_ctrl.decorate_visible_rows(list_widget)
+            self._load_visible_icons(list_widget, channels)
             return
         for i in range(list_widget.count()):
             item = list_widget.item(i)
@@ -183,6 +186,10 @@ class ChannelMixin:
             group = channel.get('group', '').lower()
             match = search_text in name or search_text in url or search_text in group
             item.setHidden(not match)
+
+        # 过滤后可见行整体换了一批，按新视口补行控件与台标，否则命中行只有裸文本
+        self.channel_ctrl.decorate_visible_rows(list_widget)
+        self._load_visible_icons(list_widget, channels)
 
     def _populate_channel_list_for(self, list_widget, channels, selected_group=''):
         self.channel_ctrl.populate_channel_list_for(list_widget, channels, selected_group)

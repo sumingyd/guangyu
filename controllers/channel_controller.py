@@ -8,7 +8,7 @@ from datetime import datetime
 from collections import deque
 
 from PySide6.QtWidgets import QListWidgetItem, QListWidget, QWidget
-from PySide6.QtCore import Qt, QSize, QTimer
+from PySide6.QtCore import Qt, QSize, QTimer, QPoint
 from PySide6 import QtWidgets
 
 from core.application_state import app_state
@@ -254,12 +254,59 @@ class ChannelController:
                 sb.rangeChanged.disconnect(old)
             except (RuntimeError, TypeError):
                 pass
-        handler = lambda *_: self.decorate_visible_rows(list_widget)
+        handler = lambda *_: self._refresh_visible_rows(list_widget)
         list_widget._channel_range_handler = handler
         try:
             sb.rangeChanged.connect(handler)
         except (RuntimeError, TypeError):
             pass
+
+    def _refresh_visible_rows(self, list_widget):
+        """视口范围变化后补装饰新出现的行，并补加载这些行的台标。"""
+        self.decorate_visible_rows(list_widget)
+        state = getattr(list_widget, '_channel_render', None) or {}
+        channels = state.get('channels')
+        if channels:
+            self.load_visible_icons(list_widget, channels)
+
+    @staticmethod
+    def _visible_row_bounds(list_widget, row_h):
+        """返回视口内首末行号。
+
+        indexAt 取 (0,0)/(0,height-1) 时，x=0 与 y=0 落在列表边框、行间距之外，
+        Qt 一直返回无效索引，导致"顶部永远是第 0 行"，只装饰前几十行。
+        这里从视口内部取点探测，探测失败再按滚动条/行高兜底。
+        """
+        vp = list_widget.viewport().rect()
+        width = max(1, vp.width())
+        height = max(1, vp.height())
+
+        def _row_at(y):
+            idx = list_widget.indexAt(QPoint(width // 2, max(0, min(height - 1, y))))
+            return idx.row() if idx.isValid() else -1
+
+        first = -1
+        for y in (3, 6, 12, 24):
+            if y >= height:
+                break
+            first = _row_at(y)
+            if first >= 0:
+                break
+        if first < 0:
+            # 默认按行滚动时，滚动条数值即顶部行号
+            first = max(0, list_widget.verticalScrollBar().value())
+
+        last = -1
+        for y in (height - 3, height - 12, height - 24):
+            if y < 0:
+                continue
+            last = _row_at(y)
+            if last >= 0:
+                break
+        if last < 0:
+            last = first + height // max(1, int(row_h or 46)) + 1
+        last = min(list_widget.count() - 1, max(first, last))
+        return first, last
 
     def decorate_visible_rows(self, list_widget):
         """只装饰视口附近的行，并回收远离视口的行内控件。"""
@@ -272,17 +319,8 @@ class ChannelController:
             count = list_widget.count()
             if count <= 0:
                 return
-            viewport_rect = list_widget.viewport().rect()
-            top_index = list_widget.indexAt(viewport_rect.topLeft())
-            bottom_index = list_widget.indexAt(viewport_rect.bottomLeft())
-            first = top_index.row() if top_index.isValid() else 0
-            if bottom_index.isValid():
-                last = bottom_index.row()
-            else:
-                # 滚到最底部时 bottomLeft 落在最后一个条目下方会返回无效索引，
-                # 这里按视口高度估算可见行数，避免只装饰开头几行
-                row_h = max(1, int(state.get('row_h') or 46))
-                last = min(count - 1, first + viewport_rect.height() // row_h + 1)
+            row_h = max(1, int(state.get('row_h') or 46))
+            first, last = self._visible_row_bounds(list_widget, row_h)
             lo = max(0, first - self.ROW_DECORATE_MARGIN)
             hi = min(count - 1, last + self.ROW_DECORATE_MARGIN)
             if hi < lo:
@@ -441,12 +479,8 @@ class ChannelController:
             logger.warning("_load_visible_icons: _logo_cache_service未初始化，跳过台标加载")
             return
 
-        viewport_rect = list_widget.viewport().rect()
-        top_index = list_widget.indexAt(viewport_rect.topLeft())
-        bottom_index = list_widget.indexAt(viewport_rect.bottomLeft())
-
-        first_visible = top_index.row() if top_index.isValid() else 0
-        last_visible = bottom_index.row() if bottom_index.isValid() else list_widget.count() - 1
+        row_h = int((getattr(list_widget, '_channel_render', None) or {}).get('row_h') or 46)
+        first_visible, last_visible = self._visible_row_bounds(list_widget, row_h)
         first_visible = max(0, first_visible - 3)
         last_visible = min(list_widget.count() - 1, last_visible + 3)
 

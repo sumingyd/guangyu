@@ -732,6 +732,27 @@ class TestChannelListVirtualization:
         last = lw.count() - 1
         assert lw.itemWidget(lw.item(last)) is not None, '滚动到底部后末行应补上控件'
 
+    def test_scroll_keeps_visible_rows_decorated(self):
+        # 真实列表带行间距与边框，indexAt(0,0) 取点会落在间距外恒无效；
+        # 这里按同样的行间距复现，滚动后视口内的行必须补上控件
+        from PySide6.QtWidgets import QApplication
+        from controllers.channel_controller import ChannelController
+        host, lw = self._make_host()
+        lw.setSpacing(2)
+        lw.resize(260, 320)
+        lw.show()
+        QApplication.processEvents()
+        ctrl = ChannelController(host)
+        ctrl.populate_channel_list_for(lw, self._channels(600), 'All Channels')
+        QApplication.processEvents()
+
+        lw.verticalScrollBar().setValue(300)
+        QApplication.processEvents()
+        ctrl.decorate_visible_rows(lw)
+
+        for row in range(300, 306):
+            assert lw.itemWidget(lw.item(row)) is not None, f'滚动后第 {row} 行未装饰'
+
     def test_quality_update_survives_widget_recycle(self):
         from PySide6.QtWidgets import QApplication
         from controllers.channel_controller import ChannelController
