@@ -120,13 +120,23 @@ class ChannelController:
         except RuntimeError:
             pass
 
+    # 行内控件（台标 + 名称 + 评分条）按视口按需创建。
+    # 逐项 addItem 与 setItemWidget 交错执行会让 QListWidget 反复重排已有的
+    # item widget，耗时随条数平方增长（5000 条约 127 秒）；先建轻量条目，
+    # 再只为视口附近的行装饰控件、回收远处的行，耗时与内存都只和视口相关。
+    ROW_DECORATE_MARGIN = 40
+    ROW_WIDGET_CACHE = 400
+    # 条目自身文本在装饰行控件时必须清空，否则会从透明的行控件底下透出来
+    ROW_DISPLAY_ROLE = Qt.ItemDataRole.UserRole + 1
+
     def populate_channel_list_for(self, list_widget, channels, selected_group=''):
         w = self.window
         tr = w.language_manager.tr
 
         list_widget.clear()
+        list_widget._channel_render = None
 
-        # 批量重建期间关闭刷新，避免每 addItem/setItemWidget 都触发一次重绘
+        # 批量重建期间关闭刷新，避免每 addItem 都触发一次重绘
         self._set_list_bulk_mode(list_widget, False)
         # 兜底：即使中途异常，也在当前调用栈返回后恢复刷新
         safe_single_shot(0, list_widget, lambda: self._set_list_bulk_mode(list_widget, True))
@@ -144,15 +154,8 @@ class ChannelController:
             selected_group.lower() == all_channels_text.lower()
         )
 
-        added_count = 0
-        error_count = 0
-        skipped_count = 0
-
-        from ui.styles import AppStyles
-        from ui.elided_label import ElidedLabel
         from utils.platform_utils import get_effective_ui_scale
         from ui.typography import text_factor
-        name_style = AppStyles.player_channel_list_name_style()
         ui_scale = get_effective_ui_scale()
         # 行高必须跟文字一起放大：只按界面缩放放大时「特大」字号会挤爆两行内容
         row_h = int(round(46 * ui_scale * max(1.0, text_factor())))
@@ -164,103 +167,54 @@ class ChannelController:
             key = (ch.get('name') or '').strip()
             name_counts[key] = name_counts.get(key, 0) + 1
 
+        visible_indices = []
         for idx, channel in enumerate(channels):
-            try:
-                if not is_all_channels:
-                    channel_groups = channel.get('_groups', [channel.get('group', '')])
-                    if selected_group not in channel_groups:
-                        skipped_count += 1
-                        continue
+            if is_all_channels:
+                visible_indices.append(idx)
+                continue
+            channel_groups = channel.get('_groups', [channel.get('group', '')])
+            if selected_group in channel_groups:
+                visible_indices.append(idx)
 
+        added_count = 0
+        error_count = 0
+        skipped_count = len(channels) - len(visible_indices)
+        is_grid = list_widget.viewMode() == QListWidget.ViewMode.IconMode
+
+        if len(visible_indices) >= 500 and hasattr(w, 'status_bar_show_message'):
+            w.status_bar_show_message(tr('loading_channels', '正在加载频道...'))
+
+        for idx in visible_indices:
+            channel = channels[idx]
+            try:
                 channel_name = channel.get("name", tr("unnamed", "Unnamed"))
                 display_name = self._channel_list_display_name(channel, channel_name, name_counts)
-                logo_url = channel.get('logo', '')
-
-                try:
-                    is_grid = list_widget.viewMode() == QListWidget.ViewMode.IconMode
-
-                    if is_grid:
-                        item = QListWidgetItem()
-                        item.setText(display_name)
-                        item.setToolTip(display_name)
-                        item.setData(Qt.ItemDataRole.UserRole, idx)
-                        item.setSizeHint(QSize(int(round(220 * ui_scale)), int(round(150 * ui_scale))))
-                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-
-                        list_widget.addItem(item)
-                    else:
-                        item_widget = QtWidgets.QWidget()
-                        item_widget.style_type = 'channel_item'
-                        item_widget.setStyleSheet(AppStyles.transparent_style())
-                        outer_layout = QtWidgets.QVBoxLayout(item_widget)
-                        outer_layout.setContentsMargins(5, 2, 5, 2)
-                        outer_layout.setSpacing(0)
-
-                        row_layout = QtWidgets.QHBoxLayout()
-                        row_layout.setContentsMargins(0, 0, 0, 0)
-                        row_layout.setSpacing(8)
-
-                        logo_label = QtWidgets.QLabel()
-                        logo_label.setFixedSize(int(round(44 * ui_scale)), int(round(32 * ui_scale)))
-                        logo_label.setStyleSheet(AppStyles.transparent_style())
-                        logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                        logo_label.setObjectName("channel_logo_label")
-                        # 台标兜底文字只允许单行：字号档位放大后 44×32 放不下两行中文
-                        logo_label.setWordWrap(False)
-                        _logo_font = logo_label.font()
-                        _logo_font.setPointSizeF(max(6.0, min(_logo_font.pointSizeF(), 8.0 * ui_scale)))
-                        logo_label.setFont(_logo_font)
-
-                        name_label = ElidedLabel(display_name)
-                        name_label.setStyleSheet(name_style)
-                        name_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-
-                        row_layout.addWidget(logo_label, 0, Qt.AlignmentFlag.AlignVCenter)
-                        row_layout.addWidget(name_label, 1, Qt.AlignmentFlag.AlignVCenter)
-
-                        outer_layout.addLayout(row_layout, 1)
-
-                        # 评分条：名称下方红→黄→绿渐变指示
-                        # 优先读持久化 quality_score 字段（订阅源/本地 M3U 自带评分的场景）
-                        # 否才按 valid 判断（未检测 valid is None 不显示）
-                        quality_bar = QualityBarWidget(item_widget)
-                        persisted_score = channel.get('quality_score')
-                        persisted_grade = channel.get('quality_grade') or ''
-                        if persisted_score is not None and persisted_score != '':
-                            try:
-                                quality_bar.set_score(float(persisted_score), persisted_grade)
-                            except (TypeError, ValueError):
-                                quality_bar.set_score(None)
-                        else:
-                            score_info = StreamQualityScorer.score_from_channel_safe(channel)
-                            if score_info is not None:
-                                quality_bar.set_score(score_info.get('total'), score_info.get('grade', ''))
-                            else:
-                                quality_bar.set_score(None)
-                        outer_layout.addWidget(quality_bar, 0)
-
-                        item = QListWidgetItem()
-                        item.setSizeHint(QSize(0, row_h))
-                        item.setData(Qt.ItemDataRole.UserRole, idx)
-
-                        list_widget.addItem(item)
-                        list_widget.setItemWidget(item, item_widget)
-
-                    added_count += 1
-
-                except Exception as widget_ex:
-                    simple_item = QListWidgetItem(display_name)
-                    simple_item.setData(Qt.ItemDataRole.UserRole, idx)
-                    list_widget.addItem(simple_item)
-                    added_count += 1
-                    error_count += 1
-                    if error_count <= 3:
-                        logger.warning(f"第{idx}个频道的自定义widget创建失败，使用简单文本: {widget_ex}")
-
+                item = QListWidgetItem()
+                item.setText(display_name)
+                item.setData(self.ROW_DISPLAY_ROLE, display_name)
+                item.setToolTip(display_name)
+                item.setData(Qt.ItemDataRole.UserRole, idx)
+                if is_grid:
+                    item.setSizeHint(QSize(int(round(220 * ui_scale)), int(round(150 * ui_scale))))
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                else:
+                    # 轻量条目：行内控件由 decorate_visible_rows 按视口补上
+                    item.setSizeHint(QSize(0, row_h))
+                list_widget.addItem(item)
+                added_count += 1
             except Exception as e:
                 error_count += 1
                 if error_count <= 3:
                     logger.error(f"populate_channel_list: 添加第{idx}个频道失败: {e}")
+
+        if not is_grid:
+            list_widget._channel_render = {
+                'channels': channels,
+                'name_counts': name_counts,
+                'row_h': row_h,
+                'ui_scale': ui_scale,
+            }
+            self.decorate_visible_rows(list_widget)
 
         empty_label = None
         if list_widget is getattr(w, 'sub_channel_list', None):
@@ -281,11 +235,161 @@ class ChannelController:
 
         logger.info(f"populate_channel_list: 填充完成，共 {list_widget.count()} 个频道项（实际添加: {added_count}, 跳过: {skipped_count}, 总数据: {len(channels)}）")
         self._set_list_bulk_mode(list_widget, True)
+        if len(visible_indices) >= 500 and hasattr(w, 'status_bar_show_message'):
+            w.status_bar_show_message(
+                tr('channel_list_loaded', '频道列表已加载（{count} 个频道）').format(count=added_count), 3000)
         try:
             list_widget.verticalScrollBar().valueChanged.connect(w._on_channel_list_scrolled, Qt.ConnectionType.UniqueConnection)
         except TypeError:
             pass
+        self._connect_render_refresh(list_widget)
         safe_single_shot(50, self.window, lambda: self.load_visible_icons(list_widget, channels))
+
+    def _connect_render_refresh(self, list_widget):
+        """面板拉伸/字号变化导致可见行数变化时，补装饰新出现的可见行。"""
+        sb = list_widget.verticalScrollBar()
+        old = getattr(list_widget, '_channel_range_handler', None)
+        if old is not None:
+            try:
+                sb.rangeChanged.disconnect(old)
+            except (RuntimeError, TypeError):
+                pass
+        handler = lambda *_: self.decorate_visible_rows(list_widget)
+        list_widget._channel_range_handler = handler
+        try:
+            sb.rangeChanged.connect(handler)
+        except (RuntimeError, TypeError):
+            pass
+
+    def decorate_visible_rows(self, list_widget):
+        """只装饰视口附近的行，并回收远离视口的行内控件。"""
+        state = getattr(list_widget, '_channel_render', None)
+        if not state:
+            return
+        try:
+            if list_widget.viewMode() == QListWidget.ViewMode.IconMode:
+                return
+            count = list_widget.count()
+            if count <= 0:
+                return
+            viewport_rect = list_widget.viewport().rect()
+            top_index = list_widget.indexAt(viewport_rect.topLeft())
+            bottom_index = list_widget.indexAt(viewport_rect.bottomLeft())
+            first = top_index.row() if top_index.isValid() else 0
+            if bottom_index.isValid():
+                last = bottom_index.row()
+            else:
+                # 滚到最底部时 bottomLeft 落在最后一个条目下方会返回无效索引，
+                # 这里按视口高度估算可见行数，避免只装饰开头几行
+                row_h = max(1, int(state.get('row_h') or 46))
+                last = min(count - 1, first + viewport_rect.height() // row_h + 1)
+            lo = max(0, first - self.ROW_DECORATE_MARGIN)
+            hi = min(count - 1, last + self.ROW_DECORATE_MARGIN)
+            if hi < lo:
+                return
+
+            channels = state['channels']
+            for row in range(lo, hi + 1):
+                item = list_widget.item(row)
+                if item is None or list_widget.itemWidget(item) is not None:
+                    continue
+                idx = item.data(Qt.ItemDataRole.UserRole)
+                if not isinstance(idx, int) or idx >= len(channels):
+                    continue
+                try:
+                    widget = self._build_channel_row_widget(item, channels[idx])
+                    list_widget.setItemWidget(item, widget)
+                    # 行控件是透明的，条目文本必须清空，避免与控件内文字重叠
+                    item.setText('')
+                except Exception as e:
+                    logger.debug(f"装饰频道行失败 row={row}: {e}")
+
+            keep_lo = max(0, lo - self.ROW_WIDGET_CACHE)
+            keep_hi = min(count - 1, hi + self.ROW_WIDGET_CACHE)
+            # 回收要扫描全表（5000 条约 10ms），滚动过程中每 8 次做一次即可
+            tick = (getattr(list_widget, '_channel_trim_tick', 0) + 1) % 8
+            list_widget._channel_trim_tick = tick
+            if tick == 0:
+                self._trim_row_widgets(list_widget, keep_lo, keep_hi)
+        except RuntimeError:
+            pass
+
+    @staticmethod
+    def _trim_row_widgets(list_widget, keep_lo, keep_hi):
+        """回收超出缓存窗口的行内控件，避免大列表把内存全占住。"""
+        for row in range(list_widget.count()):
+            if keep_lo <= row <= keep_hi:
+                continue
+            item = list_widget.item(row)
+            if item is None or list_widget.itemWidget(item) is None:
+                continue
+            list_widget.removeItemWidget(item)
+            # 恢复条目文本，回收后的行仍能正常显示名称
+            display_name = item.data(ChannelController.ROW_DISPLAY_ROLE)
+            if display_name:
+                item.setText(display_name)
+
+    def _build_channel_row_widget(self, item, channel):
+        """构建单行频道控件：台标 + 名称 + 评分条。"""
+        from ui.styles import AppStyles
+        from ui.elided_label import ElidedLabel
+        from ui.quality_bar import QUALITY_SCORE_ROLE, QUALITY_GRADE_ROLE
+        state = getattr(item.listWidget(), '_channel_render', None) or {}
+        ui_scale = state.get('ui_scale', 1.0)
+
+        item_widget = QtWidgets.QWidget()
+        item_widget.style_type = 'channel_item'
+        item_widget.setStyleSheet(AppStyles.transparent_style())
+        outer_layout = QtWidgets.QVBoxLayout(item_widget)
+        outer_layout.setContentsMargins(5, 2, 5, 2)
+        outer_layout.setSpacing(0)
+
+        row_layout = QtWidgets.QHBoxLayout()
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+
+        logo_label = QtWidgets.QLabel()
+        logo_label.setFixedSize(int(round(44 * ui_scale)), int(round(32 * ui_scale)))
+        logo_label.setStyleSheet(AppStyles.transparent_style())
+        logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        logo_label.setObjectName("channel_logo_label")
+        # 台标兜底文字只允许单行：字号档位放大后 44×32 放不下两行中文
+        logo_label.setWordWrap(False)
+        _logo_font = logo_label.font()
+        _logo_font.setPointSizeF(max(6.0, min(_logo_font.pointSizeF(), 8.0 * ui_scale)))
+        logo_label.setFont(_logo_font)
+
+        name_label = ElidedLabel(item.text())
+        name_label.setStyleSheet(AppStyles.player_channel_list_name_style())
+        name_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+
+        row_layout.addWidget(logo_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        row_layout.addWidget(name_label, 1, Qt.AlignmentFlag.AlignVCenter)
+        outer_layout.addLayout(row_layout, 1)
+
+        # 评分条：名称下方红→黄→绿渐变指示
+        # 优先读持久化 quality_score 字段（订阅源/本地 M3U 自带评分的场景）
+        # 否才按 valid 判断（未检测 valid is None 不显示）
+        quality_bar = QualityBarWidget(item_widget)
+        persisted_score = channel.get('quality_score')
+        persisted_grade = channel.get('quality_grade') or ''
+        if persisted_score is not None and persisted_score != '':
+            try:
+                quality_bar.set_score(float(persisted_score), persisted_grade)
+            except (TypeError, ValueError):
+                quality_bar.set_score(None)
+        else:
+            score_info = StreamQualityScorer.score_from_channel_safe(channel)
+            if score_info is not None:
+                quality_bar.set_score(score_info.get('total'), score_info.get('grade', ''))
+            else:
+                quality_bar.set_score(None)
+        # 播放中实时评分优先于持久化值（行控件被回收后重建也能恢复最新评分）
+        live_score = item.data(QUALITY_SCORE_ROLE)
+        if live_score is not None:
+            quality_bar.set_score(float(live_score), item.data(QUALITY_GRADE_ROLE) or '')
+        outer_layout.addWidget(quality_bar, 0)
+        return item_widget
 
     def refresh_item_metrics(self, list_widget):
         """字号/缩放变更后更新已建频道项的行高与 logo 尺寸。
@@ -312,6 +416,11 @@ class ChannelController:
                 continue
             for logo in item_widget.findChildren(QtWidgets.QLabel, "channel_logo_label"):
                 logo.setFixedSize(int(round(44 * scale)), int(round(32 * scale)))
+        # 之后按视口新建的行控件要用新尺寸
+        state = getattr(list_widget, '_channel_render', None)
+        if state and not is_grid:
+            state['ui_scale'] = scale
+            state['row_h'] = int(round(46 * scale * max(1.0, text_factor())))
 
     def load_visible_icons(self, list_widget, channels):
         w = self.window
@@ -541,22 +650,28 @@ class ChannelController:
         """
         if not url:
             return
+        from ui.quality_bar import QUALITY_SCORE_ROLE, QUALITY_GRADE_ROLE
         for list_attr in ('sub_channel_list', 'local_channel_list'):
             cl = getattr(self.window, list_attr, None)
             if not cl:
                 continue
+            state = getattr(cl, '_channel_render', None) or {}
+            channels = state.get('channels')
+            if not channels:
+                channels = getattr(self.window, '_sub_channels', None) if list_attr == 'sub_channel_list' \
+                    else getattr(self.window, '_local_channels', None)
             for i in range(cl.count()):
                 item = cl.item(i)
                 if not item:
                     continue
                 idx = item.data(Qt.ItemDataRole.UserRole)
-                channels = getattr(self.window, '_sub_channels', None) if list_attr == 'sub_channel_list' \
-                    else getattr(self.window, '_local_channels', None)
                 if not isinstance(idx, int) or not channels or idx >= len(channels):
                     continue
                 if channels[idx].get('url', '') != url:
                     continue
-                # 找到匹配的条目，更新评分条
+                # 评分写回条目数据：行控件可能因滚动被回收，重建时据此恢复最新评分
+                item.setData(QUALITY_SCORE_ROLE, float(score))
+                item.setData(QUALITY_GRADE_ROLE, grade or '')
                 item_widget = cl.itemWidget(item)
                 if item_widget:
                     bar = item_widget.findChild(QualityBarWidget, "quality_bar")

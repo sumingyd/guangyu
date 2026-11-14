@@ -631,3 +631,124 @@ class TestPanelDividerStyling:
 
         assert 'transparent' in label.styleSheet()
         assert 'max-height' in line.styleSheet()
+
+    def test_controller_reapply_does_not_raise_attribute_error(self):
+        """主题刷新必须调用模块级函数；写成 self.reapply_divider_styles 会整段刷新失败。"""
+        from PySide6.QtWidgets import QApplication, QWidget, QLabel, QFrame
+        if QApplication.instance() is None:
+            QApplication([])
+        from ui.styles import AppStyles
+        from controllers.ui_controller import UIController
+
+        AppStyles.set_color_mode('dark')
+        host = QWidget()
+        fp = QWidget(host)
+        host.floating_panel = fp
+        label = QLabel('简介', fp)
+        label.setObjectName('program_desc')
+        label.setStyleSheet('QLabel { color: #ffffff; background: transparent; max-height: 48px; }')
+        line = QFrame(fp)
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setStyleSheet('QFrame { background-color: #ff0000; max-height: 1px; }')
+
+        UIController(host)._reapply_floating_panel_styles()
+
+        assert line.styleSheet() == AppStyles.player_line_style()
+        assert 'transparent' in label.styleSheet()
+
+
+class TestChannelListVirtualization:
+    """大列表填充不能逐项构建行控件，否则耗时随条数平方增长（5000 条约 127 秒）。"""
+
+    @staticmethod
+    def _make_host():
+        from PySide6.QtWidgets import QApplication, QListWidget, QWidget
+        if QApplication.instance() is None:
+            QApplication([])
+        host_widget = QWidget()
+        lw = QListWidget(host_widget)
+
+        class _LM:
+            def tr(self, key, default=''):
+                return default
+
+        class _Win:
+            def __init__(self):
+                # 持有 QListWidget 的父对象，避免测试函数返回后被 Python GC 连带销毁
+                self.host_widget = host_widget
+                self.language_manager = _LM()
+                self.sub_empty_label = None
+                self.local_empty_label = None
+                self._icon_load_timer = None
+                self._icon_load_set = set()
+                self._icon_load_queue = []
+                self.status_messages = []
+                self.sub_channel_list = lw
+                self.local_channel_list = None
+
+            def status_bar_show_message(self, message, timeout=0):
+                self.status_messages.append(message)
+
+            def _on_channel_list_scrolled(self, value):
+                pass
+
+        return _Win(), lw
+
+    @staticmethod
+    def _channels(count):
+        return [{'name': f'频道{i}', 'url': f'http://example/{i}', 'group': 'g'} for i in range(count)]
+
+    def test_populate_5000_only_decorates_visible_window(self):
+        import time
+        from controllers.channel_controller import ChannelController
+        host, lw = self._make_host()
+        ctrl = ChannelController(host)
+
+        started = time.perf_counter()
+        ctrl.populate_channel_list_for(lw, self._channels(5000), 'All Channels')
+        elapsed = time.perf_counter() - started
+
+        assert lw.count() == 5000
+        assert elapsed < 10.0, f'5000 条填充耗时 {elapsed:.1f}s，仍接近平方级'
+        decorated = sum(1 for i in range(lw.count()) if lw.itemWidget(lw.item(i)) is not None)
+        assert decorated < 300, f'为 {decorated} 行创建了控件，未按视口裁剪'
+        assert lw.itemWidget(lw.item(0)) is not None, '首行应立即可见'
+        # 行控件透明，装饰后条目文本必须清空，否则文字会重叠
+        assert lw.item(0).text() == ''
+        assert lw.item(0).data(ChannelController.ROW_DISPLAY_ROLE)
+        assert any('5000' in m for m in host.status_messages), '大列表应有加载完成反馈'
+
+    def test_scroll_to_bottom_decorates_tail_rows(self):
+        from PySide6.QtWidgets import QApplication
+        from controllers.channel_controller import ChannelController
+        host, lw = self._make_host()
+        ctrl = ChannelController(host)
+        ctrl.populate_channel_list_for(lw, self._channels(2000), 'All Channels')
+
+        lw.scrollToBottom()
+        QApplication.processEvents()
+        ctrl.decorate_visible_rows(lw)
+
+        last = lw.count() - 1
+        assert lw.itemWidget(lw.item(last)) is not None, '滚动到底部后末行应补上控件'
+
+    def test_quality_update_survives_widget_recycle(self):
+        from PySide6.QtWidgets import QApplication
+        from controllers.channel_controller import ChannelController
+        from ui.quality_bar import QUALITY_SCORE_ROLE, QualityBarWidget
+        host, lw = self._make_host()
+        ctrl = ChannelController(host)
+        ctrl.populate_channel_list_for(lw, self._channels(50), 'All Channels')
+
+        ctrl.update_quality_bar_for_url('http://example/10', 73.5, 'B')
+        item = lw.item(10)
+        assert item.data(QUALITY_SCORE_ROLE) == 73.5
+
+        # 模拟滚动回收后重新装饰：评分应从条目数据恢复
+        lw.removeItemWidget(item)
+        QApplication.processEvents()
+        ctrl.decorate_visible_rows(lw)
+        widget = lw.itemWidget(item)
+        assert widget is not None
+        bar = widget.findChild(QualityBarWidget, 'quality_bar')
+        assert bar is not None and bar._score == 73.5

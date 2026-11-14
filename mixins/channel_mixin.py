@@ -239,6 +239,8 @@ class ChannelMixin:
         else:
             list_widget = self.sub_channel_list
             channels = self._sub_channels
+        # 滚动到的新行先补上控件，再加载可见台标
+        self.channel_ctrl.decorate_visible_rows(list_widget)
         self._load_visible_icons(list_widget, channels)
 
     def _capture_visible_thumbnails(self, tab='sub'):
