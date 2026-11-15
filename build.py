@@ -186,7 +186,6 @@ HIDDEN_IMPORTS = [
     "ui.dialogs.audio_eq_dialog",
     "ui.dialogs.playback_queue_dialog",
     "ui.dialogs.resume_position_dialog",
-    "ui.dialogs.network_enhance_dialog",
     "ui.dialogs.burst_screenshot_dialog",
     "ui.dialogs.bookmark_dialog",
     "ui.dialogs.av_sync_dialog",

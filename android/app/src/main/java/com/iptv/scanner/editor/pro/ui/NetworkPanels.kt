@@ -125,7 +125,7 @@ import java.util.Locale
 
 /**
  * 网络增强面板：HTTP Referer / Proxy / Headers 设置。
- * 与 PC 端 network_enhance_dialog.py 对齐。
+ * 与 PC 端「设置 → 网络 → 流媒体请求」对齐。
  *
  * 仅 MPV 播放器支持（通过 setPropertyString 下发到 mpv）。
  * 注意：设置在下次 loadfile 时生效，当前播放不会立即应用。

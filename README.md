@@ -1,11 +1,11 @@
 # 光屿 GuangYu
 
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/)
-[![PySide6](https://img.shields.io/badge/PySide6-6.4+-green.svg)](https://www.qt.io/qt-for-python)
+[![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
+[![PySide6](https://img.shields.io/badge/PySide6-6.7+-green.svg)](https://www.qt.io/qt-for-python)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-lightgrey.svg)](https://github.com/sumingyd/guangyu)
 
-**光屿 GuangYu** 是一款专业强大的 IPTV 播放器，跨平台支持 Windows / macOS / Linux 桌面端与 Android 手机 / 平板 / TV。以 **MPV 播放引擎为核心**，集成 FFprobe 流探测，覆盖「看、扫、管」完整链路：支持 EPG 电子节目单、频道台标自动匹配、HDR 显示、时移/回看、在线字幕下载、音频可视化、断点续播、片段导出等高级播放能力，同时提供频道扫描、批量验证、订阅管理等辅助工具。液态玻璃质感界面、中英双语，从扫描到观看一站式完成。
+**光屿 GuangYu** 是一款专业强大的 IPTV 播放器，跨平台支持 Windows / macOS / Linux 桌面端与 Android 手机 / 平板 / TV。以 **MPV 播放引擎为核心**，集成 FFprobe 流探测，覆盖「看、扫、管」完整链路：支持 EPG 电子节目单、频道台标自动匹配、HDR 显示、时移/回看、在线字幕下载、音频可视化、断点续播、片段导出等高级播放能力，同时提供频道扫描、批量验证、订阅管理等辅助工具。桌面端提供 21 种主题组合与中英双语界面，Android 端为液态玻璃界面，从扫描到观看一站式完成。
 
 > 🏷️ 原名 **IPTV-Scanner-Editor-Pro**（ISEP），已更名为 **光屿 GuangYu**，GitHub 旧链接自动重定向，历史数据与配置完全兼容。
 
@@ -26,17 +26,17 @@
 | 播放器       | MPV 引擎驱动、FCC 快速换台（秒开优化）、完整播放控制、倍速、画面比例、全屏、硬件解码、HDR 显示（5种模式）、WCG 广色域、运动补偿（minterpolate插帧）、分辨率提升（高质量缩放+细节增强）、AI超分辨率着色器（GLSL Shader）、智能预设（硬件检测+一键优化）、画中画、多屏预览(4/9屏)、截图、连拍截图、音轨/字幕切换、3D/360°视频、视频旋转翻转、自动裁剪黑边、视频图像调整、流质量检测                                                                                                                                                                                                      |
 | 字幕系统      | 字幕样式调整、在线字幕下载（OpenSubtitles/SubHD/SubtitleCat 三源聚合）、IMDB 中转中文搜索、字幕自动同步、字幕延迟/缩放/位置调整                                                                                                                                                                                                                                                                                                                                        |
 | 音频        | 10段均衡器、声道布局、音调补偿、音频延迟、A/V 同步监控（实时波形图）、音频可视化（7种3D样式）、歌词显示                                                                                                                                                                                                                                                                                                                                                                   |
-| 播放增强      | 断点续播、每文件播放设置持久化、跳过片头/片尾、播放队列（循环/AB循环/逐帧）、书签管理、切片导出/GIF制作、网络流增强（Referer/代理/Headers）                                                                                                                                                                                                                                                                                                                                         |
-| 时移/回看     | 5种回看类型(default/append/shift/flussonic/xtream)、时间变量替换、时区偏移、catchup-correction、全局回看参数继承                                                                                                                                                                                                                                                                                                                                      |
+| 播放增强      | 断点续播、每文件播放设置持久化、跳过片头/片尾、播放队列（循环/AB循环/逐帧）、书签管理、切片导出/GIF制作、网络流增强（Referer/代理/Headers）、同名备用线路自动切换、持续缓冲自动降级                                                                                                                                                                                                                                                                                                                                         |
+| 时移/回看     | 8种回看类型(default/append/shift/flussonic/xtream/pltv/vod/timemachine)、时间变量替换、时区偏移、catchup-correction、全局回看参数继承                                                                                                                                                                                                                                                                                                                                      |
 | EPG       | XMLTV/JSON 解析、智能匹配(tvg-id→tvg-name→频道名)、日期导航、实时进度条、Gzip 兼容、M3U 内嵌 EPG、EPG 时间轴、EPG 搜索、全局搜索、统一搜索、节目提醒                                                                                                                                                                                                                                                                                                                        |
 | 台标系统      | 400+ 内置规则、在线加载、异步下载、本地缓存、智能预加载、High-DPI 支持                                                                                                                                                                                                                                                                                                                                                                                 |
 | 频道扫描      | IP 范围扫描、多协议(单播/组播/HTTP)、FFprobe 探测、自定义参数、追加扫描、智能重试                                                                                                                                                                                                                                                                                                                                                                         |
 | 批量操作      | 自动分类、清理名称、匹配台标、分配字段、按组排序、批量验证                                                                                                                                                                                                                                                                                                                                                                                              |
 | 频道管理      | M3U 导入导出、拖拽排序、分组筛选、右键操作、智能映射、频道分类、名称清理、拼音排序、多格式导出(M3U/TXT/Excel)、收藏、历史、去重、评分、批量编辑、快速跳转、撤销/重做                                                                                                                                                                                                                                                                                                                               |
-| 界面        | 21种主题组合、中英双语、三栏布局、悬浮面板、系统托盘、文件关联、拖放打开、丰富快捷键                                                                                                                                                                                                                                                                                                                                                                                |
+| 界面        | 21种主题组合、中英双语、三栏布局、悬浮面板、设置页（常规/播放设置/网络/订阅源管理/外观）、系统托盘、文件关联、拖放打开、丰富快捷键                                                                                                                                                                                                                                                                                                                                                                                |
 | 订阅        | 多源管理、独立缓存、智能更新(增量)、编辑功能、缓存回退、过期策略                                                                                                                                                                                                                                                                                                                                                                                          |
 | Web 服务器   | 内置 aiohttp 服务器、频道列表和播放接口、频道管理后台（来源区分、订阅只读、本地持久化）                                                                                                                                                                                                                                                                                                                                                                           |
-| Android 端 | Kotlin Compose 原生 UI、MPV+ExoPlayer 双内核（自动兜底切换）、DLNA 投屏（SSDP 搜索+推流）、液态玻璃 UI（iOS 拟态玻璃质感+画布背景+深浅色主题）、竖屏/横屏双布局（横屏左右分屏：宫格频道卡+EPG 时间线 / 播放页视频+常驻功能面板）、TV 遥控器适配（DPAD 焦点导航+焦点高亮+台标显示+自动隐藏）、18 种全屏底栏样式（信息详情/居中悬浮/广播电视/机顶盒 OSD/影院 EPG 卡/仪表盘/海报卡片/节目时间轴等，弹窗实时预览切换）、EPG 时间线拟态玻璃化+懒加载、画中画（PiP 增强）、HDR 模式切换（设备能力检测+target-colorspace-hint）、WCG 广色域、PQ/HLG 差异化处理、运动补偿（minterpolate插帧）、分辨率提升（高质量缩放+细节增强）、AI超分辨率着色器（GLSL Shader）、智能预设（硬件检测+一键优化）、3D/360°视频、随机播放、书签管理、EPG 时间轴/日期切换、全局搜索、流质量检测、字幕样式、连拍截图、LAN 管理后台（虚拟遥控器+自动关闭开关）、MPV 软硬解切换、FCC 秒开换台（probesize/analyzeduration 对齐 PC 端）、数据持久化（覆盖安装不丢失）、版本检查更新（GitHub API + 自动提示新版本） |
+| Android 端 | Kotlin Compose 原生 UI、MPV+ExoPlayer 双内核（可手动切换，默认 MPV）、DLNA 投屏（SSDP 搜索+推流）、液态玻璃 UI（iOS 拟态玻璃质感+画布背景+深浅色主题+边缘折射）、界面模式（自动/强制手机/强制平板/强制 TV，强制横屏+伪横屏兜底）、竖屏/横屏双布局（横屏左右分屏：宫格频道卡+EPG 时间线 / 播放页视频+常驻功能面板）、竖屏手势分区（左亮度/右音量/中间换台）、TV 遥控器适配（DPAD 焦点导航+焦点高亮+台标显示+自动隐藏）、18 种全屏底栏样式（信息详情/居中悬浮/广播电视/机顶盒 OSD/影院 EPG 卡/仪表盘/海报卡片/节目时间轴等，弹窗实时预览切换）、EPG 时间线拟态玻璃化+懒加载、画中画（PiP 增强）、HDR 模式切换（设备能力检测+target-colorspace-hint）、WCG 广色域、PQ/HLG 差异化处理、运动补偿（minterpolate插帧）、分辨率提升（高质量缩放+细节增强）、AI超分辨率着色器（GLSL Shader）、智能预设（硬件检测+一键优化）、3D/360°视频、随机播放、书签管理、EPG 时间轴/日期切换、全局搜索、流质量检测（含首帧耗时）、播放失败分类建议、字幕样式、连拍截图、LAN 管理后台（虚拟遥控器+自动关闭开关）、MPV 软硬解切换、FCC 秒开换台（probesize/analyzeduration 对齐 PC 端）、同名备用线路/持续缓冲降级、数据持久化（覆盖安装不丢失）、版本检查更新（GitHub API + 自动提示新版本） |
 
 ## ✨ 核心功能
 
@@ -56,7 +56,7 @@
 
 - **时移/回看**：支持直播时移和历史节目回看功能
 
-  - 多种回看类型：`default`（完整URL）、`append`（附加到直播URL）、`shift`（时移偏移）、`flussonic`/`fs`（Flussonic格式）、`xc`/`xtream`（Xtream Codes格式）
+  - 多种回看类型：`default`（完整URL）、`append`（附加到直播URL）、`shift`（时移偏移）、`flussonic`/`fs`（Flussonic格式）、`xc`/`xtream`（Xtream Codes格式）、`pltv`（PLTV→TVOD 地址改写）、`vod`、`timemachine`
 
   - 时间变量替换：`${(b)format}` / `${(e)format}` 支持自定义时间格式
 
@@ -142,7 +142,7 @@
 
 - **3D / 360° 视频**：支持 3D 立体模式（mono/sbs/sbs2/ab/ab2）和 360° 投影（equirect/cubemap/flat），可调整 yaw/pitch/roll 视角
 
-- **网络流增强**：可配置 Referer、HTTP 代理、自定义 HTTP Headers，适配各种防盗链和受限流媒体源
+- **网络流增强**：在「设置 → 网络 → 流媒体请求」中配置 Referer、User-Agent、HTTP 代理和自定义 HTTP Headers，适配各种防盗链和受限流媒体源；代理只支持 `http://` / `https://`，`socks5://` 等写法会被忽略并直连（保存时也会提示），修改对之后打开的流生效
 
 - **软件图标占位**：未播放时视频区域显示程序图标
 
@@ -150,7 +150,7 @@
 
 - **多屏预览**：支持 4 屏 / 9 屏同时预览多个频道，视图菜单中切换
 
-- **截图**：一键截取当前视频画面保存到 `screenshots/` 目录
+- **截图**：一键截取当前视频画面保存到用户缓存目录下的 `screenshots/`
 
 - **连拍截图**：定时连续截图，可设置间隔和数量，用于制作动态预览
 
@@ -160,7 +160,7 @@
 
 - **视频文件打开**：支持直接打开本地视频文件播放（Ctrl+Shift+O）
 
-- **流质量检测**：独立对话框实时显示 mpv 流信息（每秒刷新），分组展示视频（codec/分辨率/显示分辨率/帧率/码率/像素格式/色彩空间/HDR/位深/宽高比）、音频（codec/声道/采样率/码率/位深）、网络与缓存（协议/缓存时长/缓存速度/缓冲状态/解复用码率）、丢帧统计（VO 丢帧/解码器丢帧/误时帧/VO 延迟帧）、硬件与渲染（硬解/视频输出/GPU API/GPU 上下文），与 Android 端 StreamQualityPanel 和 Web 端 stream\_quality 面板对齐
+- **流质量检测**：独立对话框实时显示 mpv 流信息（每秒刷新），分组展示视频（codec/分辨率/显示分辨率/帧率/码率/像素格式/色彩空间/HDR/位深/宽高比）、音频（codec/声道/采样率/码率/位深）、网络与缓存（协议/缓存时长/缓存速度/缓冲状态/首帧耗时/解复用码率）、丢帧统计（VO 丢帧/解码器丢帧/误时帧/VO 延迟帧）、硬件与渲染（硬解/视频输出/GPU API/GPU 上下文），与 Android 端 StreamQualityPanel 和 Web 端 stream\_quality 面板对齐
 
 - **频道切换遮罩**：换台时显示频道信息过渡动画，提升视觉体验
 
@@ -193,6 +193,8 @@
   - 多提醒并发处理：多个提醒同时触发时弹窗堆叠显示，仅第一个自动切换，其余可手动切换
 
   - 系统托盘通知：最小化到托盘时通过系统托盘显示提醒
+
+  - 弹窗 30 秒后自动关闭（鼠标悬停时暂停计时），支持「稍后提醒」（5 分钟后再次提醒）和「不再提醒此节目」
 
 ### 🖼️ 频道台标系统
 
@@ -344,6 +346,10 @@
 
 - **播放队列**：循环模式、AB 循环、逐帧播放，支持队列管理
 
+- **同名备用线路**：当前线路播放中断、自动重连耗尽后，在同名频道里找一条未试过的线路换线，全部线路失败才进入终态
+
+- **持续缓冲降级**：直播持续卡顿时自动尝试同名频道中更低分辨率的线路，优先保证播出
+
 - **书签管理**：为视频关键时间点添加书签，快速跳转
 
 - **切片导出 / GIF 制作**：
@@ -380,7 +386,9 @@
 
   - `Space` 播放/暂停
 
-  - `Escape` 退出全屏 / 停止播放
+  - `Escape` 退出全屏 / 收起浮层
+
+  - `Shift+Esc` 停止播放
 
   - `F11` / `F` 全屏
 
@@ -394,13 +402,13 @@
 
   - `↑` / `↓` 切换频道
 
-  - `←` / `→` 快退 / 快进 10 秒
+  - `←` / `→` 快退 / 快进 15 秒（按住可加速，松手后才跳转）
 
   - `Backspace` 切换到上一个频道
 
   - `.` / `,` 增加 / 降低播放速度 0.1
 
-  - `,` / `.` 逐帧后退 / 前进（播放队列模式）
+  - `[` / `]` 逐帧后退 / 前进
 
   - `滚轮` 调整音量
 
@@ -420,7 +428,7 @@
 
   - `Ctrl+Q` 退出程序
 
-  - `Ctrl+M` 静音切换
+  - `J` 静音切换
 
   - `Ctrl+Shift+←` / `Ctrl+Shift+→` 切换频道
 
@@ -448,17 +456,35 @@
 
 - **过期策略**：可配置的过期时间，到期自动刷新
 
-- **配置持久化**：所有设置自动保存到 config.ini
+- **配置持久化**：所有设置自动保存到用户配置目录下的 config.ini（Windows 为 `%APPDATA%\GuangYu`，macOS/Linux 走系统标准目录，Android 为 `/sdcard/ISEP/`；旧版本数据会自动迁移）
+
+### 🎛️ 设置页
+
+- **入口**：`工具菜单 → 设置`，对话框分为 5 个页签，底部固定「恢复默认 / 保存 / 取消」；「外观」页为即时预览，取消会回到打开前的档位
+
+- **常规**：应用级设置（界面语言、日志等级）、关闭窗口行为、屏保
+
+- **播放设置**：RTSP 传输方式、硬件解码等协议参数，以及循环模式、片头片尾跳过、视频/音频/字幕调整等播放扩展
+
+- **网络**：连接设置（TLS 校验、网络超时）、流媒体请求（Referer/UA/HTTP 代理/自定义 Headers）、GitHub 加速代理、HTTP 服务（状态/认证码/启停/自启动/端口/监听地址）
+
+- **订阅源管理**：播放列表源与 EPG 源两栏，支持新增/双击编辑/删除；播放列表源可勾选启用状态，保存时只对实际变化的源触发重载
+
+- **外观**：字号档位与界面缩放
+
+- **迁移说明**：原来的「网络流增强」「Web 服务器」入口已并入「网络」页签；「频道映射管理」仍在 `工具菜单 → 映射管理`
 
 ### 🌐 内置 Web 服务器
 
 - **本地服务**：内置 aiohttp 轻量级 Web 服务器，提供频道列表、播放接口、EPG、扫描、订阅等完整 RESTful API
 
+- **配置入口**：`工具菜单 → 服务` 可快速启停、打开 API 与后台，其中的「服务设置」会直接定位到设置页；端口、监听地址、认证码、开机自启等在 `设置 → 网络 → 服务设置` 中配置（端口被占用时会自动顺延并在状态里显示实际端口）
+
 - **远程控制**：通过浏览器访问频道列表和控制播放
 
 - **流代理**：`/stream/{id}` 路由提供频道流代理，支持直连播放
 
-- **管理后台**：`/admin/` 提供 8 个 Tab 的完整 Web 管理界面（PC/Linux/macOS/Android 通用）
+- **管理后台**：`/admin/` 提供 12 个 Tab 的完整 Web 管理界面（订阅源 / EPG 源 / 频道管理 / 扫描 / 频道映射 / 节目单 / EPG 搜索 / 遥控器 / 服务器状态 / 仪表盘 / 数据统计 / 日志，PC/Linux/macOS/Android 通用）
 
   - 订阅源管理（启用/禁用切换、最后更新时间）、EPG 源管理、频道管理（列表/搜索/分页/分组筛选/**来源过滤（全部/订阅/本地）**/CRUD/导入 M3U）
 
@@ -470,7 +496,15 @@
 
   - **虚拟遥控器**：通过浏览器远程控制 TV 端（方向键/确定/频道切换/播放控制/音量/菜单/返回/OSD），100ms 轮询命令队列，2s 轮询显示当前播放状态（频道名/播放状态/硬解软解/分辨率/编码/帧率/HDR/音量）
 
-- **PWA 支持**：移动端 UI 支持 PWA 安装，Service Worker 采用 network-first 缓存策略
+### 🚀 GitHub 加速代理
+
+- **默认开启**：默认代理为 `gh-proxy.com`，内置 25 个候选地址，在设置里的下拉列表中切换（只接受内置候选，不支持自定义输入）
+
+- **只改写 GitHub 域名**：仅对 `github.com` 及其子域（如 api/codeload）与 `githubusercontent.com` 系列（raw/gist/objects）生效，订阅源、EPG 源等非 GitHub 地址保持直连
+
+- **覆盖范围**：检查更新与在线更新包下载（PC + Android、「关于」对话框）、远程频道映射、指向 GitHub 的订阅源/EPG 地址、GitHub 托管的台标，以及 Web 管理后台新增/刷新订阅等触发的同类请求；Android 端对更新与台标图片加载同样套用该代理。只改写下载地址，不改变内容解析与缓存逻辑
+
+- **配置与生效**：`设置 → 网络 → GitHub 加速代理`（Android 为 `设置 → 网络`），对应 `config.ini` 的 `[Network] github_proxy_enabled` / `github_proxy`；保存后对后续请求立即生效，已开始的下载不会中途切换
 
 ### 📱 Android 播放器（手机 / 平板 / TV）
 
@@ -480,18 +514,26 @@ Android 端采用 **Kotlin Compose + Chaquopy Python 两层架构**，与 PC 端
 
 | 层        | 技术                                    | 职责                                                            |
 | -------- | ------------------------------------- | ------------------------------------------------------------- |
-| UI + 渲染层 | Kotlin（Jetpack Compose + MPVView\.kt） | Compose 声明式 UI、液态玻璃质感界面、竖屏/横屏分屏双布局、SurfaceView + JNI 调用 libmpv.so 渲染视频、TV/手机双模式适配 |
-| 业务层      | Python（Chaquopy 3.11）                 | 复用 PC 端 core/services 模块处理订阅/扫描/EPG/映射；按需启动 LAN admin 服务器     |
+| UI + 渲染层 | Kotlin（Jetpack Compose + MPVView\.kt） | Compose 声明式 UI、液态玻璃质感界面、竖屏/横屏分屏双布局、SurfaceView + JNI 调用 libmpv.so 渲染视频、手机/平板/TV 三种 UI 模式适配 |
+| 业务层      | Python（Chaquopy 16.1.0 / Python 3.11） | 复用 PC 端 core/services 模块处理订阅/扫描/EPG/映射；按需启动 LAN admin 服务器     |
 
 #### 核心功能
 
 - **界面布局**：竖屏 / 横屏双布局自动适配——竖屏采用底部弹出 Sheet 面板与 APTV 风格首页；横屏（平板/TV）采用左右分屏（首页：宫格频道卡 + EPG 时间线；播放页：视频区 + 常驻玻璃功能面板），TAB 底栏悬浮居中贴底，全屏播放页提供 **18 种底栏样式**（信息详情、单行紧凑、居中控制台、居中悬浮、广播电视、机顶盒 OSD、影院 EPG 卡、仪表盘、海报卡片、节目时间轴等，含台标/节目单/进度/时钟/网速/媒体徽章等信息组合），样式弹窗实时预览一键切换
 
-- **双播放内核**：MPV Native 渲染 + ExoPlayer 双内核（与 PC 端架构统一），MP2 音频链路异常时自动兜底切换 MPV，兼顾兼容性与播放稳定性
+- **界面模式**：自动 / 强制手机 / 强制平板 / 强制 TV 四种模式（设置 → 常规 → 界面模式）；强制平板与强制 TV 会锁定横屏，系统忽略旋转请求时用应用内伪横屏兜底，退出强制平板/TV 的弹窗里可直接改回自动模式
+
+- **液态玻璃**：统一画布背景 + 玻璃卡片磨砂透出，设置里可单独开启「液态玻璃折射」；API 33+ 走 AGSL 逐像素折射，不支持 AGSL 的设备退回 Canvas 回流（边缘环带放大）兜底
+
+- **竖屏手势**：视频区按竖向手势分为左/中/右三块，左侧上下滑动调亮度、右侧调音量、中间上下滑动换台，拖动时显示百分比提示
+
+- **双播放内核**：MPV Native 渲染（默认，功能最完整）+ ExoPlayer（HLS/DASH/RTSP 兼容性好），可在播放器设置中切换；多画面模式的副画面使用独立 ExoPlayer 实例
 
 - **DLNA 投屏**：SSDP 搜索局域网渲染设备（电视/盒子），AVTransport SOAP 推流投屏
 
 - **视频播放**：支持播放/暂停/停止、音量、倍速、画面比例、音轨/字幕切换、hwdec 软硬解切换、**FCC 换台优化**（识别 URL 中的 `fcc=` 参数，按端点发送 LEAVE/JOIN 并调小 `probesize`/`analyzeduration`；实际效果依赖服务端支持）
+
+- **播放可靠性**：同名备用线路自动换线（不重建播放器）、持续缓冲降级到更低分辨率线路、失败后按类别给出可执行建议（网络超时/地址失效/格式不支持等）
 
 - **HDR 模式切换**：禁用/自动/色调映射/直通 4 种模式，文件加载时自动检测 HDR（gamma=pq/hlg 或 sig-peak>1.0）并应用
 
@@ -505,13 +547,13 @@ Android 端采用 **Kotlin Compose + Chaquopy Python 两层架构**，与 PC 端
 
   - **WCG 广色域**：检测 BT.2020 色域 + SDR 亮度的视频时，设置 `target-prim=bt.2020` + `gamut-mapping-mode=relative` 正确显示广色域
 
-- **多画面预览**：DUAL（左右分屏）与 QUAD（2×2 网格）多画面同时预览，主画面复用现有 MPV 播放器，副画面使用独立 MPV 实例渲染
+- **多画面预览**：DUAL（左右分屏）与 QUAD（2×2 网格）多画面同时预览，主画面复用现有 MPV 播放器，副画面使用独立 ExoPlayer 实例渲染
 
 - **3D / 360° 视频**：5 种 3D 立体模式（mono/sbs/sbs2/ab/ab2）+ 360° 视角控制（panorama 滤镜，flat/equirect/cubemap 投影 + yaw/pitch/roll）
 
 - **控制面板**：3 行布局对齐 PC 端——媒体信息徽章、节目信息行、控制行（上一/下一频道、播放/暂停/停止、进度条、音量、倍速、画面比例、音轨、字幕）
 
-- **频道列表**：5 个 Tab（订阅 / 本地 / 收藏 / 历史 / 队列），搜索框、分组筛选
+- **频道列表**：4 个 Tab（订阅 / 本地 / 收藏 / 历史），搜索框、分组筛选
 
 - **EPG 节目单**：节目列表、当前节目 LIVE 徽章 + 自动居中、过去节目点击触发回看、当前/未来节目设置提醒、**±7 天日期切换**
 
@@ -521,7 +563,7 @@ Android 端采用 **Kotlin Compose + Chaquopy Python 两层架构**，与 PC 端
 
 - **全局搜索**：跨频道名称/URL/分组/EPG 节目标题统一搜索
 
-- **流质量检测**：实时探测视频分辨率/编解码/码率/帧率
+- **流质量检测**：实时探测视频分辨率/编解码/码率/帧率，媒体信息徽章显示首帧耗时（排障时可区分源慢与渲染慢）
 
 - **书签管理**：频道书签的添加/列表/跳转/删除
 
@@ -545,7 +587,7 @@ Android 端采用 **Kotlin Compose + Chaquopy Python 两层架构**，与 PC 端
 
 - **全屏切换**：沉浸式全屏
 
-- **遥控器适配（TV 端）**：DPAD 方向键（面板开启时由 Compose 焦点系统导航，面板关闭时上下切换频道、左右切换面板）、CENTER/ENTER（播放暂停）、菜单键（主菜单）、返回键（关闭面板/退出）、SPACE/M（播放暂停）、音量键
+- **遥控器适配（TV 端）**：DPAD 方向键（面板开启时由 Compose 焦点系统导航，面板关闭时上下切换频道、左右切换面板）、CENTER/ENTER（播放暂停）、菜单键（主菜单）、返回键（关闭面板/退出）、SPACE/M（播放暂停）、音量键；频道列表里连按三次上键回到顶部
 
   - **tvFocusBorder 焦点高亮**：4dp 金色边框 + 半透明白色背景，焦点切换清晰可见
 
@@ -559,8 +601,6 @@ Android 端采用 **Kotlin Compose + Chaquopy Python 两层架构**，与 PC 端
 
 - **本地文件打开**：SAF（Storage Access Framework）支持打开本地播放列表和视频
 
-- **MPV 统一内核**：仅使用 MPV 内核（与 PC 端架构统一），通过 `hwdec` 属性运行时切换硬解码/软解码（auto-copy 硬解 / no 软解）
-
 - **版本检查更新**：与 PC 端 `UpdateController` 对齐，通过 GitHub API 检查最新 release
 
   - 启动后自动延迟检查（初始化完成 5 秒后，避免影响启动性能）
@@ -573,15 +613,15 @@ Android 端采用 **Kotlin Compose + Chaquopy Python 两层架构**，与 PC 端
 
 #### 构建要求
 
-- Android Studio + Gradle 8.7.0
+- Android Studio + Gradle 8.11.1（Android Gradle Plugin 8.7.0）
 
 - compileSdk 35 / minSdk 28 / targetSdk 35
 
-- Chaquopy（Python 3.11）
+- Chaquopy 16.1.0（Python 3.11）
 
 - Kotlin 2.0.21 / JVM 21
 
-- ABI：arm64-v8a、armeabi-v7a、x86\_64、x86（4 种通用架构）
+- ABI：默认构建 arm64-v8a、armeabi-v7a；x86\_64 / x86 可通过 `-PtargetAbi` 构建（主要用于模拟器调试）
 
 - 依赖原生库：libmpv.so、libplayer.so、FFmpeg 系列（libavcodec/libavformat/libavfilter/libavutil/libswscale/libswresample）
 
@@ -591,25 +631,26 @@ Android 端采用 **Kotlin Compose + Chaquopy Python 两层架构**，与 PC 端
 
 ```bash
 cd android
+python extract_mpv_native.py          # 先提取 libmpv 等原生库到 app/src/main/jniLibs/
 ./gradlew.bat assembleRelease        # 构建 Release APK（需配置 release.keystore）
-adb install -g app/build/outputs/apk/release/app-release.apk
+adb install -g app/build/outputs/apk/release/GuangYu-Android-<版本号>-arm64.apk
 
-# 按架构构建
+# 按架构构建（输出文件名会带 ABI 后缀；不传 -PtargetAbi 时为 universal 包）
 ./gradlew.bat assembleRelease -PtargetAbi=armeabi-v7a   # 32位 ARM（电视盒）
 ./gradlew.bat assembleRelease -PtargetAbi=arm64-v8a     # 64位 ARM（手机）
 ```
 
-> **MPV 原生库来源**：仓库 `android/` 目录下附带的 `mpv-arm64.apk`、`mpv-x86_64.apk` 用于提取 libmpv.so 等原生库到 `app/src/main/jniLibs/`。armeabi-v7a 和 x86 架构的 libmpv.so 由 `build-tmp/cavs-android/jniLibs/` 目录提供。
+> **MPV 原生库来源**：`android/extract_mpv_native.py` 从官方 mpv-android 四个架构的 APK（缓存为 `android/mpv-<arch>.apk`）提取 `libplayer.so` 等基础库，再用 sggc/mpv-android-avs 的 AVS 版 `libmpv.so` 及配套解码库覆盖 arm64-v8a / armeabi-v7a。提取结果写入 `app/src/main/jniLibs/`，构建前 `jniLibs` 为空会直接报错。
 
 > **各 ABI MPV 可用性**：
 >
-> - **arm64-v8a**（推荐）：MPV 可用
+> - **arm64-v8a**（推荐）：MPV 可用（AVS 版，含 CAVS/AVS3/AV3A 解码）
 >
-> - **armeabi-v7a**（电视盒）：MPV 可用（从 cavs-android 提取）
+> - **armeabi-v7a**（电视盒）：MPV 可用（AVS 版）
 >
-> - **x86\_64**：MPV 可用
+> - **x86\_64**：MPV 可用（官方 mpv-android 库）
 >
-> - **x86**（主要为模拟器）：MPV 可用（从 cavs-android 提取）
+> - **x86**（主要为模拟器）：MPV 可用（官方 mpv-android 库）
 
 > **PC 端 Python 模块打包**：Chaquopy 构建时会将项目根目录的 `core/`、`services/`、`server/` 等 Python 包打包进 APK（通过 `extractPackages "server"` 指令解压 server 包，其余以 .zip 形式加载）。`android/app/src/main/python/android_bridge.py` 是 Android 端唯一的 Python 入口文件，运行时通过 `import server` / `import core` 等动态导入 PC 端模块。
 
@@ -637,9 +678,9 @@ python main.py
 
 ### 系统要求
 
-- **操作系统**：Windows 10/11, macOS 10.15+, Linux (x86\_64 / ARM64), Android 9.0+ (API 28)
+- **操作系统**：Windows 10/11, macOS 11+（PySide6 6.7/Qt 6.7 的最低要求）, Linux (x86\_64 / ARM64), Android 9.0+ (API 28)
 
-- **Python**：3.8+（PC 端）/ Python 3.11（Android 端，由 Chaquopy 内嵌）
+- **Python**：3.10+（PC 端，CI 使用 3.11）/ Python 3.11（Android 端，由 Chaquopy 内嵌）
 
 - **内存**：2GB RAM 以上
 
@@ -651,13 +692,15 @@ python main.py
 
 - Linux ARM64 已添加 GitHub CI/CD workflow 来帮助编译
 
-- ffprobe 和 ffmpeg 静态构建版本会编译进入程序本体，请参考 workflow 中 yml 文件的下载路径
+- ffprobe 和 ffmpeg 静态构建版本会随发布包一起打包，请参考 workflow 中 yml 文件的下载路径
 
-- 在 Linux 系统上运行前，请确保安装系统依赖：
+- 在 Linux 系统上运行前，请确保安装系统依赖（发布包只需 libmpv 运行库；从源码运行或构建时用 libmpv-dev）：
 
   ```bash
   sudo apt update
-  sudo apt install libmpv-dev
+  # 运行发布包：libmpv2（Ubuntu 24.04+）或 libmpv1（22.04）；从源码运行可装 libmpv-dev
+  # libxcb-cursor0 为 Qt6 xcb 平台插件必需；Wayland 会话需要 xwayland；ffmpeg 提供 ffprobe
+  sudo apt install libmpv-dev libxcb-cursor0 xwayland ffmpeg
   ```
 
 ### macOS 支持
@@ -670,11 +713,11 @@ python main.py
 
 - Android 端代码位于 `android/` 目录，采用 Kotlin Compose + Python 两层架构
 
-- 需 Android Studio + Gradle 8.7.0 构建，详见上文「Android 播放器」章节
+- 需 Android Studio + Gradle 8.11.1（AGP 8.7.0）构建，详见上文「Android 播放器」章节
 
-- 内嵌 Python 3.11（Chaquopy），与 PC 端共用业务后端代码
+- 内嵌 Python 3.11（Chaquopy 16.1.0），与 PC 端共用业务后端代码
 
-- 支持 arm64-v8a、armeabi-v7a、x86\_64、x86 四种 ABI（覆盖 32/64 位 ARM 与 x86）
+- 代码支持 arm64-v8a、armeabi-v7a、x86\_64、x86 四种 ABI；官方发布包只提供 arm64-v8a 与 armeabi-v7a，x86/x86\_64 主要用于模拟器调试（需自行构建）
 
 - 详见 `android/app/build.gradle` 构建配置
 
@@ -692,7 +735,7 @@ python main.py
 
 2. **配置订阅（可选）**
 
-   - 工具菜单 → 订阅设置
+   - 工具菜单 → 设置 → 「订阅源管理」页签
 
    - 添加多个播放列表源和 EPG 数据源地址
 
@@ -750,7 +793,7 @@ python main.py
 
 #### 频道映射
 
-- 工具菜单 → 频道映射管理器
+- 工具菜单 → 映射管理
 
 - 可视化编辑频道名称、LOGO、分组的映射规则
 
@@ -766,9 +809,15 @@ python main.py
 
 #### 主题与语言
 
-- 语言菜单：切换 中文 / English
+- 工具菜单 → 语言：切换 中文 / English（也可在 `设置 → 常规 → 应用` 中切换）
 
-- 主题菜单：3 种颜色模式 × 7 种视觉风格 = 21 种主题组合即时切换，全局生效
+- 工具菜单 → 主题：3 种颜色模式 × 7 种视觉风格 = 21 种主题组合即时切换，全局生效
+
+#### 检查更新
+
+- 帮助菜单 → 检查更新（「关于」对话框内也可触发）
+
+- 检查与更新包下载都走 GitHub 加速代理；发现新版本后按平台提示下载或安装
 
 #### 面板控制
 
@@ -786,7 +835,7 @@ python main.py
 
 ```
 guangyu/
-├── pyqt_player.py              # 主窗口 & 播放器核心（954行，15个Mixin + QMainWindow）
+├── pyqt_player.py              # 主窗口 & 播放器核心（约1200行，15个Mixin + QMainWindow）
 ├── build.py                    # PyInstaller 打包脚本
 ├── requirements.txt            # Python 依赖
 ├── mixins/                     # Mixin 模块（从 IPTVPlayer 拆分的职责）
@@ -806,38 +855,55 @@ guangyu/
 │   ├── control_panel_mixin.py  # 底部控制面板UI构建
 │   ├── playlist_panel_mixin.py # 播放列表面板/EPG面板UI构建
 │   └── event_mixin.py          # Qt事件覆写/拖放修复
-├── tests/                      # 单元测试
+├── tests/                      # 单元测试（27 个测试文件）
 │   ├── conftest.py             # MockMainWindow 基类
-│   ├── test_mixins.py          # Mixin 测试（前9个）
-│   ├── test_mixins_round4.py   # Mixin 测试（第4轮）
-│   └── test_mixins_round5.py   # Mixin 测试（第5轮）
+│   ├── qt_stub.py              # 无 Qt 环境下的 PySide6 桩
+│   ├── test_mixins*.py         # Mixin 冒烟测试（3 个批次）
+│   ├── test_facade_smoke.py / test_event_handler_focus.py # 门面与焦点事件
+│   ├── test_core_flows.py / test_subscription_reload.py / test_epg_*.py # 订阅与 EPG
+│   ├── test_playback_degrade.py / test_seek_hold.py / test_playback_error.py # 播放降级/长按 seek/失败文案
+│   ├── test_github_proxy.py / test_update_controller.py / test_app_paths.py # 网络与路径
+│   ├── test_idle_policy.py / test_idle_render.py / test_screensaver.py / test_loopback_spectrum.py # 空闲策略/屏保/可视化
+│   ├── test_palette_tokens.py / test_typography.py / test_logo_cache_scale.py # 设计 token 与缩放
+│   └── test_build_and_shaders.py / test_environment_deps.py / test_numpy_degrade.py / test_fcc_service.py / test_regression_p0.py # 构建、依赖与回归
 ├── core/                       # 核心模块
 │   ├── application_state.py    # 应用程序状态管理
 │   ├── config_manager.py       # 配置管理（INI）
-│   ├── language_manager.py     # 多语言管理（内置 zh/en 翻译）
+│   ├── idle_policy.py          # 空闲/屏保触发策略
+│   ├── idle_render.py          # 空闲重绘抑制
+│   ├── language_manager.py     # 多语言管理（i18n/zh.json、en.json）
 │   ├── log_manager.py          # 日志管理
 │   ├── panel_visibility.py     # 面板可见性状态
 │   ├── play_state.py           # 播放状态枚举
 │   ├── playback_settings_store.py # 每文件播放设置存储（LRU 持久化）
 │   ├── subscription_manager.py # 订阅源管理（多源/独立缓存/增量更新）
-│   └── version.py              # 版本信息
+│   ├── version.py              # 版本信息
+│   └── stores/                 # 配置分片存储
+│       ├── audio_eq_store.py / video_eq_store.py # 音视频 EQ
+│       ├── bookmark_store.py / resume_store.py # 书签与断点
+│       ├── network_settings_store.py # 网络/代理设置
+│       └── window_layout_store.py # 窗口布局
 ├── controllers/                # 控制器层
 │   ├── bookmark_controller.py  # 书签控制器
 │   ├── catchup_controller.py   # 时移/回看控制器
 │   ├── channel_controller.py   # 频道管理控制器
+│   ├── context_menu_controller.py # 视频右键菜单
 │   ├── epg_controller.py      # EPG 电子节目单控制器
 │   ├── epg_reminder_controller.py # EPG 节目提醒控制器
 │   ├── event_handler.py       # 事件处理器
 │   ├── favorites_controller.py # 收藏控制器
 │   ├── file_queue_controller.py # 播放队列控制器（循环/AB循环/逐帧）
+│   ├── lyrics_controller.py    # 歌词加载/滚动
 │   ├── main_window_protocol.py # 主窗口协议接口
 │   ├── media_controller.py    # 媒体控制器
 │   ├── multi_screen_controller.py # 多屏控制器
 │   ├── pip_controller.py      # 画中画控制器
-│   ├── playback_controller.py  # 播放控制
+│   ├── playback_controller.py  # 播放控制（同名备用线路/缓冲降级）
 │   ├── playback_settings_controller.py # 每文件播放设置控制器
+│   ├── preset_controller.py    # 智能预设控制器
 │   ├── progress_controller.py  # 进度控制器
 │   ├── resume_playback_controller.py # 断点续播控制器
+│   ├── screensaver_controller.py # 屏保控制器
 │   ├── settings_file_ops.py    # 设置文件操作
 │   ├── skip_intro_outro_controller.py # 跳过片头/片尾控制器
 │   ├── subscription_controller.py      # 订阅控制器
@@ -857,6 +923,7 @@ guangyu/
 │   ├── channel_quick_jump_service.py # 频道快速跳转服务
 │   ├── channel_rating_service.py # 频道评分服务
 │   ├── clip_export_service.py # 切片导出/GIF制作服务（FFmpeg+Pillow）
+│   ├── epg_channel_aliases.py # EPG 频道别名归一
 │   ├── epg_matcher.py         # EPG 模糊匹配引擎
 │   ├── epg_reminder_service.py # EPG 提醒服务
 │   ├── epg_search_service.py  # EPG 搜索服务
@@ -865,13 +932,23 @@ guangyu/
 │   ├── ffprobe_validator_service.py # FFprobe 频道验证服务（当前使用）
 │   ├── logo_cache_service.py   # 台标缓存服务（异步+DPI）
 │   ├── logo_matcher.py        # 台标智能匹配服务（400+ 规则）
+│   ├── loopback_spectrum_service.py # 回环音频频谱采集
 │   ├── m3u_parser.py          # M3U 播放列表解析器
+│   ├── mpv_audio_eq.py        # MPV 音频 EQ 滤镜
 │   ├── mpv_common.py          # MPV 公共模块
+│   ├── mpv_filter.py          # MPV 滤镜链
 │   ├── mpv_gl_widget.py       # MPV OpenGL 渲染组件
+│   ├── mpv_hdr.py             # MPV HDR 模式应用
+│   ├── mpv_playback.py        # MPV 播放/属性写入
 │   ├── mpv_player_service.py # MPV 播放引擎（libmpv，HDR/翻转/旋转/A-V同步/运动补偿/分辨率提升/AI着色器）
 │   ├── hardware_detect_service.py # 硬件检测服务（CPU/GPU/RAM 检测 + 智能推荐）
+│   ├── mpv_shader.py          # 着色器加载
+│   ├── mpv_subtitle.py        # 字幕轨/样式
 │   ├── mpv_validator_service.py # MPV 频道验证服务（旧版）
+│   ├── mpv_video_eq.py        # 视频图像调整
+│   ├── preset_manager_service.py # 智能预设管理
 │   ├── scanner_service.py     # 频道扫描服务
+│   ├── scene_detect_service.py # 场景检测（片头/片尾）
 │   ├── stream_quality_scorer.py # 流质量评分服务
 │   ├── subtitle_download_service.py # 在线字幕下载服务（3源聚合+IMDB中转）
 │   ├── thumbnail_service.py   # 缩略图服务
@@ -881,13 +958,8 @@ guangyu/
 │   ├── app.py                 # Web 应用入口
 │   ├── context.py             # 服务器上下文/单例
 │   ├── routes.py              # 路由定义
-│   ├── admin/                 # 管理后台 UI（PC/Android 通用）
-│   │   └── index.html         # 管理后台单页应用（8 Tab：订阅源/EPG源/频道管理/扫描/映射/EPG浏览/缓存/遥控器）
-│   └── mobile/                # 移动端 UI（PWA）
-│       ├── index.html         # 移动端单页应用
-│       ├── manifest.json      # PWA 清单
-│       ├── sw.js              # Service Worker（network-first）
-│       └── logo.png           # 移动端 Logo
+│   └── admin/                 # 管理后台 UI（PC/Android 通用）
+│       └── index.html         # 管理后台单页应用（12 Tab：订阅源/EPG源/频道管理/扫描/频道映射/节目单/EPG搜索/遥控器/服务器状态/仪表盘/数据统计/日志）
 ├── ui/
 │   ├── dialogs/
 │   │   ├── about_dialog.py    # 关于对话框（含版本检查）
@@ -901,7 +973,6 @@ guangyu/
 │   │   ├── file_association_dialog.py # 文件关联对话框
 │   │   ├── global_search_dialog.py # 全局搜索对话框
 │   │   ├── mapping_manager_dialog.py # 映射管理器
-│   │   ├── network_enhance_dialog.py # 网络流增强对话框（Referer/代理/Headers）
 │   │   ├── playback_queue_dialog.py # 播放队列对话框（循环/AB循环/逐帧）
 │   │   ├── reminder_manager_dialog.py # 提醒管理对话框
 │   │   ├── reminder_popup.py  # 节目提醒弹窗
@@ -915,41 +986,62 @@ guangyu/
 │   │   └── video_open_dialog.py # 视频文件打开对话框
 │   ├── cache_progress_slider.py # 缓存进度滑块组件
 │   ├── channel_transition_overlay.py # 频道切换遮罩组件
+│   ├── elided_label.py        # 省略号文本标签
+│   ├── empty_state.py         # 空态组件（主按钮/提示）
 │   ├── epg_timeline_widget.py # EPG 时间轴组件
 │   ├── floating_dialog.py     # 悬浮对话框基类（Windows 隐藏任务栏图标）
 │   ├── lyrics_widget.py       # 歌词显示组件（LRC 解析+滚动）
 │   ├── menu_proxy_style.py    # 菜单代理样式
 │   ├── multi_screen_widget.py # 多屏窗口组件
+│   ├── palette.py             # 色板与语义色
 │   ├── quality_bar.py         # 质量评分条组件
-│   ├── styles.py              # 21 套主题样式定义
+│   ├── screensaver_widget.py  # 屏保组件（时钟/频道/节目信息）
+│   ├── styles.py              # 样式聚合门面（21 套主题的样式实现拆分在 styles_* 子模块）
+│   ├── styles_base.py / styles_common.py / styles_decorations.py # 基础/公共/装饰样式
+│   ├── styles_dialog.py / styles_player.py / styles_window.py / styles_icons.py # 对话框/播放器/窗口/图标样式
 │   ├── theme_manager.py       # 主题管理器
+│   ├── typography.py          # 字号档位与界面缩放
 │   ├── virtual_channel_list.py # 虚拟频道列表组件
+│   ├── volume_slider.py       # 音量滑块
 │   └── wallpaper_widget.py    # 壁纸背景组件（视频区域背景）
 ├── utils/                      # 工具模块
+│   ├── app_paths.py           # 用户配置/缓存/日志目录解析
 │   ├── config_notifier.py     # 配置变更通知器
+│   ├── crash_handler.py       # 崩溃捕获与日志
+│   ├── delay_constants.py     # 延时/冷却常量
+│   ├── early_init.py          # 启动早期初始化
 │   ├── error_handler.py       # 错误处理器
 │   ├── general_utils.py       # 通用工具函数
+│   ├── github_proxy.py        # GitHub 加速代理（域名改写/候选/配置）
+│   ├── gpu_caps.py            # GPU 能力探测
 │   ├── hdr_detect.py          # HDR 检测工具
+│   ├── http_session.py        # 统一 HTTP 会话（自动套用代理）
 │   ├── logging_helper.py      # 日志辅助函数
+│   ├── mac_blur_helper.py     # macOS 模糊窗口辅助
 │   ├── memory_manager.py      # 内存管理器
+│   ├── numpy_compat.py        # numpy 缺失降级
 │   ├── platform_utils.py      # 平台工具（ffmpeg 路径定位等）
+│   ├── playback_error.py      # 播放错误归类
 │   ├── progress_manager.py    # 进度管理器
 │   ├── resource_cleaner.py    # 资源清理器
 │   ├── scan_state_manager.py  # 扫描状态管理器
 │   ├── singleton.py           # 单例模式基类
 │   └── thread_safety.py       # Qt 线程安全工具
+├── i18n/                       # 界面翻译（zh.json / en.json）
+├── themes/                     # 配色单一真源（palette.json，PC 与 Android 共用）
+├── shaders/                    # 内置 GLSL 着色器预设（RAVU / FSRCNNX / Anime4K 等）
+├── icons/                      # README 截图与赞赏码
 ├── img/                        # 台标图片库（400+ 频道 Logo）
 ├── resources/logo.ico          # 程序图标
-├── cache/                      # 运行时缓存（自动生成）
+├── cache/                      # 运行时缓存（实际位于用户缓存目录，如 %LOCALAPPDATA%\GuangYu，不在仓库内）
 │   ├── logo_cache/            # 台标图片缓存（从 tvg-logo URL 下载）
 │   │   ├── meta.json          # 缓存元数据
 │   │   └── *.png              # 各频道台标文件
 │   ├── epg_cache.json         # EPG 数据缓存（全量合并）
-│   ├── playlist_cache_0.m3u   # 播放列表源 #0 的独立缓存
-│   ├── playlist_cache_1.m3u   # 播放列表源 #1 的独立缓存
-│   ├── playback_settings.json # 每文件播放设置持久化（LRU）
-│   └── ...                    # 每个播放列表源一个独立缓存文件
-├── logo/                       # 本地频道台标图片库
+│   ├── m3u_<md5>.cache        # 每个播放列表源一个独立缓存（按源 URL 哈希命名）
+│   ├── thumbnails/            # 频道缩略图
+│   └── screenshots/           # 截图
+├── logo/                       # 台标源图归档（按地区分组，运行时匹配使用 img/）
 └── android/                    # Android 移动端工程
     ├── app/                    # 主应用模块
     │   ├── src/main/
@@ -958,46 +1050,63 @@ guangyu/
     │   │   │   ├── data/                   # 数据层（Kotlin）
     │   │   │   │   ├── IptvModels.kt       # 数据模型（频道/EPG/书签/提醒/AdminServerInfo 等）
     │   │   │   │   ├── IptvRepository.kt   # 数据仓库（调用 Python bridge）
-    │   │   │   │   └── UserPrefs.kt        # SharedPreferences 持久化
+    │   │   │   │   ├── GithubProxy.kt      # GitHub 代理地址改写
+    │   │   │   │   ├── UserPrefs.kt        # SharedPreferences 持久化
+    │   │   │   │   └── store/              # 分片存储（书签/EPG/收藏/历史/网络/播放器/队列/断点）
     │   │   │   ├── mpv/                    # MPV 渲染层（Kotlin）
     │   │   │   │   ├── MPVView.kt          # SurfaceView + mpv 渲染
-    │   │   │   │   └── MpvController.kt    # Compose 友好的 mpv 控制器（StateFlow + 命令）
-    │   │   │   ├── player/                 # MPV 播放内核层
+    │   │   │   │   ├── MpvController.kt    # Compose 友好的 mpv 控制器（StateFlow + 命令）
+    │   │   │   │   └── controller/MpvPlaybackController.kt # MPV 属性读写/事件回调
+    │   │   │   ├── player/                 # 播放内核层
     │   │   │   │   ├── Player.kt           # 统一播放器接口（含软硬解切换接口）
-    │   │   │   │   ├── MpvPlayerController.kt # MPV 控制器（hwdec 软硬解切换，MPV 统一内核）
     │   │   │   │   ├── PlaybackState.kt    # 播放状态枚举
+    │   │   │   │   ├── PlaybackErrorText.kt # 播放失败分类文案（超时/地址/格式等）
+    │   │   │   │   ├── ExoPlayerWrapper.kt / SubPlayer.kt # ExoPlayer 内核与多画面副播放器
+    │   │   │   │   ├── CustomRenderersFactory.kt / Mp2AudioRenderer.kt / Mp2Decoder.kt # ExoPlayer MP2 音频链路
+    │   │   │   │   ├── AudioFocusHelper.kt # 音频焦点
+    │   │   │   │   ├── DlnaCast.kt        # DLNA 投屏（SSDP + 推流）
     │   │   │   │   ├── CatchupHelper.kt    # 回看/时移辅助
     │   │   │   │   ├── FccHelper.kt       # FCC 秒开换台辅助（UDP 通知 FCC 代理 + probesize/analyzeduration 优化，对齐 PC 端 fcc_service.py）
     │   │   │   │   └── ProgressHelper.kt   # 进度条逻辑（对齐 PC 端）
     │   │   │   └── ui/                     # Compose UI 层
     │   │   │       ├── AppViewModel.kt     # 核心 ViewModel（所有功能入口）
-    │   │   │       ├── MainPlayerScreen.kt # 主播放界面
-    │   │   │       ├── ControlPanel.kt     # 3 行控制面板
-    │   │   │       ├── ChannelsPanel.kt    # 频道列表（5 Tab）
+    │   │   │       ├── PlaybackViewModel.kt / ChannelViewModel.kt / EpgViewModel.kt / CommonViewModel.kt / MiscViewModel.kt / ManageServerViewModel.kt # 分域 ViewModel
+    │   │   │       ├── MainPlayerScreen.kt # 主播放界面（手势分区/遥控器/信息弹窗）
+    │   │   │       ├── LandscapeHomeScreen.kt / LandscapeSplitLayout.kt # 横屏首页与左右分屏布局
+    │   │   │       ├── PortraitHome.kt / PortraitFavoritesScreen.kt # 竖屏首页与收藏页
+    │   │   │       ├── BottomBarControls.kt # 全屏底栏样式与控制按钮
+    │   │   │       ├── PlayerDynamicContent.kt # 底栏内容编排（媒体徽章/节目信息/控制行）
+    │   │   │       ├── ChannelsPanel.kt    # 频道列表（4 Tab：订阅/本地/收藏/历史）
+    │   │   │       ├── ChannelSidebar.kt   # 横屏频道侧栏
     │   │   │       ├── EpgPanel.kt         # EPG 节目单（±7 天日期切换）
     │   │   │       ├── EpgTimelinePanel.kt # EPG 时间线视图
     │   │   │       ├── FileBrowserPanel.kt # SAF 文件浏览器（本地播放列表/视频选择，TV 焦点适配）
     │   │   │       ├── SearchPanel.kt      # 全局搜索
     │   │   │       ├── StreamQualityPanel.kt # 流质量检测
-    │   │   │       ├── SourceManagerPanel.kt # 订阅源管理 + LAN 管理（自动关闭开关）
+    │   │   │       ├── InfoPanelDialogs.kt # 频道信息/媒体信息弹窗（含首帧耗时）
+    │   │   │       ├── SourceManagerPanel.kt / SourceManagePanels.kt # 订阅源管理与 LAN 管理（自动关闭开关）
     │   │   │       ├── MainMenuPanel.kt    # 主菜单
-    │   │   │       ├── PlayerSettingsPanel.kt # 播放器设置（VO/HWDEC 软硬解切换/HDR 模式）
-    │   │   │       ├── MorePanels.kt       # 视频/音频/字幕/播放/截图/关于面板集合
+    │   │   │       ├── PlayerSettingsPanel.kt / PlayerSettingsPanels.kt # 播放器设置（VO/HWDEC/HDR）
+    │   │   │       ├── MorePanels.kt / MiscPanels.kt / NetworkPanels.kt / SubtitlePanels.kt / ScreenshotPanels.kt / AboutPanels.kt # 各类功能面板
     │   │   │       ├── MultiViewOverlay.kt # 多画面网格容器（DUAL 左右分屏 / QUAD 2×2 网格）
     │   │   │       ├── MultiViewModels.kt  # 多画面视图模型（状态/布局切换）
-    │   │   │       ├── QrCodeUtil.kt       # 二维码生成
+    │   │   │       ├── ToolsSettings.kt    # 设置页（常规/播放设置/网络三组）
+    │   │   │       ├── TvLayout.kt / TvUnifiedPanel.kt / TvPalette.kt # TV 布局、统一面板与配色
+    │   │   │       ├── AptvComponents.kt / AmbientGlow.kt / PanelHelpers.kt / PerformanceOptimizations.kt # 玻璃组件、光斑、面板工具与性能优化
+    │   │   │       ├── ScreenSaverOverlay.kt # 屏保浮层
     │   │   │       ├── SplashScreen.kt    # 启动画面（ViewModel 初始化）
-    │   │   │       ├── UiMode.kt          # UI 模式枚举（TV/手机）
-    │   │   │       ├── TvUnifiedPanel.kt  # TV 端统一面板（频道列表+EPG+台标+焦点跟踪）
+    │   │   │       ├── UiMode.kt          # UI 模式枚举（手机/平板/TV + 强制模式）
     │   │   │       └── theme/              # 主题 + TvFocus（4dp 金色焦点边框）
-    │   │   ├── python/                # 内嵌 Python 后端（Chaquopy 3.11）
+    │   │   ├── python/                # 内嵌 Python 后端（Chaquopy 16.1.0）
     │   │   │   └── android_bridge.py  # Python 服务启动入口（IPTV_DATA_DIR 设置 + 虚拟遥控器命令队列；运行时 import server/core/services 动态加载 PC 端模块）
     │   │   ├── jniLibs/               # 原生库（arm64-v8a / armeabi-v7a / x86_64 / x86，构建时从 mpv-*.apk 提取）
     │   │   └── AndroidManifest.xml
     │   └── build.gradle               # 应用级构建脚本
     ├── mpv-arm64.apk                  # 预打包 mpv 库 APK（arm64-v8a，提取 libmpv.so）
+    ├── mpv-armeabi-v7a.apk            # 预打包 mpv 库 APK（armeabi-v7a）
     ├── mpv-x86_64.apk                 # 预打包 mpv 库 APK（x86_64，提取 libmpv.so）
-    ├── build-tmp/cavs-android/jniLibs/ # 32位 MPV 原生库（armeabi-v7a / x86，cavs-android 提取）
+    ├── mpv-x86.apk                    # 预打包 mpv 库 APK（x86，模拟器用）
+    ├── extract_mpv_native.py          # 从上述 APK 与 AVS 版 libmpv 提取原生库到 jniLibs
     └── gradlew / gradlew.bat          # Gradle 包装器
 ```
 
@@ -1006,7 +1115,7 @@ guangyu/
 | 组件             | 技术                                                      |
 | -------------- | ------------------------------------------------------- |
 | GUI 框架（PC）     | PySide6                                                 |
-| 移动端框架（Android） | Kotlin Jetpack Compose + Chaquopy Python（MPV + ExoPlayer 双内核） |
+| 移动端框架（Android） | Kotlin Jetpack Compose + Chaquopy Python（MPV + ExoPlayer 双内核，默认 MPV） |
 | 播放引擎           | libmpv (MPV)                                            |
 | 流探测            | FFprobe (FFmpeg)                                        |
 | 片段导出 / GIF     | FFmpeg + Pillow                                         |
@@ -1018,12 +1127,13 @@ guangyu/
 | 拼音排序           | pypinyin                                                |
 | 系统监控           | psutil                                                  |
 | 配置管理           | configparser                                            |
-| 类型扩展           | typing-extensions                                       |
 | 字幕下载           | OpenSubtitles XML-RPC / SubHD / SubtitleCat             |
 
 ## 🤝 贡献指南
 
 欢迎提交 Issue 和 Pull Request！
+
+提交代码、频道映射、翻译或台标即视为同意以 GPL-3.0-or-later 授权并随本项目分发；请确保你拥有所提交内容的合法使用权。
 
 1. Fork 本仓库
 2. 创建功能分支 (`git checkout -b feature/xxx`)
@@ -1035,9 +1145,9 @@ guangyu/
 
 - **频道映射**：直接修改仓库中的映射文件并提交 PR
 
-- **台标图片**：上传 PNG 格式的频道 Logo 到 `logo/` 或 `img/` 目录
+- **台标图片**：上传 PNG 格式的频道 Logo 到 `logo/`（源图归档）或 `img/`（运行时匹配）目录；请确认拥有该图片的使用权，频道台标为各自权利人的商标，仅用于识别对应频道
 
-- **语言翻译**：修改代码中的内置翻译（`BUILTIN_TRANSLATIONS`）
+- **语言翻译**：修改 `i18n/zh.json` 与 `i18n/en.json`（运行时由 `core/language_manager.py` 加载，中英键需保持一一对应）
 
 ## 📞 联系方式
 
@@ -1058,6 +1168,8 @@ guangyu/
 本项目采用 [GNU General Public License v3.0 或更高版本](LICENSE)（GPL-3.0-or-later）开源。
 
 Copyright (C) 2025 宿命。第三方组件（libmpv、FFmpeg、PySide6/Qt、内置着色器等）的许可证与源码获取方式见 [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES)。
+
+再分发本程序或其修改版时，需同时遵守 GPLv3 的源码提供义务；第三方组件的许可证与源码获取方式同样见 THIRD-PARTY-NOTICES。
 
 ***
 
