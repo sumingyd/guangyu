@@ -1,6 +1,6 @@
 # 光屿 GuangYu
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/)
 [![PySide6](https://img.shields.io/badge/PySide6-6.4+-green.svg)](https://www.qt.io/qt-for-python)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-lightgrey.svg)](https://github.com/sumingyd/guangyu)
@@ -1055,8 +1055,10 @@ guangyu/
 
 ## 📄 许可证
 
-本项目采用 [MIT License](LICENSE) 开源。
+本项目采用 [GNU General Public License v3.0 或更高版本](LICENSE)（GPL-3.0-or-later）开源。
+
+Copyright (C) 2025 宿命。第三方组件（libmpv、FFmpeg、PySide6/Qt、内置着色器等）的许可证与源码获取方式见 [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES)。
 
 ***
 
-*本工具仅供学习和研究使用，请遵守相关法律法规。*
+*本软件是播放器工具，不附带、不提供任何频道源、订阅源或节目内容；使用时请遵守当地法律法规以及所访问内容的授权条款。*

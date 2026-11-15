@@ -8,21 +8,21 @@
 
 | 预设名      | 说明                          | 文件名                         | 大小    | 许可证     |
 |------------|------------------------------|-------------------------------|---------|-----------|
-| `ravu`     | RAVU 锐利放大（r3 版本）      | `ravu_r3.hook`                | 123 KB  | LGPL-2.1+ |
-| `fsrcnnx`  | FSRCNNX 超分辨率（8-0-4-1）   | `FSRCNNX_x2_8-0-4-1.glsl`    | 71 KB   | GPL-2.0+  |
+| `ravu`     | RAVU 锐利放大（r3 版本）      | `ravu_r3.hook`                | 123 KB  | LGPL-3.0+ |
+| `fsrcnnx`  | FSRCNNX 超分辨率（8-0-4-1）   | `FSRCNNX_x2_8-0-4-1.glsl`    | 71 KB   | LGPL-3.0+ |
 | `anime4k`  | Anime4K 动画增强（3文件组合）  | `Anime4K_Clamp_Highlights.glsl` | 2.8 KB | MIT       |
 |            |                              | `Anime4K_Restore_CNN_S.glsl`  | 17 KB   | MIT       |
 |            |                              | `Anime4K_Upscale_CNN_x2_S.glsl` | 19 KB | MIT       |
-| `krig`     | KrigBilateral 色度升频        | `KrigBilateral.hook`          | 12 KB   | LGPL-2.1+ |
-| `ssim`     | SSimDownscaler 高质量降频     | `SSimDownscaler.glsl`         | 5.7 KB  | LGPL-2.1+ |
+| `krig`     | KrigBilateral 色度升频        | `KrigBilateral.hook`          | 12 KB   | LGPL-3.0+ |
+| `ssim`     | SSimDownscaler 高质量降频     | `SSimDownscaler.glsl`         | 5.7 KB  | LGPL-3.0+ |
 
 ## 着色器来源
 
-- **RAVU** — [bjin/mpv-prescalers](https://github.com/bjin/mpv-prescalers) (LGPL-2.1+)
-- **FSRCNNX** — [igv/FSRCNN-TensorFlow](https://github.com/igv/FSRCNN-TensorFlow) (GPL-2.0+)
+- **RAVU** — [bjin/mpv-prescalers](https://github.com/bjin/mpv-prescalers) (LGPL-3.0+)
+- **FSRCNNX** — [igv/FSRCNN-TensorFlow](https://github.com/igv/FSRCNN-TensorFlow) (LGPL-3.0+)
 - **Anime4K** — [bloc97/Anime4K](https://github.com/bloc97/Anime4K) (MIT)
-- **KrigBilateral** — [igv gist](https://gist.github.com/igv/a015fc885d5c22e6891820ad89555637) (LGPL-2.1+)
-- **SSimDownscaler** — [igv gist](https://gist.github.com/igv/36508af3ffc84410fe39761d6969be10) (LGPL-2.1+)
+- **KrigBilateral** — [igv gist](https://gist.github.com/igv/a015fc885d5c22e6891820ad89555637) (LGPL-3.0+)
+- **SSimDownscaler** — [igv gist](https://gist.github.com/igv/36508af3ffc84410fe39761d6969be10) (LGPL-3.0+)
 
 ## 额外文件
 

@@ -1,0 +1,175 @@
+光屿 GuangYu — 第三方组件许可声明（THIRD-PARTY NOTICES）
+========================================================
+
+本文件适用于 GuangYu（光屿）桌面端（Windows / macOS / Linux）与 Android 端的发行包。
+
+GuangYu 自身代码以 GNU General Public License v3.0 或更高版本（GPL-3.0-or-later）发布，
+完整条款见同目录 LICENSE。下列第三方组件随发行包一起分发，各自仍适用其原有许可证。
+
+许可关系总述
+------------
+
+本发行整体按 GPL-3.0-or-later 分发。发行包内的第三方组件分别采用
+GPLv2 或更高（GPLv2+）、LGPLv3 或更高、MIT、BSD 三类许可，
+上述许可均允许并入并再分发于 GPLv3 作品；本次清点未发现 GPLv2-only（仅 v2、无 “or later”）组件。
+各组件在发行中的实际版本关系见下文的逐项说明；唯一缺少许可证依据的是 Android 端的
+libavs3a_decoder.so 与 model.bin（见第三节第 4 项）。
+
+一、如何获取对应源码
+--------------------
+
+1. 本项目源码
+   https://github.com/sumingyd/guangyu
+   与本发行版本号一致的 tag 即对应源码（版本号见 core/version.py 的 CURRENT_VERSION）。
+
+2. 由本项目 CI 构建的原生库
+   macOS / Linux 的 libmpv 与 FFmpeg 由仓库内工作流构建，构建参数即为对应源码的编译配置：
+   https://github.com/sumingyd/guangyu/blob/main/.github/workflows/build-libmpv-other-platforms.yml
+   - macOS ARM64 / Linux x86_64 / Linux ARM64 三个作业各自执行：
+     FFmpeg ./configure --enable-gpl（libdavs2、CAVS 补丁）
+     mpv meson -Dlibmpv=true -Dgpl=true
+   - FFmpeg 的 CAVS 补丁来自 https://github.com/llawsxx/FFmpeg 的 6 个提交，
+     提交号写在该工作流的 “Download CAVS patches” 步骤中。
+   - 工作流在构建时从上游默认分支浅克隆 mpv 与 FFmpeg，未固定 commit；
+     若需与某个已发布二进制完全一致的源码，请以该次构建日志记录的上游日期/版本为准，
+     或从下述上游仓库获取对应版本。
+
+3. 直接使用上游预编译产物的平台
+   Windows：libmpv 来自 shinchiro/mpv-winbuild-cmake 的固定 release 标签 20260610，
+   FFmpeg 来自 GyanD/codexffmpeg 的固定 release 2026-06-08-git-6028720d70。
+   Linux ARM64：FFmpeg 来自 BtbN/FFmpeg-Builds 的 ffmpeg-n8.1-latest-linuxarm64-gpl-8.1
+   （该地址为滚动 latest，未固定构建号）。
+
+二、桌面端原生组件
+------------------
+
+1. mpv / libmpv
+   上游许可：GPLv2 或更高（GPLv2+，上游 README/Copyright 明确写为 “GPLv2 or later”）
+   与本发行的关系：GPLv2+ 允许按更高版本使用，故本发行按 GPLv3 分发时与上游许可兼容；
+                  本项目所有平台均使用 -Dgpl=true 的 GPL 构建。
+   源码：https://github.com/mpv-player/mpv
+         https://github.com/shinchiro/mpv-winbuild-cmake （Windows 预编译来源）
+   分发形态：Windows mpv/libmpv-2.dll；macOS mpv/libmpv.2.dylib 及其同目录依赖；
+             Linux mpv/libmpv.so*
+   说明：libmpv 通过运行时动态加载（ctypes.CDLL），未静态链接进主程序。
+
+2. FFmpeg（libavcodec / libavformat / libavutil / libswresample 等，以及 ffprobe/ffmpeg 可执行文件）
+   上游许可：默认 LGPLv2.1 或更高；用 --enable-gpl 构建时整体变为 GPLv2 或更高（GPLv2+）
+   与本发行的关系：本项目全部平台均使用 --enable-gpl 构建，按 GPLv2+ 使用，
+                  与 GPLv3 分发兼容。
+   源码：https://ffmpeg.org/download.html#get-sources （git://source.ffmpeg.org/ffmpeg.git）
+         https://github.com/BtbN/FFmpeg-Builds
+         https://github.com/GyanD/codexffmpeg
+   分发形态：Windows / macOS / Linux 的 ffmpeg、ffprobe，以及随 libmpv 一同分发的 FFmpeg 动态库。
+
+3. libdavs2（AVS2 解码器，随 macOS/Linux 的 libmpv 与 Android 端 AVS 库分发）
+   上游许可：GPLv2 或更高（上游源文件头写明 “either version 2 of the License, or
+            (at your option) any later version”）
+   与本发行的关系：GPLv2+，与 GPLv3 分发兼容。
+   源码：https://github.com/saindriches/davs2 （本项目使用的 fork）
+         https://github.com/pkuvcl/davs2 （上游）
+
+4. PySide6 / Qt 6
+   上游许可：LGPLv3（PySide6 同时提供 GPLv3 与商业授权；PyPI 包元数据写明
+            “PySide6 is available under both Open Source (LGPLv3/GPLv3) and commercial”）
+   与本发行的关系：LGPLv3 允许并入 GPLv3 作品；本项目按 LGPLv3 使用。
+   源码：https://download.qt.io/official_releases/QtForPython/
+         https://download.qt.io/official_releases/qt/
+         许可证全文：https://www.gnu.org/licenses/lgpl-3.0.html
+   分发形态：PySide6==6.7.1 及其附带的 Qt 动态库以独立文件形式随包分发，未静态链接，
+             使用者可按 LGPLv3 的要求替换这些库文件。
+   其它：PySide6 wheel 内附带的 Qt 第三方组件（ICU、OpenSSL 等）清单与许可证文本，
+         见该 wheel 的 licenses 目录。
+
+三、Android 端原生组件
+----------------------
+
+1. mpv / libmpv
+   上游许可：GPLv2 或更高（GPLv2+），与 GPLv3 分发兼容。
+   来源：mpv-android 发行包 2026-04-25
+         https://github.com/mpv-android/mpv-android/releases/tag/2026-04-25
+         AVS 支持版 libmpv / libavcodec 覆盖包 libmpv-cavs-dynamic-v003
+         https://github.com/sggc/mpv-android-avs/releases/tag/libmpv-cavs-dynamic-v003
+   源码：https://github.com/mpv-android/mpv-android
+         https://github.com/sggc/mpv-android-avs
+   提取脚本：android/extract_mpv_native.py（记录了两个发行包的固定标签）
+
+2. libplayer.so（mpv-android 的 JNI 层）
+   上游许可：MIT（mpv-android 仓库 LICENSE 为 MIT 文本）
+   与本发行的关系：MIT 与 GPLv3 兼容。
+   源码：https://github.com/mpv-android/mpv-android
+
+3. libuavs3d.so（AVS3-P2 解码器）
+   上游许可：BSD 3-clause（上游 README 的 license 段写明 “under the terms of the BSD 3-clause license”）
+   与本发行的关系：BSD 与 GPLv3 兼容。
+   源码：https://github.com/uavs3/uavs3d
+   说明：随 sggc/mpv-android-avs 的 libmpv-cavs-dynamic-v003 包分发，含 10-bit 补丁。
+
+4. libavs3a_decoder.so（AV3A 音频解码器）与 model.bin（运行模型）
+   上游许可：**查不到**。sggc/mpv-android-avs 仓库内没有 LICENSE 文件（GitHub 许可证接口返回空），
+            README 也未声明许可证；uavs3d、davs2 之外没有可引用的授权文本。
+   与本发行的关系：授权依据缺失，无法判定是否与 GPLv3 兼容，列为待确认项。
+   来源：https://github.com/sggc/mpv-android-avs/releases/tag/libmpv-cavs-dynamic-v003
+
+5. libc++_shared.so
+   上游许可：Apache-2.0 WITH LLVM-exception
+   与本发行的关系：与 GPLv3 兼容。
+   源码：https://github.com/llvm/llvm-project
+
+6. 关于 sggc/mpv-android-avs 仓库本身
+   该仓库没有 LICENSE 文件（GitHub 许可证接口返回 null），无法就其仓库内容单独引用授权；
+   其产物中可识别的部分按第三节 1、3、5 项的上游许可处理。
+
+四、内置着色器（shaders/ 与 android/app/src/main/assets/shaders/）
+----------------------------------------------------------------
+
+以下结论取自各文件头部实际携带的许可证声明：
+
+1. FSRCNNX_x2_8-0-4-1.glsl
+   许可证：LGPL-3.0-or-later（文件头写明 “version 3.0 of the License, or (at your option) any later version”）
+   源码：https://github.com/igv/FSRCNN-TensorFlow
+
+2. ravu_r3.hook、ravu_r4.hook、KrigBilateral.hook、SSimDownscaler.glsl
+   许可证：LGPL-3.0-or-later（文件头写明 LGPL “version 3.0 … or any later version”）
+   源码：https://github.com/bjin/mpv-prescalers
+         https://gist.github.com/igv/a015fc885d5c22e6891820ad89555637
+         https://gist.github.com/igv/36508af3ffc84410fe39761d6969be10
+
+3. Anime4K_Clamp_Highlights.glsl、Anime4K_Restore_CNN_S.glsl、Anime4K_Restore_CNN_M.glsl、
+   Anime4K_Upscale_CNN_x2_S.glsl
+   许可证：MIT（文件头为 MIT 文本）
+   源码：https://github.com/bloc97/Anime4K
+
+4. adaptive_sharpen.glsl
+   许可证：BSD 风格二条款许可（版权与条款原文见文件头）
+   源码：https://github.com/bacondither/adaptive-sharpen
+
+五、GPLv3 新增义务在本发行中的实际情况
+--------------------------------------
+
+1. 安装信息（GPLv3 第 6 条，反 Tivoization）
+   桌面端发行的是可直接替换的可执行文件；Android 端发行的是可直接安装的 APK，
+   用户可用自行从源码构建并签名的安装包替换。本项目不涉及引导程序、固件或硬件的锁定，
+   不存在需要额外提供“安装信息”才能替换的受限设备机制。
+
+2. 专利授权（GPLv3 第 11 条）
+   本发行按 GPLv3 分发，随附第 11 条的专利许可；本项目未对下游施加额外的专利限制。
+
+3. 不得附加额外限制（GPLv3 第 10 条）
+   本发行未对 GPLv3 授予的权利附加额外限制。
+
+4. 担保
+   本发行按 GPLv3 第 15、16 条以“现状”提供，不附带任何担保。
+
+六、其它依赖
+------------
+
+桌面端与 Android 端还使用了 numpy、requests、aiohttp、Pillow、openpyxl、pypinyin、mutagen、psutil、
+AndroidX/Compose、Media3、Coil、Haze、ACRA、ZXing、JLayer 等第三方库。
+这些库的许可证文本与版权声明保留在各自的发行包元数据中（Python 包为 .dist-info/licenses，
+Android 为各 AAR 内的 LICENSE/NOTICE），可用于核对具体条款。
+
+七、联系
+--------
+
+如对上述组件的来源或许可有疑问，请在 https://github.com/sumingyd/guangyu/issues 提出。

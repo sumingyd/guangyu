@@ -180,6 +180,8 @@ jobs:
             dist/GuangYu-Windows-x86_64.exe
             dist/GuangYu-Windows-x86_64.exe.sha256
             dist/libmpv-fallback-windows.zip
+            dist/LICENSE
+            dist/THIRD-PARTY-NOTICES
           fail_on_unmatched_files: true
           overwrite_files: true
         env:
@@ -354,7 +356,7 @@ jobs:
       - name: Compress executable
         run: |
           cd dist
-          tar czf "GuangYu-Linux-x86_64.tar.gz" "GuangYu" "icons" "GuangYu.desktop" "install.sh"
+          tar czf "GuangYu-Linux-x86_64.tar.gz" "GuangYu" "icons" "GuangYu.desktop" "install.sh" "LICENSE" "THIRD-PARTY-NOTICES"
 
       - name: Generate checksum
         run: |
@@ -463,7 +465,7 @@ jobs:
       - name: Compress executable
         run: |
           cd dist
-          tar czf "GuangYu-Linux-ARM64.tar.gz" "GuangYu" "icons" "GuangYu.desktop" "install.sh"
+          tar czf "GuangYu-Linux-ARM64.tar.gz" "GuangYu" "icons" "GuangYu.desktop" "install.sh" "LICENSE" "THIRD-PARTY-NOTICES"
 
       - name: Generate checksum
         run: |

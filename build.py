@@ -78,6 +78,9 @@ ICO_ICON = PROJECT_ROOT / "resources" / "logo.ico"
 # themes/ 是配色单一真源（palette.json），缺失会回退内置默认色但无法换肤。
 DATA_DIRS = ["mpv", "ffmpeg", "resources", "i18n", "shaders", "themes"]
 
+# 许可证与第三方声明：GPL 要求随二进制分发附带许可证文本，缺失时不阻断构建但会告警。
+DATA_FILES = ["LICENSE", "THIRD-PARTY-NOTICES"]
+
 
 HIDDEN_IMPORTS = [
     "PySide6.QtNetwork",
@@ -252,7 +255,33 @@ def _data_args():
             print(f"错误: 缺少打包资源目录: {src}")
             sys.exit(1)
         args.extend(["--add-data", f"{src}{DATA_SEP}{name}"])
+    args.extend(_license_data_args())
     return args
+
+
+def _license_data_args():
+    """许可证与第三方声明的 --add-data 参数（所有平台共用）。"""
+    args = []
+    for name in DATA_FILES:
+        src = PROJECT_ROOT / name
+        if not src.exists():
+            print(f"警告: 缺少许可证文件，产物将不带许可证文本: {src}")
+            continue
+        args.extend(["--add-data", f"{src}{DATA_SEP}."])
+    return args
+
+
+def _copy_license_files(dest_dir):
+    """把 LICENSE 与 THIRD-PARTY-NOTICES 复制到发行目录（GPL 合规附件）。"""
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for name in DATA_FILES:
+        src = PROJECT_ROOT / name
+        if not src.exists():
+            print(f"警告: 缺少许可证文件，跳过复制: {src}")
+            continue
+        shutil.copy2(str(src), str(dest_dir / name))
+    print(f"许可证文件已复制: {dest_dir}")
 
 
 def _hidden_import_args():
@@ -671,6 +700,7 @@ def _linux_data_args():
         dest = staging_root / name
         shutil.copytree(src, dest, ignore=ignore)
         args.extend(["--add-data", f"{dest}{DATA_SEP}{name}"])
+    args.extend(_license_data_args())
     return args
 
 
@@ -705,6 +735,8 @@ def post_process_windows():
         print(f"警告: 可执行文件未找到: {exe_path}")
         return
 
+    _copy_license_files(dist_dir)
+
     # 复制 libmpv-2.dll 到 dist/mpv/（备用路径，_MEIPASS 解压失败时使用）
     src_dll = PROJECT_ROOT / "mpv" / "libmpv-2.dll"
     if src_dll.exists():
@@ -733,6 +765,8 @@ def post_process_macos_app():
     if not app_path.exists():
         print(f"警告: .app 未找到: {app_path}")
         return
+
+    _copy_license_files(app_path / "Contents" / "Resources")
 
     info_plist_path = app_path / "Contents" / "Info.plist"
     if info_plist_path.exists():
@@ -904,6 +938,8 @@ def post_process_linux():
     if not exe_path.exists():
         print(f"警告: 可执行文件未找到: {exe_path}")
         return
+
+    _copy_license_files(dist_dir)
 
     logo_png = PROJECT_ROOT / "resources" / "logo.png"
     if not logo_png.exists():

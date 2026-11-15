@@ -149,10 +149,19 @@ class AboutDialog(FloatingDialog):
 
         main_layout.addSpacing(16)
 
+        # 许可证说明：GPL-3.0-or-later，链接到仓库 LICENSE 文件
+        self.license_label = QtWidgets.QLabel(self._license_html(tr, c))
+        self.license_label.setStyleSheet(
+            f"font-size: 10px; color: {c['player_panel_secondary']};"
+            f" background-color: transparent;"
+        )
+        self.license_label.setOpenExternalLinks(True)
+        main_layout.addWidget(self.license_label)
+
         bottom_layout = QtWidgets.QHBoxLayout()
         bottom_layout.setSpacing(12)
 
-        self.copyright_label = QtWidgets.QLabel(tr("copyright_text", "© 2025-2026 GuangYu"))
+        self.copyright_label = QtWidgets.QLabel(tr("copyright_text", "© 2025 宿命"))
         self.copyright_label.setStyleSheet(
             f"font-size: 10px; color: {c['player_panel_secondary']};"
             f" background-color: transparent;"
@@ -194,6 +203,15 @@ class AboutDialog(FloatingDialog):
         import threading
         self._version_thread = threading.Thread(target=self._check_version_thread, daemon=True)
         self._version_thread.start()
+
+    @staticmethod
+    def _license_html(tr, colors):
+        """许可证行的富文本：版本号指向仓库 LICENSE。"""
+        return (
+            f'{tr("license_label", "License")}: '
+            f'<a href="https://github.com/sumingyd/guangyu/blob/main/LICENSE" '
+            f'style="color: {colors["accent"]}; text-decoration: none;">GPL-3.0-or-later</a>'
+        )
 
     def _check_version_thread(self):
         """在线程中检查版本（不阻塞 UI）"""
@@ -305,6 +323,13 @@ class AboutDialog(FloatingDialog):
         for child in self.findChildren(QtWidgets.QLabel):
             child_name = child.objectName()
             if child_name == "infoCard":
+                continue
+            if child == getattr(self, 'license_label', None):
+                child.setText(self._license_html(self.language_manager.tr, c))
+                child.setStyleSheet(
+                    f"font-size: 10px; color: {c['player_panel_secondary']};"
+                    f" background-color: transparent;"
+                )
                 continue
             if child == getattr(self, 'copyright_label', None):
                 child.setStyleSheet(

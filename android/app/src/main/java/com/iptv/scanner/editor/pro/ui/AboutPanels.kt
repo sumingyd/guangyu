@@ -137,6 +137,7 @@ fun AboutPanel(viewModel: AppViewModel) {
                 InfoRow("播放引擎", "mpv (libmpv)")
                 InfoRow("UI 框架", "Jetpack Compose")
                 InfoRow("Python 引擎", "Chaquopy")
+                InfoRow("许可证", "GPL-3.0-or-later")
             }
         }
 
