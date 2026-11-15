@@ -89,6 +89,14 @@ class CatchupController:
             self.window.play_state.set_idle()
         self.window._live_timeshift_seconds = 0
         self.window.catchup_program = None
+        # 退出回看/时移/回直播时立即收起角标，避免独立窗口多停留一轮刷新
+        ui_ctrl = getattr(self.window, 'ui_ctrl', None)
+        sync = getattr(ui_ctrl, '_sync_video_overlay_visibility', None)
+        if sync is not None:
+            try:
+                sync()
+            except Exception:
+                pass
 
     def replace_catchup_variables(self, catchup_source: str, start_time: datetime, end_time: datetime) -> str:
         if not catchup_source:

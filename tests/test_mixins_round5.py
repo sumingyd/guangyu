@@ -49,40 +49,14 @@ class TestControlPanelMixin:
         self.host._create_bottom_panel()
         self.host._create_panel.assert_called_once_with(show=True)
 
-    def test_set_info_label_icon_no_path(self):
-        icon_label = MagicMock()
-        with patch('mixins.control_panel_mixin.AppStyles.get_icon', return_value=None):
-            self.host._set_info_label_icon(icon_label, 'tv')
-        icon_label.setPixmap.assert_not_called()
-
-    def test_set_info_label_icon_with_pixmap(self):
-        icon_label = MagicMock()
-        mock_pixmap = MagicMock()
-        mock_pixmap.isNull.return_value = False
-        with patch('mixins.control_panel_mixin.AppStyles.get_icon', return_value='/fake/path.png'), \
-             patch('mixins.control_panel_mixin.QPixmap', return_value=mock_pixmap):
-            self.host._set_info_label_icon(icon_label, 'tv')
-        icon_label.setPixmap.assert_called_once()
-
-    def test_set_info_label_icon_null_pixmap(self):
-        icon_label = MagicMock()
-        mock_pixmap = MagicMock()
-        mock_pixmap.isNull.return_value = True
-        with patch('mixins.control_panel_mixin.AppStyles.get_icon', return_value='/fake/path.png'), \
-             patch('mixins.control_panel_mixin.QPixmap', return_value=mock_pixmap):
-            self.host._set_info_label_icon(icon_label, 'tv')
-        icon_label.setPixmap.assert_not_called()
-
     def test_create_media_row_calls_info_row(self):
-        self.host._set_info_label_icon = MagicMock()
         self.host._create_info_row = MagicMock()
         with patch('mixins.control_panel_mixin.QHBoxLayout', return_value=MagicMock()), \
              patch('mixins.control_panel_mixin.QLabel', return_value=MagicMock()), \
+             patch('mixins.control_panel_mixin.MediaChips', return_value=MagicMock()), \
              patch('mixins.control_panel_mixin.QFrame') as mock_frame:
             mock_frame.return_value = MagicMock()
-            with patch('mixins.control_panel_mixin.AppStyles.player_media_badge_style', return_value=''), \
-                 patch('mixins.control_panel_mixin.AppStyles.player_hdr_badge_style', return_value=''), \
-                 patch('mixins.control_panel_mixin.AppStyles.player_line_style', return_value=''):
+            with patch('mixins.control_panel_mixin.AppStyles.player_line_style', return_value=''):
                 self.host._create_media_row()
         self.host._create_info_row.assert_called_once()
 

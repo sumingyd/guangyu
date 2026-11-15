@@ -9,7 +9,7 @@ from typing import Dict, Any
 from datetime import timedelta
 from PySide6.QtCore import QTimer
 from PySide6 import QtWidgets
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import QApplication, QComboBox, QFrame, QLabel, QListWidget, QMenuBar, QSlider, QToolButton
 from controllers.main_window_protocol import MainWindowProtocol
@@ -340,12 +340,40 @@ class UIController:
         if pc:
             pc.send_command([b'show-text', b'', b'0'])
 
+    # 媒体信息里的技术名词按业界通用写法统一大小写；
+    # 未收录的厂商/编码器串原样保留，不硬套
+    _AUDIO_CODEC_NAMES = {
+        'aac': 'AAC', 'aac_latm': 'AAC',
+        'ac3': 'AC-3', 'eac3': 'E-AC-3', 'ac4': 'AC-4', 'ac-4': 'AC-4',
+        'flac': 'FLAC', 'opus': 'Opus', 'vorbis': 'Vorbis', 'mp3': 'MP3',
+        'dts': 'DTS', 'truehd': 'TrueHD', 'mlp': 'MLP',
+    }
+    _STREAM_TOKEN_NAMES = {
+        'hls': 'HLS', 'ts': 'TS', 'mpegts': 'MPEG-TS',
+        'http': 'HTTP', 'https': 'HTTPS', 'rtsp': 'RTSP', 'rtmp': 'RTMP', 'udp': 'UDP',
+    }
+
+    @classmethod
+    def canonical_audio_codec(cls, codec: str) -> str:
+        raw = (codec or '').strip()
+        key = raw.lower()
+        if key in cls._AUDIO_CODEC_NAMES:
+            return cls._AUDIO_CODEC_NAMES[key]
+        if key.startswith('pcm_'):
+            return 'PCM'
+        return raw
+
+    @classmethod
+    def canonical_stream_token(cls, value: str) -> str:
+        raw = (value or '').strip()
+        return cls._STREAM_TOKEN_NAMES.get(raw.lower(), raw)
+
     @staticmethod
     def format_bitrate(bps: float) -> str:
         if bps >= 1000000:
             return f"{bps/1000000:.1f}Mbps"
         elif bps >= 1000:
-            return f"{bps/1000:.0f}Kbps"
+            return f"{bps/1000:.0f}kbps"
         else:
             return f"{bps:.0f}bps"
 
@@ -354,7 +382,7 @@ class UIController:
         if bps >= 1000000:
             return f"{bps*8/1000000:.1f}Mbps"
         elif bps >= 1000:
-            return f"{bps*8/1000:.0f}Kbps"
+            return f"{bps*8/1000:.0f}kbps"
         else:
             return f"{bps*8:.0f}bps"
 
@@ -386,7 +414,7 @@ class UIController:
         if 'AAC' in codec_name or 'aac' in codec_name.lower():
             return 'AAC'
         if 'AC-3' in codec_name or 'AC3' in codec_name or 'ac3' in codec_name.lower():
-            return 'AC3'
+            return 'AC-3'
         return codec_name[:10] if len(codec_name) > 10 else codec_name
 
     def format_media_info(self, info: Dict[str, Any], tr) -> Dict[str, str]:
@@ -420,7 +448,7 @@ class UIController:
 
         fps = info.get('fps', 0)
         if fps and fps > 0:
-            video_parts.append("{}: {:.0f}fps".format(tr('frame_rate_label', 'FPS') or 'FPS', fps))
+            video_parts.append("{}: {:.0f}FPS".format(tr('frame_rate_label', 'FPS') or 'FPS', fps))
 
         v_br = info.get('video_bitrate', 0) or 0
         a_br = info.get('audio_bitrate', 0) or 0
@@ -438,6 +466,7 @@ class UIController:
         audio_codec = info.get('audio_codec', '')
         if audio_codec and audio_codec != '未知':
             audio_codec = re.sub(r'\s*\(.*?\)\s*', '', audio_codec).strip()
+            audio_codec = self.canonical_audio_codec(audio_codec)
             audio_parts.append("{}: {}".format(tr('acodec_label', 'Audio') or 'Audio', audio_codec))
 
         channels = info.get('audio_channels', 0)
@@ -458,9 +487,9 @@ class UIController:
         proto = info.get('protocol', '')
 
         if container and container != '未知':
-            network_parts.append(f"{tr('format_label', 'Format')}: {container}")
+            network_parts.append(f"{tr('format_label', 'Format')}: {self.canonical_stream_token(container)}")
         if proto and proto != '未知':
-            network_parts.append(f"{tr('protocol_label', 'Protocol')}: {proto}")
+            network_parts.append(f"{tr('protocol_label', 'Protocol')}: {self.canonical_stream_token(proto)}")
 
         v_br_net = info.get('video_bitrate', 0) or 0
         a_br_net = info.get('audio_bitrate', 0) or 0
@@ -811,8 +840,37 @@ class UIController:
                 seconds = current_time.second
                 self.window._set_progress_value(minutes * 60 + seconds)
 
+    def _sync_video_overlay_visibility(self):
+        """按当前回看/时移状态同步视频角标显隐。
+
+        停止播放/退出时移/切回直播都要走这里，不能只依赖 update_floating_panel_info：
+        停止后 update_timer 会被停掉，角标（Windows 下是独立工具窗口）就再没人收起。
+        """
+        overlay = getattr(self.window, '_video_overlay_label', None)
+        if overlay is None:
+            return
+        if self.window.play_state.is_catchup_or_timeshift:
+            is_timeshift = self.window.play_state.is_timeshift
+            mode = 'timeshift' if is_timeshift else 'catchup'
+            tr = self.window.language_manager.tr
+            label = tr('timeshift_label', '时移') if is_timeshift else tr('catchup_label', '回看')
+            overlay.set_mode(mode, label)
+            if not overlay.isVisible():
+                # 独立窗口模式下标识是顶层窗口，主窗口最小化/隐藏时不要重新弹出；
+                # 先定位再显示，避免首帧出现在屏幕左上角
+                if self.window.isVisible() and not self.window.isMinimized():
+                    self.window._update_video_overlay_position()
+                    overlay.show()
+            self.window._raise_overlay_above_video()
+        elif overlay.isVisible():
+            overlay.hide()
+
     def update_floating_panel_info(self):
         """更新浮动面板信息"""
+
+        # 角标显隐先于下面所有早退分支执行：停止播放后 player_controller /
+        # current_channel 可能已为空，但角标必须能收起来。
+        self._sync_video_overlay_visibility()
 
         if not self.window.player_controller or not self.window.current_channel:
             return
@@ -857,20 +915,6 @@ class UIController:
         if not hasattr(self.window, 'last_catchup_state') or self.window.last_catchup_state != is_catchup:
             logger.debug(f"回看模式状态: {is_catchup}")
             self.window.last_catchup_state = is_catchup
-
-        if hasattr(self.window, '_video_overlay_label'):
-            if is_catchup:
-                is_timeshift = self.window.play_state.is_timeshift
-                mode = 'timeshift' if is_timeshift else 'catchup'
-                label = self.window.language_manager.tr('timeshift_label', '时移') if is_timeshift else self.window.language_manager.tr('catchup_label', '回看')
-                self.window._video_overlay_label.set_mode(mode, label)
-                if not self.window._video_overlay_label.isVisible():
-                    self.window._video_overlay_label.show()
-                    self.window._update_video_overlay_position()
-                self.window._raise_overlay_above_video()
-            else:
-                if self.window._video_overlay_label.isVisible():
-                    self.window._video_overlay_label.hide()
 
         self.window.progress_ctrl.update_progress(current_time_ms, total_time_ms, position)
 
@@ -1018,28 +1062,10 @@ class UIController:
             colors = AppStyles._get_colors()
             btn_color = colors.get('player_panel_text', AppStyles._safe_fallback('player_panel_text'))
 
-            if hasattr(self.window, 'video_info'):
-                self.window.video_info.setStyleSheet(AppStyles.player_media_badge_style())
-            if hasattr(self.window, 'audio_info'):
-                self.window.audio_info.setStyleSheet(AppStyles.player_media_badge_style())
-            if hasattr(self.window, 'network_info'):
-                self.window.network_info.setStyleSheet(AppStyles.player_media_badge_style())
-            if hasattr(self.window, 'buffer_info'):
-                self.window.buffer_info.setStyleSheet(AppStyles.player_media_badge_style())
-
-            if hasattr(self.window, 'hdr_badge'):
-                self.window.hdr_badge.setStyleSheet(AppStyles.player_hdr_badge_style())
-
-            # 媒体信息3个图标
-            for icon_attr, icon_name in [('video_info_icon', 'tv'), ('audio_info_icon', 'speaker'), ('network_info_icon', 'signal')]:
-                icon_label = getattr(self.window, icon_attr, None)
-                if icon_label:
-                    icon_path = AppStyles.get_icon(icon_name, btn_color, 16)
-                    if icon_path:
-                        pixmap = QPixmap(icon_path)
-                        if not pixmap.isNull():
-                            icon_label.setPixmap(pixmap)
-                    icon_label.setStyleSheet(AppStyles.transparent_style())
+            media_chips = getattr(self.window, 'media_chips', None)
+            if media_chips is not None:
+                # 徽章底色/描边随主题重建（半透明低对比，深浅模式各一套）
+                media_chips.refresh_theme()
 
             if hasattr(self.window, 'channel_logo'):
                 self.window.channel_logo.setStyleSheet(AppStyles.player_channel_logo_style())
@@ -1116,14 +1142,25 @@ class UIController:
             if program_progress and hasattr(program_progress, 'set_cache_color'):
                 program_progress.set_cache_color(colors.get('player_cache_bar', 'rgba(76,175,80,0.4)'))
 
-            # 重新设置控制面板中各QLabel的文字颜色（排除已单独处理的和图标label）
+            # 重新设置控制面板中其余 QLabel 的文字颜色。
+            # 上面已逐个套用专属样式的标签必须按控件身份排除：旧写法按 objectName
+            # 排除，但 channel_name / time_label / 媒体徽标等都没设 objectName，
+            # 于是刚设好的专属样式又被这里的兜底刷成 player_label_style，
+            # 底栏频道名因此长期停在 12px 次要色，样式里的字号改多少都不生效。
+            handled_labels = {
+                getattr(self.window, attr, None)
+                for attr in (
+                    'program_desc', 'current_program', 'channel_name', 'channel_logo',
+                    'time_label', 'remain_label', 'progress_start', 'progress_end',
+                    'video_info', 'audio_info', 'network_info', 'buffer_info', 'hdr_badge',
+                    'catchup_indicator',
+                )
+            }
+            if media_chips is not None:
+                # 徽章是动态创建的子 QLabel，不能落进下面的兜底刷样式循环
+                handled_labels.update(media_chips.chip_widgets())
             for label in fp.findChildren(QLabel):
-                name = label.objectName()
-                if name in ('program_desc', 'current_program', 'channel_name', 'channel_logo',
-                            'time_label', 'remain_label', 'progress_start', 'progress_end',
-                            'video_info', 'audio_info', 'network_info', 'buffer_info',
-                            'video_info_icon', 'audio_info_icon', 'network_info_icon',
-                            'catchup_indicator'):
+                if label in handled_labels:
                     continue
                 if not label.pixmap().isNull():
                     continue

@@ -5,11 +5,11 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QIcon
 from PySide6.QtCore import QPoint
-from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QMenu
 
 from core.log_manager import global_logger as logger
 from ui.elided_label import ElidedLabel
+from ui.media_chips import MediaChips
 from ui.styles import AppStyles
 from ui.volume_slider import VolumeSlider
 from utils.platform_utils import is_android
@@ -52,6 +52,8 @@ class ControlPanelMixin:
 
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.floating_dock)
         self.floating_dock.setFloating(True)
+        # 构造期徽章行可能已按两行定高，但底栏这时才存在：补一次高度同步
+        self._on_media_chips_height_changed(self.media_chips.height())
         if not show:
             self.floating_dock.hide()
 
@@ -103,20 +105,17 @@ class ControlPanelMixin:
         for name in ('video_info', 'audio_info', 'network_info', 'buffer_info'):
             label = getattr(self, name, None)
             if label is not None:
-                # 给信息行各段一个随面板宽度走的上限，超出部分由 ElidedLabel 省略，
+                # 各段宽度由徽章行统一分配，这里只同步行高，
                 # 避免「特大」字号 + 高 DPI 时文字被面板右边界硬裁。
-                label.setMaximumWidth(max(80, int(self.width() * 0.32)))
                 label.setFixedHeight(metrics['info_h'])
-        hdr_badge = getattr(self, 'hdr_badge', None)
-        if hdr_badge is not None:
-            hdr_badge.setFixedHeight(metrics['info_h'])
+        chips = getattr(self, 'media_chips', None)
+        if chips is not None:
+            chips.set_item_height(metrics['info_h'])
         desc = getattr(self, 'program_desc', None)
         if desc is not None:
             desc.setFixedHeight(self._scaled_program_desc_height())
-        for name in ('video_info_icon', 'audio_info_icon', 'network_info_icon'):
-            icon_label = getattr(self, name, None)
-            if icon_label is not None:
-                icon_label.setFixedSize(metrics['icon'], metrics['icon'])
+        if chips is not None:
+            chips.relayout()
         logo = getattr(self, 'channel_logo', None)
         if logo is not None:
             logo.setFixedSize(metrics['logo_w'], metrics['logo_h'])
@@ -124,86 +123,82 @@ class ControlPanelMixin:
         if row is not None and not is_android():
             row.setSpacing(metrics['spacing'])
 
-    def _set_info_label_icon(self, icon_label: QLabel, icon_name: str):
-        """设置信息行前的小图标"""
-        color = AppStyles.get_color('player_panel_text')
-        metrics = self._control_panel_ui_metrics()
-        icon_path = AppStyles.get_icon(icon_name, color, metrics['icon'])
-        if icon_path:
-            pixmap = QPixmap(icon_path)
-            if not pixmap.isNull():
-                icon_label.setPixmap(pixmap)
-                icon_label.setFixedSize(metrics['icon'], metrics['icon'])
-                icon_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+    def _on_media_chips_height_changed(self, height):
+        """徽章行从一行变两行（或反过来）时，浮动底栏要跟着长/缩。
+
+        底栏是独立浮动窗口，内容尺寸变化不会自动改变窗口高度；
+        不跟就会把第二行徽章裁掉。这里延后一帧，等布局把新高度算进去。
+        """
+        if getattr(self, '_chips_dock_sync_pending', False):
+            return
+        self._chips_dock_sync_pending = True
+        from utils.thread_safety import safe_single_shot
+        safe_single_shot(0, self, self._sync_media_chips_dock_height)
+
+    def _sync_media_chips_dock_height(self, attempt=0):
+        self._chips_dock_sync_pending = False
+        dock = getattr(self, 'floating_dock', None)
+        if dock is None:
+            return
+        container = dock.widget()
+        if container is None:
+            return
+        try:
+            layout = container.layout()
+            if layout is not None:
+                layout.invalidate()
+                layout.activate()
+            # 底栏窗口的 sizeHint 会晚一帧才反映子控件新高度，
+            # 直接按容器内容高度 + 原有边框补，避免第二行刚出现时被裁一下
+            content_h = container.sizeHint().height()
+            frame = max(0, dock.height() - container.height())
+            target = max(content_h + frame, dock.sizeHint().height())
+            if target > 0 and dock.height() != target:
+                dock.resize(dock.width(), target)
+            # 首帧布局可能还没算完，再看一次；只重试一次，避免反复触发
+            if attempt < 1:
+                from utils.thread_safety import safe_single_shot
+                safe_single_shot(
+                    60, self,
+                    lambda: self._sync_media_chips_dock_height(attempt + 1),
+                )
+        except Exception as e:
+            logger.debug(f"调整底栏高度失败: {e}")
 
     def _create_media_row(self):
-        """创建媒体信息行"""
+        """创建媒体信息行（每项一枚低对比小胶囊）"""
         tr = self.language_manager.tr
         info_h = self._control_panel_ui_metrics()['info_h']
 
         self.media_row = QHBoxLayout()
         self.media_row.setSpacing(6)
 
-        self.video_info_icon = QLabel()
-        self.video_info_icon.setStyleSheet("background: transparent; border: none;")
-        self._set_info_label_icon(self.video_info_icon, 'tv')
-        self.media_row.addWidget(self.video_info_icon)
+        self.media_chips = MediaChips()
+        self.media_chips.set_item_height(info_h)
+        self.media_chips.heightChanged.connect(self._on_media_chips_height_changed)
 
-        self.video_info = ElidedLabel(full_text_hint=True)
-        self.video_info.setStyleSheet(AppStyles.player_media_badge_style())
-        self.video_info.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self.video_info.setFixedHeight(info_h)
+        # 沿用旧控件名：setText 会被拆成一组独立徽章
+        self.video_info = self.media_chips.group('video')
         self.video_info.setToolTip(tr('tooltip_video_info', '视频信息'))
         self.video_info.setText(tr('not_playing', 'Not playing'))
-        self.media_row.addWidget(self.video_info)
 
-        self.hdr_badge = QLabel()
-        self.hdr_badge.setStyleSheet(AppStyles.player_hdr_badge_style())
-        self.hdr_badge.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self.hdr_badge.setFixedHeight(info_h)
+        self.hdr_badge = self.media_chips.hdr_chip
         self.hdr_badge.setToolTip(tr('tooltip_hdr', 'HDR状态'))
         self.hdr_badge.hide()
-        self.media_row.addWidget(self.hdr_badge)
 
-        self.media_row.addSpacing(6)
-
-        self.audio_info_icon = QLabel()
-        self.audio_info_icon.setStyleSheet("background: transparent; border: none;")
-        self._set_info_label_icon(self.audio_info_icon, 'speaker')
-        self.media_row.addWidget(self.audio_info_icon)
-
-        self.audio_info = ElidedLabel(full_text_hint=True)
-        self.audio_info.setStyleSheet(AppStyles.player_media_badge_style())
-        self.audio_info.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self.audio_info.setFixedHeight(info_h)
+        self.audio_info = self.media_chips.group('audio')
         self.audio_info.setToolTip(tr('tooltip_audio_info', '音频信息'))
         self.audio_info.setText("--")
-        self.media_row.addWidget(self.audio_info)
 
-        self.media_row.addSpacing(6)
-
-        self.network_info_icon = QLabel()
-        self.network_info_icon.setStyleSheet("background: transparent; border: none;")
-        self._set_info_label_icon(self.network_info_icon, 'signal')
-        self.media_row.addWidget(self.network_info_icon)
-
-        self.network_info = ElidedLabel(full_text_hint=True)
-        self.network_info.setStyleSheet(AppStyles.player_media_badge_style())
-        self.network_info.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self.network_info.setFixedHeight(info_h)
+        self.network_info = self.media_chips.group('network')
         self.network_info.setToolTip(tr('tooltip_network_info', '网络信息'))
         self.network_info.setText("--")
-        self.media_row.addWidget(self.network_info)
 
-        self.buffer_info = ElidedLabel("", full_text_hint=True)
-        self.buffer_info.setStyleSheet(AppStyles.player_media_badge_style())
-        self.buffer_info.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self.buffer_info.setFixedHeight(info_h)
+        self.buffer_info = self.media_chips.buffer_chip
         self.buffer_info.setToolTip(tr('tooltip_buffer_info', '缓冲信息'))
         self.buffer_info.hide()
-        self.media_row.addWidget(self.buffer_info)
 
-        self.media_row.addStretch()
+        self.media_row.addWidget(self.media_chips, 1)
         self.floating_layout.addLayout(self.media_row)
 
         line1 = QFrame()
@@ -252,6 +247,7 @@ class ControlPanelMixin:
         row1 = QHBoxLayout()
         row1.setSpacing(8)
         self.channel_name = ElidedLabel(tr("no_channel_selected", "No channel selected"), full_text_hint=True)
+        self.channel_name.setObjectName("channel_name")
         self.channel_name.setStyleSheet(AppStyles.player_channel_name_style())
         # 不再写死最大宽度：按完整文本参与布局，只有整行真的放不下时才省略（保留 tooltip）
         row1.addWidget(self.channel_name, 0)
@@ -436,27 +432,22 @@ class ControlPanelMixin:
         self.fullscreen_button.setToolTip(tr("panel_fullscreen", "全屏"))
         self.control_row.addWidget(self.fullscreen_button)
 
-        # 全屏精简模式只保留 播放/暂停、停止、全屏 三个控件；信息区不参与隐藏
-        self._fullscreen_hidden_controls = [
-            self.prev_ch_button, self.next_ch_button,
-            self.progress_start, self.program_progress, self.progress_end,
-            self.volume_button, self.volume_slider, self.more_button,
-        ]
-
         self.floating_layout.addLayout(self.control_row)
 
-    def _apply_control_panel_compact_mode(self, compact: bool):
-        """全屏时精简底栏（保留暂停/停止/全屏），退出全屏恢复完整控件集合。"""
-        for widget in getattr(self, '_fullscreen_hidden_controls', []):
-            if widget is not None:
-                widget.setVisible(not compact)
+    def _update_fullscreen_button_hint(self):
+        """全屏按钮的提示语跟随状态（全屏时提示退出全屏）。
+
+        只改提示文案，不再像旧的全屏精简模式那样隐藏进度条与部分按钮：
+        窗口模式与全屏模式的底栏控件集合必须保持一致。
+        """
         btn = getattr(self, 'fullscreen_button', None)
-        if btn is not None:
-            tr = self.language_manager.tr
-            if compact:
-                btn.setToolTip(tr("panel_exit_fullscreen", "返回分屏"))
-            else:
-                btn.setToolTip(tr("panel_fullscreen", "全屏"))
+        if btn is None:
+            return
+        tr = self.language_manager.tr
+        if getattr(self, 'is_fullscreen', False):
+            btn.setToolTip(tr("panel_exit_fullscreen", "退出全屏"))
+        else:
+            btn.setToolTip(tr("panel_fullscreen", "全屏"))
 
 
     def _switch_channel_safe(self, direction: int):

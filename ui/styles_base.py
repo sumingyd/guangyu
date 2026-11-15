@@ -137,8 +137,9 @@ class StylesBase:
     # 旧的五档（12/14/16/20/28）会把它吸附成 12px，实测比重构前大 9%。
     FONT_SIZE_STEPS = (11, 12, 14, 16, 20, 28)
 
-    # 三级语义字号：辅助（说明/徽标）/ 正文（按钮/输入）/ 标题（区块标题）
-    FONT_LEVELS = {'caption': 11, 'body': 12, 'title': 14}
+    # 语义字号：辅助（说明/徽标）/ 正文（按钮/输入）/ 标题（区块标题）
+    # subtitle 用于「比标题再大一档」的主标题场景（如底栏频道名）
+    FONT_LEVELS = {'caption': 11, 'body': 12, 'title': 14, 'subtitle': 16}
 
     @classmethod
     def fs(cls, level: str = 'body') -> int:

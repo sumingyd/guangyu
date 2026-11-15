@@ -31,7 +31,10 @@ def get_display_channel_name(channel: Dict[str, Any], language_manager=None) -> 
     - 支持国际化（通过language_manager）
     - 处理逗号分隔的名称（取最后一部分）
     - 添加频道号前缀（如果有tvg_chno）
-    - 添加分组名后缀（如果不同于默认分组）
+
+    不拼接分组名：该函数只用于底栏频道名（这一行的主标题），
+    放大字号后「台号 + 频道名 + (分组)」里的分组会和主标题同样抢眼，
+    而分组信息在频道列表的分组选择器里已经有了，底栏不再重复。
     """
     if not channel:
         return 'Unknown Channel'
@@ -41,7 +44,6 @@ def get_display_channel_name(channel: Dict[str, Any], language_manager=None) -> 
     all_tags = channel.get('_all_tags', {})
     name = all_tags.get('name') or channel.get('name', '') or ''
     number = channel.get('tvg_chno', '')
-    group_name = all_tags.get('group-name') or ''
 
     # 处理逗号分隔的名称（如 "CCTV1,央视一套" 取 "央视一套"）
     if ',' in name:
@@ -52,10 +54,6 @@ def get_display_channel_name(channel: Dict[str, Any], language_manager=None) -> 
     # 添加频道号
     if number and name:
         name = f"{number} {name}"
-
-    # 添加分组名（如果不同于默认分组）
-    if group_name and group_name != channel.get('group', ''):
-        name = f"{name} ({group_name})"
 
     return name or tr('unknown_channel', 'Unknown Channel')
 

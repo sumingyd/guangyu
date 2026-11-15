@@ -125,9 +125,24 @@ class PlaybackController:
 
         self._reset_ui_to_initial_state()
 
+        # 停止后 update_timer 会被停掉，回看/时移角标没人再收：这里显式收起，
+        # 避免独立工具窗口一直留在桌面上（Windows 下会盖住其它窗口）。
+        self._sync_video_overlay()
+
         if hasattr(self.window, 'language_manager'):
             tr = self.window.language_manager.tr
             self.window.status_bar_show_message(tr('playback_stopped', 'Playback stopped'))
+
+    def _sync_video_overlay(self):
+        """立即按当前播放状态收/放回看角标（独立工具窗口必须显式 hide）。"""
+        ui_ctrl = getattr(self.window, 'ui_ctrl', None)
+        sync = getattr(ui_ctrl, '_sync_video_overlay_visibility', None)
+        if sync is None:
+            return
+        try:
+            sync()
+        except Exception as e:
+            logger.debug(f"同步回看角标显隐失败: {e}")
 
     def _reset_ui_to_initial_state(self):
         ui_elements = {
@@ -183,6 +198,10 @@ class PlaybackController:
             self.window._progress_program_end = None
         if hasattr(self.window, 'current_channel'):
             self.window.current_channel = None
+        # 停止后不应再显示上一路流的 HDR 徽章
+        hdr_badge = getattr(self.window, 'hdr_badge', None)
+        if hdr_badge is not None:
+            hdr_badge.hide()
 
     def set_volume(self, value: int):
         if hasattr(self.window, 'player_controller') and self.window.player_controller:
@@ -540,6 +559,8 @@ class PlaybackController:
 
         self.current_channel = channel
         self.window.play_state.set_live()
+        # 切台即离开回看/时移：立即收起角标，不等下一次 1s 刷新
+        self._sync_video_overlay()
         # loadfile 后启动看门狗：超过网络超时仍未 FILE_LOADED 即判定拉流失败
         self._start_source_timeout(channel, self._switch_token)
 

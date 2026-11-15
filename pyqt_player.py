@@ -149,8 +149,21 @@ class VideoOverlayBadge(QWidget):
         self._label_text = ''
         self._icon_pixmap = None
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
-        self.setAttribute(Qt.WidgetAttribute.WA_DontCreateNativeAncestors)
+        if self._use_top_level_overlay():
+            # Windows：wid 嵌入的视频是独立的原生窗口，叠在它上面的原生子窗口
+            # 拿不到逐像素 alpha，未绘制区域会被合成成黑色矩形；而给子窗口套
+            # 窗口区域遮罩在部分环境/合成路径下会让整块标识不显示。改为独立的
+            # 透明工具窗口（与三块悬浮面板同一套做法），由 DWM 逐像素合成。
+            self.setWindowFlags(
+                Qt.WindowType.Tool
+                | Qt.WindowType.FramelessWindowHint
+                | Qt.WindowType.WindowDoesNotAcceptFocus
+                | Qt.WindowType.WindowTransparentForInput
+            )
+            self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        else:
+            self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
+            self.setAttribute(Qt.WidgetAttribute.WA_DontCreateNativeAncestors)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self._font = QFont()
@@ -158,6 +171,12 @@ class VideoOverlayBadge(QWidget):
         self._font.setBold(True)
         self._update_icon()
         self._update_size()
+
+    @staticmethod
+    def _use_top_level_overlay() -> bool:
+        """是否用独立透明窗口承载标识（仅 Windows 需要）。"""
+        from utils.platform_utils import is_windows
+        return is_windows()
 
     def set_mode(self, mode: str, label_text: str):
         self._mode = mode
@@ -192,6 +211,12 @@ class VideoOverlayBadge(QWidget):
         w = icon_w + spacing + text_w + 20
         h = max(fm2.height(), 14) + 12
         self.setFixedSize(w, h)
+
+    def sync_position(self, global_x: int, global_y: int):
+        """把独立窗口对齐到视频区左下角（全局坐标）；子窗口模式由父级布局负责。"""
+        if not self.isWindow():
+            return
+        self.move(int(global_x), int(global_y))
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -883,6 +908,8 @@ class IPTVPlayer(
 
         self._video_overlay_label = VideoOverlayBadge(self.video_frame)
         self._video_overlay_label.hide()
+        # 独立窗口模式下标识不随父控件移动，跟随视频区的位置/尺寸变化
+        self.video_frame.installEventFilter(self)
 
         from services.audio_visual_service import AudioVisualWidget
         self._audio_visual_widget = AudioVisualWidget(self.video_frame, player_controller=None)

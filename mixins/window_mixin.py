@@ -18,6 +18,9 @@ class WindowMixin:
         try:
             if event.type() == QEvent.Type.Resize and obj is getattr(self, 'floating_dock', None):
                 self._schedule_dock_reposition()
+            elif event.type() in (QEvent.Type.Move, QEvent.Type.Resize) and obj is getattr(self, 'video_frame', None):
+                # 独立窗口模式的标识不会随父控件移动，视频区一动就同步一次
+                self._sync_video_overlay_window()
         except Exception:
             pass
         return self.event_handler.eventFilter(obj, event)
@@ -56,41 +59,49 @@ class WindowMixin:
         self._update_video_overlay_position()
 
     def _raise_overlay_above_video(self):
+        """把回看/时移标识提到视频之上。
+
+        Windows 下标识是独立的透明工具窗口，属主关系保证它在主窗口之上；
+        其余平台是视频区里的原生子控件，raise_() 即可。
+        """
         if not hasattr(self, '_video_overlay_label') or not self._video_overlay_label:
             return
-        self._video_overlay_label.raise_()
-        from utils.platform_utils import is_windows
-        if is_windows():
-            try:
-                hwnd = int(self._video_overlay_label.winId())
-                import ctypes
-                SWP_NOMOVE = 0x0002
-                SWP_NOSIZE = 0x0001
-                SWP_NOACTIVATE = 0x0010
-                SWP_SHOWWINDOW = 0x0040
-                ctypes.windll.user32.SetWindowPos(
-                    hwnd, -1, 0, 0, 0, 0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
-                )
-                ctypes.windll.user32.SetWindowPos(
-                    hwnd, -2, 0, 0, 0, 0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
-                )
-            except Exception:
-                pass
+        overlay = self._video_overlay_label
+        if overlay.isWindow():
+            # 顶层窗口 raise 会压住设置等对话框；前台不是主窗口时不动 z-order
+            from PySide6.QtWidgets import QApplication
+            active = QApplication.activeWindow()
+            if active is not None and active is not self:
+                return
+        overlay.raise_()
+
+    def _sync_video_overlay_window(self):
+        """独立窗口模式：把标识对齐到视频区左下角（子控件模式由父级自动跟随）。"""
+        overlay = getattr(self, '_video_overlay_label', None)
+        frame = getattr(self, 'video_frame', None)
+        if overlay is None or frame is None:
+            return
+        if not overlay.isWindow():
+            return
+        origin = frame.mapToGlobal(frame.rect().topLeft())
+        overlay.sync_position(
+            origin.x() + 12,
+            origin.y() + frame.height() - overlay.height() - 12,
+        )
 
     def _update_video_overlay_position(self):
         if not hasattr(self, '_video_overlay_label') or not self._video_overlay_label:
             return
         if not hasattr(self, 'video_frame') or not self.video_frame:
             return
-        self._video_overlay_label.adjustSize()
-        w = self._video_overlay_label.width()
-        h = self._video_overlay_label.height()
-        fw = self.video_frame.width()
-        fh = self.video_frame.height()
-        self._video_overlay_label.setGeometry(12, fh - h - 12, w, h)
-        if self._video_overlay_label.isVisible():
+        overlay = self._video_overlay_label
+        overlay.adjustSize()
+        if overlay.isWindow():
+            self._sync_video_overlay_window()
+        else:
+            h = overlay.height()
+            overlay.setGeometry(12, self.video_frame.height() - h - 12, overlay.width(), h)
+        if overlay.isVisible():
             self._raise_overlay_above_video()
 
         self._position_floating_docks()
@@ -174,12 +185,10 @@ class WindowMixin:
             if not self.floating_dock.isFloating():
                 self.floating_dock.setFloating(True)
             avail_w = max(0, mw_w - gap * 2)
-            # 底栏宽度按窗口比例与屏宽因子推导，不再写死固定像素
+            # 底栏宽度按窗口比例与屏宽因子推导，不再写死固定像素；
+            # 全屏与窗口模式同一套控件，宽度也按同一公式，否则全屏下控件会被挤掉
             scale = get_ui_scale()
-            if is_fullscreen:
-                fl_w = int(round(560 * scale))
-            else:
-                fl_w = max(int(round(720 * scale)), int(mw_w * 0.7))
+            fl_w = max(int(round(720 * scale)), int(mw_w * 0.7))
             fl_w = min(avail_w, fl_w)
             if fl_w > 0 and self.floating_dock.minimumWidth() != fl_w:
                 self.floating_dock.setMinimumWidth(fl_w)
@@ -192,18 +201,24 @@ class WindowMixin:
             wayland_move(self.floating_dock, fl_x, fl_y)
 
     def _sync_floating_dock_width(self):
-        """全屏/常规切换后底栏控件集合变化，强制按目标宽度收缩或恢复。"""
+        """按当前窗口宽度把底栏收/放到目标宽度（全屏与窗口模式同一公式）。
+
+        只允许在窗口几何已经生效后调用：退出全屏时 showNormal/setGeometry 是
+        异步生效的，过早调用会读到全屏时的旧宽度，把底栏留在全屏宽度上。
+        """
         dock = getattr(self, 'floating_dock', None)
         if not dock:
             return
         avail_w = max(0, self.width() - 16)
         scale = get_ui_scale()
-        if getattr(self, 'is_fullscreen', False):
-            target_w = int(round(560 * scale))
-        else:
-            target_w = max(int(round(720 * scale)), int(self.width() * 0.7))
+        target_w = max(int(round(720 * scale)), int(self.width() * 0.7))
         target_w = min(avail_w, target_w)
-        if target_w > 0 and dock.width() != target_w:
+        if target_w <= 0:
+            return
+        # 先同步最小宽度，否则在「最小宽度仍是全屏值」时 resize 会被约束回全屏宽度
+        if dock.minimumWidth() != target_w:
+            dock.setMinimumWidth(target_w)
+        if dock.width() != target_w:
             dock.resize(target_w, dock.height())
 
     def _flush_floating_position(self):
@@ -319,8 +334,8 @@ class WindowMixin:
             self.unsetCursor()
             is_local = self._is_local_file() if hasattr(self, '_is_local_file') else False
             self.panel_vis.set_all_visible(is_local_file=is_local)
-            # 全屏精简底栏：只留暂停/停止/全屏，信息区保持完整
-            self._apply_control_panel_compact_mode(True)
+            # 全屏与窗口模式保持同一套底栏控件（不再精简进度条/按钮集合）
+            self._update_fullscreen_button_hint()
             self._sync_floating_dock_width()
             self._sync_panel_actions()
             self._restart_auto_hide_timer()
@@ -349,14 +364,18 @@ class WindowMixin:
                 if saved.get('status_bar', True) and self.status_bar:
                     self.status_bar.show()
             self.panel_vis.set_auto_hide_visible()
-            # 退出全屏恢复完整控件集合
-            self._apply_control_panel_compact_mode(False)
-            self._sync_floating_dock_width()
+            # 退出全屏后提示语恢复为「全屏」（控件集合两种模式本就一致）
+            self._update_fullscreen_button_hint()
+            # 此时窗口几何还没真正恢复，立刻按当前宽度算会拿到全屏的旧宽度；
+            # 交给 update_floating_position（含 0/150ms 延迟补算）按恢复后的宽度收敛
             self._sync_panel_actions()
             self.update_floating_position()
-            # showNormal/geometry 恢复后布局仍在异步重算，延迟补同步一次
+            # showNormal/geometry 恢复后布局仍在异步重算，延迟补同步一次；
+            # 底栏宽度必须等恢复后的窗口宽度生效再算，否则会残留全屏时的宽度
             safe_single_shot(0, self, self.update_floating_position)
             safe_single_shot(150, self, self.update_floating_position)
+            safe_single_shot(0, self, self._sync_floating_dock_width)
+            safe_single_shot(150, self, self._sync_floating_dock_width)
 
     def refresh_ui(self):
         self.populate_channel_list(source='auto')
@@ -479,6 +498,20 @@ class WindowMixin:
             self.event_handler.changeEvent(event)
         else:
             super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange and self.isMinimized():
+            # 独立窗口模式的标识是顶层工具窗口，不会跟着主窗口最小化自动隐藏
+            self._hide_video_overlay_window()
+
+    def hideEvent(self, event):
+        # 最小化到托盘/隐藏主窗口时，标识也不能留在桌面上
+        self._hide_video_overlay_window()
+        super().hideEvent(event)
+
+    def _hide_video_overlay_window(self):
+        """隐藏回看/时移角标：独立工具窗口和子控件两种形态都要收起。"""
+        overlay = getattr(self, '_video_overlay_label', None)
+        if overlay is not None and overlay.isVisible():
+            overlay.hide()
 
     def moveEvent(self, event):
         if hasattr(self, 'event_handler') and self.event_handler:

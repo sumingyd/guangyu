@@ -750,7 +750,7 @@
   "osd_sub_sync_off": "字幕自动同步已关闭",
   "osd_sub_sync_on": "字幕自动同步已开启",
   "panel_aspect": "画面比例",
-  "panel_exit_fullscreen": "返回分屏",
+  "panel_exit_fullscreen": "退出全屏",
   "menu_mapping": "映射管理",
   "menu_multi_2x2": "2×2 (4画面)",
   "menu_multi_3x3": "3×3 (9画面)",

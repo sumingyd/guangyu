@@ -114,21 +114,6 @@ class StylesPlayer(StylesBase):
         """
 
     @staticmethod
-    def player_media_badge_style() -> str:
-        colors = AppStyles._get_colors()
-        badge_r = AppStyles._get_scaled_radius('badge')
-        return f"""
-            QLabel {{
-                color: {colors['player_panel_secondary']};
-                font-size: {AppStyles.fs('caption')}px;
-                background-color: transparent;
-                padding: 1px 5px;
-                border: 1px solid {colors['player_line']};
-                border-radius: {badge_r}px;
-            }}
-        """
-
-    @staticmethod
     def player_time_badge_style() -> str:
         colors = AppStyles._get_colors()
         badge_r = AppStyles._get_scaled_radius('badge')
@@ -139,22 +124,6 @@ class StylesPlayer(StylesBase):
                 background-color: transparent;
                 padding: 1px 5px;
                 border: 1px solid {colors['player_line']};
-                border-radius: {badge_r}px;
-            }}
-        """
-
-    @staticmethod
-    def player_hdr_badge_style() -> str:
-        colors = AppStyles._get_colors()
-        badge_r = AppStyles._get_scaled_radius('badge')
-        return f"""
-            QLabel {{
-                color: {colors['favorite']};
-                font-size: {AppStyles.fs('caption')}px;
-                font-weight: bold;
-                background-color: {colors['favorite_background']};
-                padding: 1px 6px;
-                border: 1px solid {colors['favorite_border']};
                 border-radius: {badge_r}px;
             }}
         """
@@ -176,11 +145,16 @@ class StylesPlayer(StylesBase):
 
     @staticmethod
     def player_channel_name_style() -> str:
+        """底栏频道名（含台序号）：这一行的主标题。
+
+        字号取 subtitle(16px)，比节目名/节目详情高出一档，配主文字色与加粗；
+        不再是早前与详情同级的 14px，也不再是过度弱化的 11px 次要色。
+        """
         colors = AppStyles._get_colors()
         return f"""
             QLabel {{
                 color: {colors['player_panel_text']};
-                font-size: {AppStyles.fs('title')}px;
+                font-size: {AppStyles.fs('subtitle')}px;
                 font-weight: bold;
                 background-color: transparent;
                 padding: 0px;
