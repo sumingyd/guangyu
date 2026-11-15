@@ -310,8 +310,7 @@ jobs:
           # libva*/libvdpau1: CAVS 版 libmpv 链接了 VAAPI/VDPAU，ldd 检查需要能解析
           sudo apt install -y ffmpeg libxcb-cursor0 libass-dev zlib1g-dev libjpeg-dev \
             libegl1 libgl1 libxkbcommon-x11-0 libva2 libva-drm2 libva-x11-2 libvdpau1 \
-            liblua5.1-0 libxpresent1 xvfb \
-            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0
+            liblua5.1-0 libxpresent1
 
       - name: Download CAVS-enabled libmpv (Linux x86_64)
         # 优先从项目 Release 下载带 CAVS + AVS2 支持的 libmpv
@@ -348,11 +347,14 @@ jobs:
 
       - name: Run tests
         env:
-          # 不用 offscreen：该插件在 CI 上跑 processEvents / 后台线程时偶发段错误
-          # （两次崩溃点分别落在 5000 条列表填充与频谱采集线程），改用 Xvfb 的
-          # xcb 平台，路径更接近真实桌面。
-          QT_QPA_PLATFORM: xcb
-        run: xvfb-run -a python -m pytest -q
+          QT_QPA_PLATFORM: offscreen
+        # 无头 Qt 在 CI 上跑整场时会偶发段错误（崩溃点会漂移：5000 条列表填充、
+        # 频谱采集线程、空闲渲染采样都出现过）。用 pytest-forked 让每个测试在
+        # 独立子进程里执行：单个测试崩溃只算它自己失败，不会整场 abort，
+        # 也顺带隔离跨测试的 Qt 对象生命周期问题。
+        run: |
+          pip install pytest-forked
+          python -m pytest -q --forked
 
       - name: Build executable
         run: python build.py
