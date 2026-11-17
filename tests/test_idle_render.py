@@ -42,6 +42,12 @@ class _WindowStub(QWidget):
         self.playlist_panel = None
         self.floating_panel = None
 
+    def windowHandle(self):
+        # 离屏平台上部分 Qt/runner 组合在创建 QWindow 时会触发原生堆损坏
+        # （Windows CI 可稳定复现），这些用例不验证遮挡判定，直接返回 None
+        # 让 _sample 按窗口可见处理即可。
+        return None
+
 
 def _make_controller(window, **kwargs):
     kwargs.setdefault('idle_after_seconds', 0)
