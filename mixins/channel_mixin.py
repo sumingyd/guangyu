@@ -381,6 +381,9 @@ class ChannelMixin:
 
     def _load_last_channel(self):
         try:
+            # 启动自动续播关闭时不恢复上次频道，避免启动即自动播放
+            if not self._is_auto_resume_on_start():
+                return
             last = self.config.load_last_channel()
             # url 是恢复时的首要匹配键；旧配置没有该字段时保持原有名字/下标恢复
             last_url = self.config.get_value('Player', 'last_channel_url', '')
@@ -392,6 +395,16 @@ class ChannelMixin:
                 self._pending_last_channel = last
         except Exception as e:
             logger.debug(f"加载最后频道失败: {e}")
+
+    def _is_auto_resume_on_start(self) -> bool:
+        """启动自动续播开关（与安卓端同名设置一致），读取失败时按关闭处理。"""
+        try:
+            settings = self.config.load_playback_settings()
+            if isinstance(settings, dict):
+                return bool(settings.get('auto_resume_last_channel', False))
+        except Exception as e:
+            logger.debug(f"读取启动自动续播设置失败: {e}")
+        return False
 
     def select_channel_by_index(self, idx, source_list=None):
         target_list = source_list if source_list is not None else getattr(self, 'channel_list', None)

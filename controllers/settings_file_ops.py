@@ -1225,6 +1225,16 @@ class SettingsFileOperations:
                       _skip_row("auto_skip_outro_check", "skip_outro_seconds_spin",
                                 "auto_skip_outro", "skip_outro_seconds"))
 
+        # 启动自动续播：与安卓端同名开关一致，关闭时启动不再自动播放上次频道
+        resume_check = QCheckBox(tr("auto_resume_on_start", "启动自动续播"))
+        resume_check.setObjectName("auto_resume_on_start_check")
+        resume_check.setChecked(bool(playback_settings.get('auto_resume_last_channel', False)))
+        resume_check.setToolTip(tr(
+            "auto_resume_on_start_hint",
+            "开启后，启动程序时自动播放上次关闭前的频道"
+        ))
+        layout.addRow('', resume_check)
+
         # ---- 视频图像调整（核心参数） ----
         eq_cfg = self.window.config.load_video_eq() if self.window.config else {}
         video_box = QGroupBox(tr("video_eq_group_image", "图像参数"))
@@ -1657,6 +1667,7 @@ class SettingsFileOperations:
         # 播放行为
         pick('queue_mode_combo', 'none')
         for check_name in ('auto_skip_intro_check', 'auto_skip_outro_check',
+                           'auto_resume_on_start_check',
                            'video_eq_reset_check', 'sub_bold_check', 'sub_italic_check'):
             check = dialog.findChild(QCheckBox, check_name)
             if check is not None:
@@ -1875,6 +1886,9 @@ class SettingsFileOperations:
         spin = dialog.findChild(QSpinBox, "skip_outro_seconds_spin")
         if spin is not None:
             settings['skip_outro_seconds'] = float(spin.value())
+        check = dialog.findChild(QCheckBox, "auto_resume_on_start_check")
+        if check is not None:
+            settings['auto_resume_last_channel'] = check.isChecked()
 
         def _parse_positive_int(edit_name):
             edit = dialog.findChild(QLineEdit, edit_name)

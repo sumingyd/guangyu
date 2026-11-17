@@ -90,11 +90,19 @@ class TestChannelMixin:
         self.host.channel_ctrl.update_channel_info_on_selection.assert_called_once()
 
     def test_load_last_channel(self):
+        self.host.config.load_playback_settings.return_value = {'auto_resume_last_channel': True}
         self.host.config.load_last_channel.return_value = {'name': 'ch1', 'index': 0}
         self.host._load_last_channel()
         assert self.host._pending_last_channel is not None
 
+    def test_load_last_channel_skipped_when_auto_resume_disabled(self):
+        self.host.config.load_playback_settings.return_value = {'auto_resume_last_channel': False}
+        self.host.config.load_last_channel.return_value = {'name': 'ch1', 'index': 0}
+        self.host._load_last_channel()
+        assert self.host._pending_last_channel is None
+
     def test_load_last_channel_empty(self):
+        self.host.config.load_playback_settings.return_value = {'auto_resume_last_channel': True}
         self.host.config.load_last_channel.return_value = {}
         self.host._load_last_channel()
         assert self.host._pending_last_channel is None

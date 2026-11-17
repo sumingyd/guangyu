@@ -428,30 +428,35 @@ internal fun AppViewModel.restoreLastChannel(autoPlayFirstFallback: Boolean) {
     val channels = _channels.value
     if (channels.isEmpty()) return
 
-    // 开启了自动续播且能找到上次频道 → 恢复上次频道
-    if (userPrefs.isAutoResumeOnStart()) {
-        val lastUrl = userPrefs.getLastChannelUrl()
-        if (lastUrl.isNotEmpty()) {
-            val lastIdx = channels.indexOfFirst { it.url == lastUrl }
-            if (lastIdx >= 0) {
-                Log.i(AppViewModel.TAG, "restoreLastChannel: restoring '$lastUrl' at idx=$lastIdx")
-                // 恢复的频道可能属于另一页签（订阅为空、上次播放的是本地频道等），
-                // 先切到该频道实际所属的页签，保证列表里能看到并高亮
-                val targetTab = if (channels[lastIdx].source.isEmpty()) ListSourceTab.LOCAL else ListSourceTab.SUBSCRIPTION
-                if (_listSourceTab.value != targetTab) {
-                    Log.i(AppViewModel.TAG, "restoreLastChannel: switch list tab to ${targetTab.name}")
-                    _listSourceTab.value = targetTab
-                }
-                playChannel(lastIdx, silent = true)
-                // 横屏（TV 风格）：后台恢复播放但停留在首页（Mini 播放条可见），由用户点击进入播放页
-                // TV 无独立首页：直接进入全屏播放
-                if (autoPlayFirstFallback && _uiMode.value != UiMode.TV) _showHome.value = true
-                return
-            }
-            Log.i(AppViewModel.TAG, "restoreLastChannel: last URL '$lastUrl' not found in ${channels.size} channels, playing first")
-        }
+    // 启动自动续播关闭：启动时不自动播放任何频道（横屏/TV 也走无播放态，
+    // 由播放页自动弹出频道列表让用户选台），避免关闭后仍自动起播
+    if (!userPrefs.isAutoResumeOnStart()) {
+        Log.i(AppViewModel.TAG, "restoreLastChannel: auto resume disabled, skip startup autoplay")
+        return
     }
-    // 回退（未开启续播或找不到上次频道）：仅横屏（TV 风格）默认播放第一个频道，
+
+    // 开启了自动续播且能找到上次频道 → 恢复上次频道
+    val lastUrl = userPrefs.getLastChannelUrl()
+    if (lastUrl.isNotEmpty()) {
+        val lastIdx = channels.indexOfFirst { it.url == lastUrl }
+        if (lastIdx >= 0) {
+            Log.i(AppViewModel.TAG, "restoreLastChannel: restoring '$lastUrl' at idx=$lastIdx")
+            // 恢复的频道可能属于另一页签（订阅为空、上次播放的是本地频道等），
+            // 先切到该频道实际所属的页签，保证列表里能看到并高亮
+            val targetTab = if (channels[lastIdx].source.isEmpty()) ListSourceTab.LOCAL else ListSourceTab.SUBSCRIPTION
+            if (_listSourceTab.value != targetTab) {
+                Log.i(AppViewModel.TAG, "restoreLastChannel: switch list tab to ${targetTab.name}")
+                _listSourceTab.value = targetTab
+            }
+            playChannel(lastIdx, silent = true)
+            // 横屏（TV 风格）：后台恢复播放但停留在首页（Mini 播放条可见），由用户点击进入播放页
+            // TV 无独立首页：直接进入全屏播放
+            if (autoPlayFirstFallback && _uiMode.value != UiMode.TV) _showHome.value = true
+            return
+        }
+        Log.i(AppViewModel.TAG, "restoreLastChannel: last URL '$lastUrl' not found in ${channels.size} channels, playing first")
+    }
+    // 已开启续播但找不到上次频道：仅横屏（TV 风格）默认播放第一个频道，
     // 避免黑屏等待；竖屏停留在频道列表首页，由用户自行选台进入播放页
     // （playChannel 会将 showHome 置 false，竖屏自动播放会直接跳进播放页，体验突兀）
     if (!autoPlayFirstFallback) {

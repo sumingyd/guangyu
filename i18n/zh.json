@@ -1636,6 +1636,8 @@
   "seconds_suffix": " 秒",
   "skip_intro_label": "跳过片头:",
   "skip_outro_label": "跳过片尾:",
+  "auto_resume_on_start": "启动自动续播",
+  "auto_resume_on_start_hint": "开启后，启动程序时自动播放上次关闭前的频道",
   "video_eq_flip_none": "无",
   "video_eq_flip_horizontal": "水平翻转",
   "video_eq_flip_vertical": "垂直翻转",

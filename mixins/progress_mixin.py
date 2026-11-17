@@ -132,15 +132,37 @@ class ProgressMixin:
         )
 
     def _is_live_seek_unavailable(self):
-        """直播态进度条只反映节目进度：普通直播流无法按节目位置定位，禁用拖动。"""
+        """直播态进度条是否禁止拖动。
+
+        支持回看/时移的频道（有 catchup_source）可以按目标墙钟位置重建时移流，
+        当前正在播出的节目因此也能回看，不能整体禁用拖动；
+        只有纯直播（不支持回看）才禁用。
+        """
         try:
             if self.play_state.is_catchup_or_timeshift:
                 return False
             if getattr(self, '_progress_time_mode', None) == 'vod':
                 return False
+            if self._get_live_catchup_source():
+                return False
             return getattr(self, 'player_controller', None) is not None
         except Exception:
             return False
+
+    def _get_live_catchup_source(self):
+        """当前直播频道可用的回看源；不支持时返回空串。"""
+        channel = getattr(self, 'current_channel', None)
+        if not channel:
+            return ''
+        catchup_source = channel.get('catchup_source', '') or ''
+        if not catchup_source:
+            # 与 _seek_live 保持一致：catchup_source 为空时即时从 URL 检测可回看模式
+            try:
+                from services.m3u_parser import safe_detect_catchup_source
+                catchup_source = safe_detect_catchup_source(channel.get('url', '')) or ''
+            except Exception:
+                catchup_source = ''
+        return catchup_source
 
     def _format_preview_text(self, seconds):
         mode = getattr(self, '_progress_time_mode', None)
@@ -225,7 +247,17 @@ class ProgressMixin:
                     f"time_pos={time_pos:.1f}s, buffer={buffer_start:.1f}s~{buffer_end:.1f}s, "
                     f"max_back={max_back}s, mode={getattr(self, '_progress_time_mode', '?')}")
 
+        catchup_source = self._get_live_catchup_source()
+        has_epg = (getattr(self, '_progress_time_mode', None) == 'epg'
+                   and getattr(self, '_progress_program_start', None))
+
         if max_back == 0 and cache_duration < 5:
+            if catchup_source:
+                # 缓冲区不足以回退时，支持回看/时移的频道仍可按目标墙钟位置重建时移流，
+                # 否则「当前正在播出的节目」永远无法回看，只能等它播完
+                logger.info("直播拖动进度条 -> 缓冲区为空，改用回看源重建时移流")
+                self._start_live_timeshift_from_progress(position, catchup_source, has_epg=has_epg)
+                return
             logger.warning(f"直播拖动进度条 -> 无法回退（缓冲区为空，cache={cache_duration:.1f}s）")
             self.status_bar_show_message(self.language_manager.tr("cannot_seek_live", "无法回退：直播流缓冲区不足"))
             return
@@ -236,13 +268,7 @@ class ProgressMixin:
                     f"clamp后={max(buffer_start, min(target_pos, buffer_end)):.1f}s")
 
         if target_pos < buffer_start:
-            catchup_source = self.current_channel.get('catchup_source', '') if self.current_channel else ''
-            # Fallback：catchup_source 为空时，即时从 URL 检测可回看模式（PLTV/TVOD、SNM/TVOD）
-            if not catchup_source and self.current_channel:
-                from services.m3u_parser import safe_detect_catchup_source
-                catchup_source = safe_detect_catchup_source(self.current_channel.get('url', ''))
             if catchup_source:
-                has_epg = getattr(self, '_progress_time_mode', None) == 'epg' and self._progress_program_start
                 self._start_live_timeshift_from_progress(position, catchup_source, has_epg=has_epg)
                 return
             else:

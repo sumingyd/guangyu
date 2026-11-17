@@ -614,6 +614,8 @@ class ConfigManager(Singleton):
             'skip_intro_seconds': 0.0,
             'auto_skip_outro': False,
             'skip_outro_seconds': 0.0,
+            # 启动自动续播：开启后启动时自动播放上次关闭前的频道（与安卓端同名开关对齐）
+            'auto_resume_last_channel': False,
             # 高级播放器参数（与安卓端 PlayerSettingsPanel 对齐）
             # vo: 'auto' 表示按 hdr_output_mode 自动推导
             'vo': 'auto',
@@ -665,6 +667,8 @@ class ConfigManager(Singleton):
             'skip_intro_seconds': 0.0,
             'auto_skip_outro': False,
             'skip_outro_seconds': 0.0,
+            # 启动自动续播：开启后启动时自动播放上次关闭前的频道（与安卓端同名开关对齐）
+            'auto_resume_last_channel': False,
             # 高级播放器参数（与安卓端 PlayerSettingsPanel 对齐）
             'vo': 'auto',
             'video_sync': 'audio',

@@ -1636,6 +1636,8 @@
   "seconds_suffix": " s",
   "skip_intro_label": "Skip intro:",
   "skip_outro_label": "Skip outro:",
+  "auto_resume_on_start": "Auto resume on startup",
+  "auto_resume_on_start_hint": "Play the channel that was active when the app last closed",
   "video_eq_flip_none": "None",
   "video_eq_flip_horizontal": "Horizontal",
   "video_eq_flip_vertical": "Vertical",
