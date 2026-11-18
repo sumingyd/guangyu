@@ -972,6 +972,10 @@ class UIController:
                 epg_icon_path = AppStyles.get_icon('calendar', epg_icon_color)
                 if epg_icon_path and hasattr(self.window, 'epg_title_icon'):
                     self.window.epg_title_icon.setPixmap(QPixmap(epg_icon_path))
+            if hasattr(self.window, 'epg_match_label'):
+                self.window.epg_match_label.setStyleSheet(
+                    AppStyles.player_epg_match_label_style()
+                )
             if hasattr(self.window, 'playlist_title'):
                 self.window.playlist_title.setStyleSheet(AppStyles.player_playlist_title_style())
             if hasattr(self.window, 'epg_prev_day'):

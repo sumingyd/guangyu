@@ -14,6 +14,7 @@ except ImportError:
 from core.log_manager import global_logger as logger
 from ui.styles import AppStyles
 from ui.empty_state import EmptyStateLabel
+from ui.elided_label import ElidedLabel
 from utils.delay_constants import DelayMs
 
 
@@ -90,6 +91,17 @@ class PlaylistPanelMixin:
         date_layout.addWidget(self.epg_next_day)
 
         self.epg_layout.addLayout(date_layout)
+
+        # EPG 匹配来源说明：当前频道的节目单来自哪个 EPG 源、哪个 epg 频道、走哪一级命中。
+        # 只有一行低对比度小字，没有当前频道/旧版解析器时隐藏，不额外占位。
+        self.epg_match_label = ElidedLabel('')
+        self.epg_match_label.setStyleSheet(AppStyles.player_epg_match_label_style())
+        # 横向设为 Ignored：文本再长也不会把节目单面板撑宽，只在现有宽度内省略
+        self.epg_match_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        self.epg_match_label.hide()
+        self.epg_layout.addWidget(self.epg_match_label)
 
         self.epg_content = QListWidget()
         self.epg_content.setToolTip(tr('epg_content_tooltip', '节目单列表，双击可播放对应频道'))

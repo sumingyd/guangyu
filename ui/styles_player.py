@@ -239,6 +239,19 @@ class StylesPlayer(StylesBase):
         """
 
     @staticmethod
+    def player_epg_match_label_style() -> str:
+        """EPG 面板顶部的匹配来源说明：低对比度小字，单行省略。"""
+        colors = AppStyles._get_colors()
+        return f"""
+            QLabel {{
+                color: {colors['player_panel_secondary']};
+                font-size: {AppStyles.fs('caption')}px;
+                background-color: transparent;
+                padding: 0px 8px 4px 8px;
+            }}
+        """
+
+    @staticmethod
     def player_epg_title_style() -> str:
         colors = AppStyles._get_colors()
         return f"""

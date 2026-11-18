@@ -260,11 +260,54 @@ class EPGController:
         except Exception:
             return False
 
+    def _update_epg_match_label(self, meta):
+        """刷新 EPG 面板顶部的匹配来源说明。
+
+        meta 为空（旧版解析器 / 没有查询结果）时隐藏该行，保持面板干净。
+        """
+        label = getattr(self.window, 'epg_match_label', None)
+        if label is None:
+            return
+        if not meta:
+            label.setText('')
+            label.hide()
+            return
+
+        tr = self.tr
+        if meta.get('matched'):
+            source = meta.get('source_name')
+            if not source:
+                # 没有源名称时用域名，避免把整条 URL 塞进一行小字
+                url = meta.get('source_url') or ''
+                if url:
+                    from urllib.parse import urlsplit
+                    source = urlsplit(url).netloc or url
+                else:
+                    source = tr('epg_match_unknown_source', '未知源')
+            epg_name = meta.get('epg_name') or meta.get('epg_id') or ''
+            parts = [
+                f"{tr('epg_match_source', 'EPG 源')}: {source}",
+                f"{tr('epg_match_channel', 'EPG 频道')}: {epg_name}",
+            ]
+            if meta.get('epg_id'):
+                parts.append(f"{tr('epg_match_id', 'ID')}: {meta['epg_id']}")
+            parts.append(f"{tr('epg_match_tier', '匹配方式')}: {meta.get('tier') or '-'}")
+            label.setText(' · '.join(p for p in parts if p))
+        else:
+            label.setText(tr('epg_match_unmatched', 'EPG：未匹配'))
+        label.show()
+
     def _show_epg_empty(self, kind: str):
         """统一 EPG 空态：按原因分文案与 CTA，且每次显式设置，避免残留上一次状态。
 
         kind: 'no_source' | 'no_channel' | 'no_program'
         """
+        if kind != 'no_program':
+            # 没有频道时清掉上一个频道残留的匹配来源说明
+            match_label = getattr(self.window, 'epg_match_label', None)
+            if match_label is not None:
+                match_label.setText('')
+                match_label.hide()
         if not hasattr(self.window, 'epg_empty_label'):
             return
         label = self.window.epg_empty_label
@@ -327,12 +370,20 @@ class EPGController:
         logger.debug(f"EPG填充: 频道名称={channel_name}, tvg_id={tvg_id}, tvg_name={tvg_name}, comma_name={comma_name}")
 
         epg_list = []
+        epg_meta = None
 
         if hasattr(self.window, 'epg_parser') and self.window.epg_parser:
             try:
-                epg_list = self.window.epg_parser.get_channel_epg(
-                    channel_name, tvg_id, tvg_name=tvg_name, comma_name=comma_name
-                )
+                parser = self.window.epg_parser
+                if hasattr(parser, 'get_channel_epg_detail'):
+                    # 一次调用同时拿到节目与匹配来源，避免为显示来源再解析一遍
+                    epg_list, epg_meta = parser.get_channel_epg_detail(
+                        channel_name, tvg_id, tvg_name=tvg_name, comma_name=comma_name
+                    )
+                else:
+                    epg_list = parser.get_channel_epg(
+                        channel_name, tvg_id, tvg_name=tvg_name, comma_name=comma_name
+                    )
                 if epg_list:
                     def _epg_sort_key(x):
                         try:
@@ -345,6 +396,9 @@ class EPGController:
                     logger.debug(f"EPG填充: epg_parser未找到频道 {channel_name} 的数据")
             except Exception as e:
                 logger.error(f"从epg_parser获取EPG失败: {e}")
+
+        # 面板顶部的匹配来源说明（未匹配/旧版解析器时按需隐藏）
+        self._update_epg_match_label(epg_meta)
 
         # 填充EPG列表
         if epg_list:
