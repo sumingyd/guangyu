@@ -55,7 +55,7 @@ class SceneDetectService:
         TYPE_NEWS: {
             'motion_comp': 'low',
             'motion_comp_fps': 60,
-            'superres_scale': 'bilinear',
+            'superres_scale': 'off',
             'superres_detail': 0,
             'shader_preset': 'off',
         },

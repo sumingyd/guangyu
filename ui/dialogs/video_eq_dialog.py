@@ -242,6 +242,8 @@ class VideoEqualizerDialog(FloatingDialog):
         self.sr_detail_slider.setSingleStep(5)
         self.sr_detail_slider.setPageStep(10)
         self.sr_detail_slider.setValue(0)
+        self.sr_detail_slider.setToolTip(
+            tr('sr_hint', '缩放算法全局生效；细节增强需 copy-back 硬解或软解，4K 视频会先降到 1080p 再处理'))
         self.sr_detail_label = QLabel('0')
         self.sr_detail_label.setMinimumWidth(30)
         self.sr_detail_slider.valueChanged.connect(
@@ -745,44 +747,10 @@ class VideoEqualizerDialog(FloatingDialog):
     def _apply_smart_preset(self, preset_name: str):
         """应用智能预设"""
         mc = getattr(self.window, 'media_ctrl', None)
+        settings = {}
         if mc and hasattr(mc, 'apply_smart_preset'):
-            mc.apply_smart_preset(preset_name)
-            # 同步 UI
-            if preset_name == 'auto':
-                try:
-                    from services.hardware_detect_service import (
-                        get_hardware_detect_service
-                    )
-                    hw = get_hardware_detect_service()
-                    settings = hw.get_recommended_settings()
-                except Exception:
-                    settings = {}
-            elif preset_name == 'performance':
-                settings = {
-                    'motion_comp': 'off', 'motion_comp_fps': 60,
-                    'superres_scale': 'bilinear', 'superres_detail': 0,
-                    'shader_preset': 'off',
-                }
-            elif preset_name == 'quality':
-                settings = {
-                    'motion_comp': 'medium', 'motion_comp_fps': 60,
-                    'superres_scale': 'ewa_lanczossharp', 'superres_detail': 40,
-                    'shader_preset': 'off',
-                }
-            elif preset_name == 'anime':
-                settings = {
-                    'motion_comp': 'low', 'motion_comp_fps': 60,
-                    'superres_scale': 'ewa_lanczos', 'superres_detail': 20,
-                    'shader_preset': 'anime4k',
-                }
-            elif preset_name == 'sports':
-                settings = {
-                    'motion_comp': 'high', 'motion_comp_fps': 60,
-                    'superres_scale': 'lanczos', 'superres_detail': 30,
-                    'shader_preset': 'off',
-                }
-            else:
-                settings = {}
+            # 由 PresetController 统一给出实际应用的设置，避免 UI 与真正下发值不一致
+            settings = mc.apply_smart_preset(preset_name) or {}
             # 回填 UI
             self._loading = True
             try:

@@ -22,9 +22,8 @@ class MpvHdr:
             vp_format = (self._facade._get_mpv_property_string('video-format') or '').lower()
             vp_cm = (self._facade._get_mpv_property_string('video-params/colormatrix') or '').lower()
 
-            # DV 检测（libmpv 只能播放 HDR10 基础层）
-            has_dovi = ('dovi' in vp_format or 'dolbyvision' in vp_format or
-                        'dvhe' in vp_format or 'dvh1' in vp_format or 'dav1' in vp_format)
+            # 说明：播放期不再做 DV 判定。mpv 的 video-format 是解码格式名（如 hevc），
+            # 拿不到可靠的 DV 标记，继续判断只会漏判/误报。DV 片源按 HDR10 基础层处理。
             # 统一 HDR 检测（与 detect_hdr_type 对齐）
             is_pq = 'pq' in vp_gamma or 'smpte2084' in vp_gamma
             is_hlg = 'hlg' in vp_gamma or 'arib-std-b67' in vp_gamma
@@ -33,10 +32,10 @@ class MpvHdr:
 
             self._facade.logger.info(
                 f"视频HDR参数: primaries={vp_prim}, gamma={vp_gamma}, "
-                f"sig_peak={vp_peak}, format={vp_format}, dovi={has_dovi}"
+                f"sig_peak={vp_peak}, format={vp_format}"
             )
 
-            is_hdr_video = is_pq or is_hlg or has_dovi
+            is_hdr_video = is_pq or is_hlg
 
             # WCG 视频（宽色域 SDR）：BT.2020 色域但 SDR 亮度（gamma=srgb/bt.1886）
             # 这类视频需要保持 bt.2020 色域，避免被压缩到 bt.709 导致偏色
@@ -54,10 +53,8 @@ class MpvHdr:
                 return
 
             # 根据 HDR 视频类型动态设置 hdr10-opt（HDR10+ 动态元数据传递）：
-            # - PQ 视频（HDR10/HDR10+）/ DV 基础层（PQ）：启用 hdr10-opt=yes
+            # - PQ 视频（HDR10/HDR10+）：启用 hdr10-opt=yes
             # - HLG 视频：禁用 hdr10-opt=no
-            if has_dovi:
-                self._facade.logger.info("DV视频（基础层），按HDR10基础层处理")
             if is_pq:
                 self._facade._set_mpv_string('hdr10-opt', 'yes')
                 self._facade.logger.info("PQ视频，启用hdr10-opt传递HDR10+动态元数据")
@@ -97,22 +94,20 @@ class MpvHdr:
                 return
 
             if hdr_mode == 'passthrough':
+                # 直通只有系统 HDR 真正开启时才生效，否则一律回退色调映射
                 system_hdr = _check_system_hdr()
-                fallback = getattr(self, '_hdr_fallback_tonemap', False) or not system_hdr
-                if fallback:
-                    if not system_hdr:
-                        self._facade.logger.warning("运行时检测系统未启用HDR，passthrough模式回退到tonemap")
+                if not system_hdr:
+                    self._facade.logger.warning("运行时检测系统未启用HDR，passthrough模式回退到tonemap")
                     self._facade._apply_tonemap_config(is_hlg=is_hlg)
                 else:
                     self._facade._apply_passthrough_config(is_pq)
                 return
 
             if hdr_mode == 'scrgb':
+                # scrgb 实际就是 PQ 直通（与 passthrough 等价），系统未开 HDR 时同样回退
                 system_hdr = _check_system_hdr()
-                fallback = getattr(self, '_hdr_fallback_tonemap', False) or not system_hdr
-                if fallback:
-                    if not system_hdr:
-                        self._facade.logger.warning("运行时检测系统未启用HDR，scrgb模式回退到tonemap")
+                if not system_hdr:
+                    self._facade.logger.warning("运行时检测系统未启用HDR，scrgb模式回退到tonemap")
                     self._facade._apply_tonemap_config(is_hlg=is_hlg)
                 else:
                     self._facade._apply_scrgb_config(is_pq)
@@ -187,14 +182,12 @@ class MpvHdr:
             )
 
     def _apply_scrgb_config(self, is_pq=True):
-        # d3d11-output-csp=pq + target-colorspace-hint=yes 已在初始化时设置
-        # scrgb 模式与 passthrough 模式的 HDR 处理逻辑相同，
-        # 都是将 HDR 内容以 PQ 信号输出到 swapchain，由 Windows DWM 合成。
-        # 区别在于 scrgb 模式主要用于 auto 模式回退，passthrough 用于显式直通。
-        # 参数选择同 passthrough，根据视频类型（PQ/HLG）区分处理。
-        # 注意：hdr10-opt 由 _apply_hdr_on_file_loaded 根据视频类型统一设置，这里不再设置。
+        # 说明：该选项历史名为 scrgb，实际行为与 passthrough 完全相同，
+        # 都是把 HDR 内容以 PQ 信号输出到 swapchain（d3d11-output-csp=pq +
+        # target-colorspace-hint=yes 已在初始化时设置），由 Windows DWM 合成。
+        # 界面文案已改为“PQ 直通（与直通等价）”，不再宣称 scRGB。
         self._facade._apply_passthrough_config(is_pq)
-        self._facade.logger.info(f"HDR配置: scrgb → {'PQ直通' if is_pq else 'HLG自动转换'} (复用 passthrough 配置)")
+        self._facade.logger.info(f"HDR配置: PQ直通（scrgb 同 passthrough）→ {'PQ直通' if is_pq else 'HLG自动转换'}")
 
     def _apply_tonemap_config(self, is_hlg=False):
         # HDR→SDR 色调映射（与 Android 端 applyTonemapConfig 统一策略）：
@@ -297,13 +290,13 @@ class MpvHdr:
                         video_format: str = '', primaries: str = '') -> str:
         """统一 HDR 类型检测逻辑（PC/Android/Web 三端共用此算法）。
 
-        检测优先级：DV → PQ(HDR10) → HLG → WCG → SDR
+        检测优先级：PQ(HDR10) → HLG → WCG → SDR
 
         注意：
         - mpv 运行时无法区分 HDR10 与 HDR10+（ST.2094-40 动态元数据不暴露为属性），
           统一返回 'HDR10'。HDR10+ 的检测仅在 ffprobe 扫描阶段通过 side_data 完成。
-        - libmpv 无法解码 DV RPU 增强层，只能播放 HDR10 基础层。
-          检测到 DV 时返回 'DV'，由 UI 层标注 "(基础层)"。
+        - 播放期拿不到可靠的 DV 标记（video-format 是解码格式名），因此不再返回 'DV'；
+          DV 片源按 HDR10 基础层显示。DV 判定只在 ffprobe 扫描阶段用 codec_tag/side_data 完成。
         - WCG（宽色域 SDR）：BT.2020 色域 + SDR 亮度，需要保持广色域避免压缩偏色。
         - sig_peak 用于辅助判断（mpv 中 1.0≈SDR 白电平，HDR 内容通常 >1.0），
           但不作为 HDR10/HDR10+ 的区分依据。
@@ -312,17 +305,12 @@ class MpvHdr:
             colormatrix: 色彩矩阵（如 bt.709/bt.2020），来自 video-params/colormatrix
             gamma: 传输特性（如 pq/smpte2084/hlg/arib-std-b67/srgb/bt.1886）
             sig_peak: 信号峰值（mpv video-params/sig-peak，1.0≈SDR白）
-            video_format: 视频格式/编解码器（如 hevc/dvhe/dav1）
+            video_format: 保留参数（播放期不再据此判定 DV）
             primaries: 色彩原色（如 bt.709/bt.2020），来自 video-params/primaries
         """
         g = (gamma or '').lower()
-        vf = (video_format or '').lower()
         cm = (colormatrix or '').lower()
         prim = (primaries or '').lower()
-
-        # 杜比视界检测：编解码器标记 dvhe/dvh1/dav1/dovi/dolby_vision
-        has_dovi = ('dovi' in vf or 'dolbyvision' in vf or 'dolby_vision' in vf
-                    or 'dvhe' in vf or 'dvh1' in vf or 'dav1' in vf or 'dvc' in vf)
 
         # PQ 视频（HDR10 / HDR10+）：SMPTE ST 2084 (PQ) EOTF
         is_pq = 'pq' in g or 'smpte2084' in g
@@ -332,9 +320,6 @@ class MpvHdr:
         is_bt2020 = ('bt.2020' in cm or 'bt2020' in cm or 'bt.2100' in cm or
                      'bt.2020' in prim or 'bt2020' in prim or 'bt.2100' in prim)
 
-        # DV 优先（DV 流通常也带 PQ 基础层，但标记为 DV 更准确）
-        if has_dovi:
-            return 'DV'
         # PQ → HDR10（运行时无法区分 HDR10+，hdr10-opt=yes 会自动传递动态元数据）
         if is_pq:
             return 'HDR10'

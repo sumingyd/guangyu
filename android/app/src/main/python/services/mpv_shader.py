@@ -101,8 +101,9 @@ class MpvShader:
         """清除分辨率提升（恢复默认缩放算法 + 移除细节增强滤镜）"""
         if not self._facade.mpv_handle or self._facade._terminated:
             return False
-        # 恢复默认缩放
-        self._facade._set_mpv_string('scale', 'bilinear')
+        # 恢复 mpv 默认缩放（scale=lanczos，cscale/dscale=bilinear）。
+        # 注意不能把 scale 写成 bilinear：mpv 默认值是 lanczos，写 bilinear 等于静默降画质。
+        self._facade._set_mpv_string('scale', 'lanczos')
         self._facade._set_mpv_string('cscale', 'bilinear')
         self._facade._set_mpv_string('dscale', 'bilinear')
         # 移除滤镜
@@ -326,11 +327,11 @@ class MpvShader:
             else:
                 self._facade.logger.info(f"缩放算法已设置: {scale_algo}")
         elif scale_algo == 'off':
-            # 恢复默认
-            self._facade._set_mpv_string('scale', 'bilinear')
+            # 恢复 mpv 默认缩放（scale=lanczos，cscale/dscale=bilinear），与“恢复默认”走同一套值
+            self._facade._set_mpv_string('scale', 'lanczos')
             self._facade._set_mpv_string('cscale', 'bilinear')
             self._facade._set_mpv_string('dscale', 'bilinear')
-            self._facade.logger.info("缩放算法已恢复默认")
+            self._facade.logger.info("缩放算法已恢复 mpv 默认（lanczos）")
         else:
             self._facade.logger.warning(f"未知缩放算法: {scale_algo}")
             success = False

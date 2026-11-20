@@ -935,8 +935,8 @@ class SettingsFileOperations:
         hdr_combo.setObjectName("hdr_output_mode_combo")
         hdr_items = [
             ('disable', tr("hdr_disable", "Disable (Force SDR Output)")),
-            ('auto', tr("hdr_auto", "Auto (scRGB for Windows HDR)")),
-            ('scrgb', tr("hdr_scrgb", "scRGB (Windows HDR ON)")),
+            ('auto', tr("hdr_auto", "Auto (passthrough when system HDR is on)")),
+            ('scrgb', tr("hdr_scrgb", "PQ Passthrough (same as passthrough)")),
             ('passthrough', tr("hdr_passthrough", "PQ Passthrough (Windows HDR OFF)")),
             ('tonemap', tr("hdr_tonemap", "Tone Map to SDR")),
         ]

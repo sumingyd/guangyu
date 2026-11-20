@@ -169,6 +169,18 @@ class UserPrefs private constructor() {
     fun getHdrMode(): String = playerSettingsStore.getHdrMode()
     fun setHdrMode(mode: String) = playerSettingsStore.setHdrMode(mode)
 
+    // 视频增强（运动补偿 / 分辨率提升 / 着色器）：与 PC 端 VideoEQ 一样持久化
+    fun getVideoMcStrength(): String = playerSettingsStore.getVideoMcStrength()
+    fun setVideoMcStrength(value: String) = playerSettingsStore.setVideoMcStrength(value)
+    fun getVideoMcFps(): Int = playerSettingsStore.getVideoMcFps()
+    fun setVideoMcFps(value: Int) = playerSettingsStore.setVideoMcFps(value)
+    fun getVideoSrScale(): String = playerSettingsStore.getVideoSrScale()
+    fun setVideoSrScale(value: String) = playerSettingsStore.setVideoSrScale(value)
+    fun getVideoSrDetail(): Int = playerSettingsStore.getVideoSrDetail()
+    fun setVideoSrDetail(value: Int) = playerSettingsStore.setVideoSrDetail(value)
+    fun getVideoShaderPreset(): String = playerSettingsStore.getVideoShaderPreset()
+    fun setVideoShaderPreset(value: String) = playerSettingsStore.setVideoShaderPreset(value)
+
     /** 色彩兼容模式（默认关闭，不改变现有用户画面） */
     fun isColorCompatMode(): Boolean = playerSettingsStore.isColorCompatMode()
     fun setColorCompatMode(enabled: Boolean) = playerSettingsStore.setColorCompatMode(enabled)

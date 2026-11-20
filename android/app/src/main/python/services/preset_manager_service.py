@@ -43,14 +43,16 @@ class PresetManagerService:
 
     # 内置预设（不可删除）
     BUILTIN_PRESETS = {
+        # 兜底档位（中等性能）；实际应用时由 get_preset 按硬件探测结果替换为具体档位。
+        # 这里不能写 'auto'：'auto' 不是 mpv/增强接口的合法取值，会被判无效跳过。
         '智能推荐': {
-            'motion_comp': 'auto', 'motion_comp_fps': 60,
-            'superres_scale': 'auto', 'superres_detail': 0,
-            'shader_preset': 'auto',
+            'motion_comp': 'low', 'motion_comp_fps': 60,
+            'superres_scale': 'lanczos', 'superres_detail': 20,
+            'shader_preset': 'off',
         },
         '性能优先': {
             'motion_comp': 'off', 'motion_comp_fps': 60,
-            'superres_scale': 'bilinear', 'superres_detail': 0,
+            'superres_scale': 'off', 'superres_detail': 0,
             'shader_preset': 'off',
         },
         '画质优先': {
@@ -150,7 +152,21 @@ class PresetManagerService:
         """
         # 先查内置
         if name in self.BUILTIN_PRESETS:
-            return self.BUILTIN_PRESETS[name].copy()
+            settings = self.BUILTIN_PRESETS[name].copy()
+            # 内置“智能推荐”按当前硬件落成具体档位（数据中不再出现 'auto'）
+            if name == '智能推荐':
+                try:
+                    from services.hardware_detect_service import (
+                        get_hardware_detect_service
+                    )
+                    rec = get_hardware_detect_service().get_recommended_settings()
+                    for key in ('motion_comp', 'motion_comp_fps', 'superres_scale',
+                                'superres_detail', 'shader_preset'):
+                        if key in rec:
+                            settings[key] = rec[key]
+                except Exception as e:
+                    logger.debug(f"智能推荐硬件探测失败，使用内置档位: {e}")
+            return settings
         # 再查自定义
         for preset in self._data.get('presets', []):
             if preset.get('name') == name:

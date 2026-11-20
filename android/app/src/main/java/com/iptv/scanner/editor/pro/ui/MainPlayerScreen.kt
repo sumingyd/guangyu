@@ -360,6 +360,8 @@ fun MainPlayerScreen(viewModel: AppViewModel) {
             }
             // 应用 HDR 配置（检测视频是否 HDR 并按当前模式应用）
             viewModel.applyHdrOnFileLoaded()
+            // 应用持久化的视频增强（运动补偿 / 分辨率提升 / 着色器）
+            viewModel.applyVideoEnhancementsOnFileLoaded()
         }
     }
 

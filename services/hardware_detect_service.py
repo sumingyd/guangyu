@@ -212,7 +212,7 @@ class HardwareDetectService:
                 'motion_comp_fps': 60,
                 'superres_scale': 'ewa_lanczossharp',
                 'superres_detail': 40,
-                'shader_preset': 'auto',
+                'shader_preset': 'fsrcnnx',
                 'perf_level': 'high',
             }
         elif score >= 50 and ram >= 8:
@@ -230,7 +230,7 @@ class HardwareDetectService:
             return {
                 'motion_comp': 'off',
                 'motion_comp_fps': 60,
-                'superres_scale': 'bilinear',
+                'superres_scale': 'off',
                 'superres_detail': 0,
                 'shader_preset': 'off',
                 'perf_level': 'low',

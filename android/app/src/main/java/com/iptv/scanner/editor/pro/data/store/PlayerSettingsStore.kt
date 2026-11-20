@@ -280,6 +280,44 @@ class PlayerSettingsStore(
     }
 
     // -----------------------------------------------------------------
+    // 视频增强（运动补偿 / 分辨率提升 / 着色器）
+    // 与 PC 端 VideoEQ 配置一致：面板重开、切台、重启后仍需保持
+    // -----------------------------------------------------------------
+
+    fun getVideoMcStrength(): String =
+        prefs.getString(KEY_VIDEO_MC_STRENGTH, "off") ?: "off"
+
+    fun setVideoMcStrength(value: String) {
+        prefs.edit().putString(KEY_VIDEO_MC_STRENGTH, value).apply()
+    }
+
+    fun getVideoMcFps(): Int = prefs.getInt(KEY_VIDEO_MC_FPS, 60)
+
+    fun setVideoMcFps(value: Int) {
+        prefs.edit().putInt(KEY_VIDEO_MC_FPS, value).apply()
+    }
+
+    fun getVideoSrScale(): String =
+        prefs.getString(KEY_VIDEO_SR_SCALE, "off") ?: "off"
+
+    fun setVideoSrScale(value: String) {
+        prefs.edit().putString(KEY_VIDEO_SR_SCALE, value).apply()
+    }
+
+    fun getVideoSrDetail(): Int = prefs.getInt(KEY_VIDEO_SR_DETAIL, 0)
+
+    fun setVideoSrDetail(value: Int) {
+        prefs.edit().putInt(KEY_VIDEO_SR_DETAIL, value).apply()
+    }
+
+    fun getVideoShaderPreset(): String =
+        prefs.getString(KEY_VIDEO_SHADER_PRESET, "off") ?: "off"
+
+    fun setVideoShaderPreset(value: String) {
+        prefs.edit().putString(KEY_VIDEO_SHADER_PRESET, value).apply()
+    }
+
+    // -----------------------------------------------------------------
     // 颜色管线兼容模式
     // -----------------------------------------------------------------
 
@@ -474,6 +512,11 @@ class PlayerSettingsStore(
             .remove(KEY_RENDER_USER_CHOSEN)
             .remove(KEY_PLAYER_TYPE)
             .remove(KEY_HDR_MODE)
+            .remove(KEY_VIDEO_MC_STRENGTH)
+            .remove(KEY_VIDEO_MC_FPS)
+            .remove(KEY_VIDEO_SR_SCALE)
+            .remove(KEY_VIDEO_SR_DETAIL)
+            .remove(KEY_VIDEO_SHADER_PRESET)
             .remove(KEY_RTSP_TRANSPORT)
             .remove(KEY_DEINTERLACE)
             .remove(KEY_TIMEOUT_SWITCH_SOURCE)
@@ -510,6 +553,13 @@ class PlayerSettingsStore(
         private const val DEFAULT_PLAYER_TYPE = "MPV"
         private const val KEY_HDR_MODE = "hdr_output_mode"
         private const val DEFAULT_HDR_MODE = "disable"
+
+        // 视频增强持久化（与 PC 端 VideoEQ 键语义对齐）
+        private const val KEY_VIDEO_MC_STRENGTH = "video_mc_strength"
+        private const val KEY_VIDEO_MC_FPS = "video_mc_fps"
+        private const val KEY_VIDEO_SR_SCALE = "video_sr_scale"
+        private const val KEY_VIDEO_SR_DETAIL = "video_sr_detail"
+        private const val KEY_VIDEO_SHADER_PRESET = "video_shader_preset"
         private const val KEY_TIMEOUT_SWITCH_SOURCE = "timeout_switch_source"
         private const val DEFAULT_TIMEOUT_SWITCH_SOURCE = 2
         private const val KEY_RECONNECT_INDEX = "reconnect_index"

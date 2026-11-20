@@ -262,20 +262,19 @@ internal fun AppViewModel.applyHdrOnFileLoaded() {
         val prim = (mpv.getPropertyString("video-params/primaries") ?: "").lowercase()
         val cm = (mpv.getPropertyString("video-params/colormatrix") ?: "").lowercase()
         val peak = mpv.getPropertyDouble("video-params/sig-peak") ?: 0.0
-        val vf = (mpv.getPropertyString("video-format") ?: "").lowercase()
 
         val isPq = gamma.contains("pq") || gamma.contains("smpte2084")
         val isHlg = gamma.contains("hlg") || gamma.contains("arib-std-b67")
-        val hasDovi = vf.contains("dovi") || vf.contains("dolbyvision") ||
-            vf.contains("dvhe") || vf.contains("dvh1") || vf.contains("dav1")
+        // 播放期不再做 DV 判定：video-format 是解码格式名，拿不到可靠 DV 标记，
+        // DV 片源统一按 HDR10 基础层处理（DV 判定只在 ffprobe 扫描阶段完成）
         val isBt2020 = cm.contains("bt.2020") || cm.contains("bt2020") ||
             cm.contains("bt.2100") || prim.contains("bt.2020") ||
             prim.contains("bt2020") || prim.contains("bt.2100")
-        val isHdr = isPq || isHlg || hasDovi
+        val isHdr = isPq || isHlg
         val isWcg = !isHdr && isBt2020
 
         Log.i(AppViewModel.TAG, "HDR 检测：gamma=$gamma, primaries=$prim, sig_peak=$peak, " +
-            "isHdr=$isHdr, isWcg=$isWcg, isPq=$isPq, isHlg=$isHlg, hasDovi=$hasDovi")
+            "isHdr=$isHdr, isWcg=$isWcg, isPq=$isPq, isHlg=$isHlg")
 
         // WCG 视频无论 hdr_mode 如何都必须保持 bt.2020 色域
         if (isWcg) {
@@ -323,6 +322,39 @@ internal fun AppViewModel.applyHdrOnFileLoaded() {
     }
 }
 
+/**
+ * 文件加载后应用持久化的视频增强（运动补偿 / 分辨率提升 / 着色器）。
+ *
+ * 与 PC 端 apply_video_eq_on_load 对齐：切台、重启后仍保持用户选择的增强项。
+ * 关闭状态会显式清理，避免 mpv 跨文件保留滤镜导致面板显示与实际不一致。
+ */
+internal fun AppViewModel.applyVideoEnhancementsOnFileLoaded() {
+    val mpv = this.mpv
+    if (!mpv.fileLoaded.value) return
+    val currentVo = try { mpv.getPropertyString("vo") ?: "" } catch (_: Throwable) { "" }
+    // 直写 Surface 播放不支持 vf / glsl-shaders
+    if (currentVo == "mediacodec_embed") return
+
+    val prefs = userPrefs
+    val mcStrength = prefs.getVideoMcStrength()
+    if (mcStrength == "off") {
+        mpv.clearMotionCompensation()
+    } else {
+        mpv.setMotionCompensation(mcStrength, prefs.getVideoMcFps())
+    }
+
+    val srScale = prefs.getVideoSrScale()
+    val srDetail = prefs.getVideoSrDetail()
+    mpv.setSuperResolution(srScale, srDetail)
+
+    val shader = prefs.getVideoShaderPreset()
+    if (shader == "off" || shader.isEmpty()) {
+        mpv.clearUserShader()
+    } else {
+        mpv.setUserShader(shader)
+    }
+}
+
 internal fun AppViewModel.isDeviceHdrSupported(): Boolean {
     return try {
         val display = (getApplication() as android.app.Application)
@@ -360,6 +392,8 @@ internal fun AppViewModel.resetHdrParams(mpv: Player) {
     safeSetProperty(mpv, "hdr10-opt", "no")
     safeSetProperty(mpv, "target-prim", "bt.709")
     safeSetProperty(mpv, "target-trc", "bt.1886")
+    // 一并重置 target-peak，避免从直通（10000/1000）切回 SDR 后残留高亮度基准
+    safeSetProperty(mpv, "target-peak", "100")
     safeSetProperty(mpv, "target-colorspace-hint", "no")
     safeSetProperty(mpv, "gamut-mapping-mode", "auto")
 }
@@ -379,6 +413,7 @@ internal fun AppViewModel.applyColorCompatConfig(mpv: Player) {
     safeSetProperty(mpv, "video-output-levels", "auto")
     safeSetProperty(mpv, "target-prim", "bt.709")
     safeSetProperty(mpv, "target-trc", "bt.1886")
+    safeSetProperty(mpv, "target-peak", "100")
     safeSetProperty(mpv, "target-colorspace-hint", "no")
     safeSetProperty(mpv, "gamut-mapping-mode", "clip")
 }
@@ -421,6 +456,8 @@ internal fun AppViewModel.applyTonemapConfig(mpv: Player, isPq: Boolean, isHlg: 
     safeSetProperty(mpv, "hdr10-opt", if (isPq) "yes" else "no")
     safeSetProperty(mpv, "target-prim", "bt.2020")
     safeSetProperty(mpv, "target-trc", "bt.1886")
+    // 显式写 SDR 峰值基准，避免从直通残留 10000/1000 导致色调映射整体变暗
+    safeSetProperty(mpv, "target-peak", "100")
     safeSetProperty(mpv, "target-colorspace-hint", "no")
     safeSetProperty(mpv, "gamut-mapping-mode", "perceptual")
 }
@@ -434,6 +471,9 @@ internal fun AppViewModel.applyPassthroughConfig(mpv: Player, isPq: Boolean) {
     // 清空 target 参数，让 mpv 直通视频原生色彩空间（PQ/HLG 不转换）
     safeSetProperty(mpv, "target-prim", "")
     safeSetProperty(mpv, "target-trc", "")
+    // 显式设置峰值基准（与 PC 端 _apply_passthrough_config 对齐）：
+    // PQ 按 10000nit 母版峰值直通，HLG 按 1000nit 参考峰值，避免沿用 tonemap 残留的 100
+    safeSetProperty(mpv, "target-peak", if (isPq) "10000" else "1000")
     // 关键：启用 target-colorspace-hint 让 Android 系统自动切换 HDR 显示模式
     // mpv 会通过 SurfaceView 传递 HDR 元数据给系统，系统自动切换到 HDR 显示
     safeSetProperty(mpv, "target-colorspace-hint", "yes")

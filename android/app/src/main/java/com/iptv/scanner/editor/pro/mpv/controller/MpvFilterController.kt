@@ -94,7 +94,8 @@ class MpvFilterController(private val host: MpvControllerHost) {
                 val dscale = if (algo == "ewa_lanczossharp") "ewa_lanczos" else algo
                 MPVLib.setPropertyString("dscale", dscale)
             } else {
-                MPVLib.setPropertyString("scale", "bilinear")
+                // 恢复 mpv 默认缩放（scale=lanczos，cscale/dscale=bilinear），不能写 bilinear 降画质
+                MPVLib.setPropertyString("scale", "lanczos")
                 MPVLib.setPropertyString("cscale", "bilinear")
                 MPVLib.setPropertyString("dscale", "bilinear")
             }
@@ -115,7 +116,8 @@ class MpvFilterController(private val host: MpvControllerHost) {
 
     fun clearSuperResolution() {
         host.postOnUiThread {
-            MPVLib.setPropertyString("scale", "bilinear")
+            // 恢复 mpv 默认缩放（scale=lanczos，cscale/dscale=bilinear），与“关闭”路径保持一致
+            MPVLib.setPropertyString("scale", "lanczos")
             MPVLib.setPropertyString("cscale", "bilinear")
             MPVLib.setPropertyString("dscale", "bilinear")
             MPVLib.command(arrayOf("vf", "remove", "@iptv_sr"))

@@ -298,7 +298,6 @@ class MpvPlayback:
                 self._facade.logger.warning(f"HDR检测失败，保守使用SDR模式: {e}")
                 _system_hdr_enabled = False  # noqa: F841
 
-            self._facade._hdr_fallback_tonemap = False
             # vo 推导：auto 时始终使用 gpu-next（支持 HDR 和 SDR，gpu 不支持 HDR 信号输出）。
             # 这样无论用户启动时选什么 HDR 模式，运行时切换到 passthrough/scrgb 时，
             # vo 已经是 gpu-next，配合 target-colorspace-hint=yes 可以动态切换 swapchain。

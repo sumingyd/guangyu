@@ -145,14 +145,12 @@ fun VideoSettingsPanel(viewModel: AppViewModel) {
     var yaw by remember { mutableStateOf(0.0) }
     var pitch by remember { mutableStateOf(0.0) }
     var roll by remember { mutableStateOf(0.0) }
-    // 运动补偿
-    var mcStrength by remember { mutableStateOf("off") }
-    var mcFps by remember { mutableStateOf(60) }
-    // 分辨率提升
-    var srScale by remember { mutableStateOf("off") }
-    var srDetail by remember { mutableStateOf(0) }
-    // 用户着色器
-    var shaderPreset by remember { mutableStateOf("off") }
+    // 运动补偿 / 分辨率提升 / 着色器：从持久化配置回填（与 PC 端 VideoEQ 一致）
+    var mcStrength by remember { mutableStateOf(viewModel.userPrefs.getVideoMcStrength()) }
+    var mcFps by remember { mutableStateOf(viewModel.userPrefs.getVideoMcFps()) }
+    var srScale by remember { mutableStateOf(viewModel.userPrefs.getVideoSrScale()) }
+    var srDetail by remember { mutableStateOf(viewModel.userPrefs.getVideoSrDetail()) }
+    var shaderPreset by remember { mutableStateOf(viewModel.userPrefs.getVideoShaderPreset()) }
 
     PanelScaffold(
         title = "视频设置",
@@ -166,6 +164,11 @@ fun VideoSettingsPanel(viewModel: AppViewModel) {
                     rotate = 0; flipMode = "none"
                     stereoMode = "mono"; yaw = 0.0; pitch = 0.0; roll = 0.0
                     mcStrength = "off"; mcFps = 60; srScale = "off"; srDetail = 0; shaderPreset = "off"
+                    viewModel.userPrefs.setVideoMcStrength("off")
+                    viewModel.userPrefs.setVideoMcFps(60)
+                    viewModel.userPrefs.setVideoSrScale("off")
+                    viewModel.userPrefs.setVideoSrDetail(0)
+                    viewModel.userPrefs.setVideoShaderPreset("off")
                     mpv.setBrightness(0); mpv.setContrast(0); mpv.setSaturation(0)
                     mpv.setHue(0); mpv.setGamma(0); mpv.setVideoRotate(0); mpv.setVideoFlip("")
                     mpv.setVideoStereoMode("mono"); mpv.clear360Filter()
@@ -312,7 +315,7 @@ fun VideoSettingsPanel(viewModel: AppViewModel) {
         // 使用 FFmpeg minterpolate 滤镜，需 copy-back 硬解或软解
         // -----------------------------------------------------------------
         SettingsGroup("运动补偿") {
-            DescText("需 copy-back 硬解或软解。高强度会增加 CPU 负载")
+            DescText("需 copy-back 硬解或软解。高强度会增加 CPU 负载；4K 视频会先降到 1080p 再处理")
 
             SelectionGroup(
                 title = "强度",
@@ -323,6 +326,7 @@ fun VideoSettingsPanel(viewModel: AppViewModel) {
                 selectedKey = mcStrength,
                 onSelect = { mode ->
                     mcStrength = mode
+                    viewModel.userPrefs.setVideoMcStrength(mode)
                     mpv.setMotionCompensation(mode, mcFps)
                     val label = when (mode) {
                         "off" -> "关闭"; "low" -> "轻度"; "medium" -> "中度"; "high" -> "强力"; else -> mode
@@ -337,6 +341,7 @@ fun VideoSettingsPanel(viewModel: AppViewModel) {
                 selectedKey = mcFps.toString(),
                 onSelect = { fps ->
                     mcFps = fps.toInt()
+                    viewModel.userPrefs.setVideoMcFps(mcFps)
                     if (mcStrength != "off") {
                         mpv.setMotionCompensation(mcStrength, fps.toInt())
                         viewModel.showOsd("运动补偿", "${mcFps}fps")
@@ -350,7 +355,7 @@ fun VideoSettingsPanel(viewModel: AppViewModel) {
         // 缩放算法全局生效；细节增强需 copy-back 硬解或软解
         // -----------------------------------------------------------------
         SettingsGroup("分辨率提升") {
-            DescText("缩放算法全局生效；细节增强需 copy-back 硬解或软解")
+            DescText("缩放算法全局生效；细节增强需 copy-back 硬解或软解，4K 视频会先降到 1080p 再处理")
 
             SelectionGroup(
                 title = "算法",
@@ -363,6 +368,7 @@ fun VideoSettingsPanel(viewModel: AppViewModel) {
                 selectedKey = srScale,
                 onSelect = { algo ->
                     srScale = algo
+                    viewModel.userPrefs.setVideoSrScale(algo)
                     mpv.setSuperResolution(algo, srDetail)
                     val label = listOf(
                         "off" to "关闭", "bilinear" to "双线性",
@@ -379,10 +385,12 @@ fun VideoSettingsPanel(viewModel: AppViewModel) {
                 valueText = srDetail.toString(),
                 onValueChange = {
                     srDetail = it.toInt()
+                    viewModel.userPrefs.setVideoSrDetail(srDetail)
                     mpv.setSuperResolution(srScale, srDetail)
                 },
                 onReset = {
                     srDetail = 0
+                    viewModel.userPrefs.setVideoSrDetail(0)
                     mpv.setSuperResolution(srScale, 0)
                 }
             )
@@ -410,6 +418,7 @@ fun VideoSettingsPanel(viewModel: AppViewModel) {
                 selectedKey = shaderPreset,
                 onSelect = { preset ->
                     shaderPreset = preset
+                    viewModel.userPrefs.setVideoShaderPreset(preset)
                     mpv.setUserShader(preset)
                     val label = listOf(
                         "off" to "关闭", "ravu" to "RAVU", "fsrcnnx" to "FSRCNNX",
@@ -450,10 +459,10 @@ fun VideoSettingsPanel(viewModel: AppViewModel) {
                             if (cores >= 8 && maxMem > 512L * 1024 * 1024) {
                                 mcStrength = "medium"; mcFps = 60
                                 srScale = "ewa_lanczossharp"; srDetail = 40
-                                shaderPreset = "off"
+                                shaderPreset = "fsrcnnx"
                                 mpv.setMotionCompensation("medium", 60)
                                 mpv.setSuperResolution("ewa_lanczossharp", 40)
-                                mpv.clearUserShader()
+                                mpv.setUserShader("fsrcnnx")
                             } else if (cores >= 4) {
                                 mcStrength = "low"; mcFps = 60
                                 srScale = "lanczos"; srDetail = 20
@@ -463,28 +472,28 @@ fun VideoSettingsPanel(viewModel: AppViewModel) {
                                 mpv.clearUserShader()
                             } else {
                                 mcStrength = "off"; mcFps = 60
-                                srScale = "bilinear"; srDetail = 0
+                                srScale = "off"; srDetail = 0
                                 shaderPreset = "off"
                                 mpv.clearMotionCompensation()
-                                mpv.setSuperResolution("bilinear", 0)
+                                mpv.setSuperResolution("off", 0)
                                 mpv.clearUserShader()
                             }
                         }
                         "performance" -> {
                             mcStrength = "off"; mcFps = 60
-                            srScale = "bilinear"; srDetail = 0
+                            srScale = "off"; srDetail = 0
                             shaderPreset = "off"
                             mpv.clearMotionCompensation()
-                            mpv.setSuperResolution("bilinear", 0)
+                            mpv.setSuperResolution("off", 0)
                             mpv.clearUserShader()
                         }
                         "quality" -> {
                             mcStrength = "medium"; mcFps = 60
                             srScale = "ewa_lanczossharp"; srDetail = 40
-                            shaderPreset = "off"
+                            shaderPreset = "fsrcnnx"
                             mpv.setMotionCompensation("medium", 60)
                             mpv.setSuperResolution("ewa_lanczossharp", 40)
-                            mpv.clearUserShader()
+                            mpv.setUserShader("fsrcnnx")
                         }
                         "anime" -> {
                             mcStrength = "low"; mcFps = 60
@@ -511,6 +520,12 @@ fun VideoSettingsPanel(viewModel: AppViewModel) {
                             mpv.clearUserShader()
                         }
                     }
+                    // 智能预设写回配置：切台、重开面板、重启后仍然生效
+                    viewModel.userPrefs.setVideoMcStrength(mcStrength)
+                    viewModel.userPrefs.setVideoMcFps(mcFps)
+                    viewModel.userPrefs.setVideoSrScale(srScale)
+                    viewModel.userPrefs.setVideoSrDetail(srDetail)
+                    viewModel.userPrefs.setVideoShaderPreset(shaderPreset)
                     viewModel.showOsd("智能预设", label)
                 }
             )
