@@ -438,6 +438,32 @@ class ChannelController:
 
         row_layout.addWidget(logo_label, 0, Qt.AlignmentFlag.AlignVCenter)
         row_layout.addWidget(name_label, 1, Qt.AlignmentFlag.AlignVCenter)
+
+        # 三档有效性徽章：确证有效不额外标注，疑似/不可用给出可见提示
+        from services.validity_tiers import INVALID, SUSPECTED, channel_tier
+        tier = channel_tier(channel)
+        if tier in (SUSPECTED, INVALID):
+            from ui.palette import get_token
+            mode = AppStyles._get_effective_color_mode()
+            if tier == SUSPECTED:
+                badge_text = '疑似'
+                badge_color = (get_token('state.warning_text', mode)
+                               or AppStyles._get_colors().get('warning', '#FF9800'))
+                badge_tip = '疑似：能连上但未解析出媒体流，建议在扫描整理里检测有效性'
+            else:
+                badge_text = '不可用'
+                badge_color = (get_token('state.danger_text', mode)
+                               or AppStyles._get_colors().get('error', '#ff6666'))
+                badge_tip = '不可用：服务器拒绝、404 或无法拉流'
+            badge = QtWidgets.QLabel(badge_text)
+            badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            badge.setToolTip(badge_tip)
+            badge.setStyleSheet(
+                f"QLabel {{ color: {badge_color}; background: transparent; "
+                f"border: 1px solid {badge_color}; border-radius: 7px; "
+                f"padding: 0px 6px; font-size: {max(10, int(round(11 * ui_scale)))}px; }}"
+            )
+            row_layout.addWidget(badge, 0, Qt.AlignmentFlag.AlignVCenter)
         outer_layout.addLayout(row_layout, 1)
 
         # 评分条：名称下方红→黄→绿渐变指示

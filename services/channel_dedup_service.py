@@ -29,6 +29,48 @@ def normalize_stream_url(url: str) -> str:
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path, parts.query, ''))
 
 
+def carry_over_channel_state(new_channels: List[Dict[str, Any]],
+                             old_channels: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """订阅源重载时按归一化 URL 保留已有检测结果与探测字段。
+
+    老逻辑每次重载都把频道重置成 valid=None，用户刚检测完的有效性会在
+    下次刷新后丢失。这里按归一化播放地址建映射，把三档有效性、状态文案
+    与探测字段带到新解析出的同 URL 频道上。
+    """
+    if not new_channels or not old_channels:
+        return new_channels
+    try:
+        from services.validity_tiers import STATUS_TEXT, tier_from_valid
+    except Exception:
+        return new_channels
+    mapping: Dict[str, Dict[str, Any]] = {}
+    for c in old_channels:
+        key = normalize_stream_url(c.get('url', ''))
+        if key:
+            mapping[key] = c
+    if not mapping:
+        return new_channels
+    carried = 0
+    for ch in new_channels:
+        prev = mapping.get(normalize_stream_url(ch.get('url', '')))
+        if not prev:
+            continue
+        tier = prev.get('validity') or tier_from_valid(prev.get('valid'))
+        if tier:
+            ch['validity'] = tier
+            ch['valid'] = tier == 'valid'
+            ch['status'] = prev.get('status') or STATUS_TEXT.get(tier, '')
+        for key in ('latency', 'resolution', 'codec', 'bitrate',
+                    'quality_score', 'quality_grade', 'logo'):
+            value = prev.get(key)
+            if value not in (None, '') and ch.get(key) in (None, ''):
+                ch[key] = value
+        carried += 1
+    if carried:
+        logger.info(f"订阅源重载保留了 {carried} 个频道的检测结果")
+    return new_channels
+
+
 class ChannelDedupService:
     def __init__(self, name_threshold: float = 0.8, url_similarity: bool = True):
         self._name_threshold = name_threshold

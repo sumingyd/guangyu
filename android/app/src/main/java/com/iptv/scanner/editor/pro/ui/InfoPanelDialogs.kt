@@ -425,6 +425,16 @@ internal fun ChannelInfoDialog(viewModel: AppViewModel) {
                 add("回看天数" to ch.catchupDays)
             }
             if (ch.source.isNotEmpty()) add("来源" to ch.source)
+            // 三档有效性：validity 优先，老缓存只有 valid 布尔值
+            val validityText = when {
+                ch.validity == "valid" -> "有效"
+                ch.validity == "suspected" -> "疑似"
+                ch.validity == "invalid" -> "不可用"
+                ch.validity.isNullOrEmpty() && ch.valid == true -> "有效"
+                ch.validity.isNullOrEmpty() && ch.valid == false -> "不可用"
+                else -> ""
+            }
+            if (validityText.isNotEmpty()) add("有效性" to validityText)
             // 状态字段仅在有实际状态时显示（去掉“待检测”）
             if (ch.status.isNotEmpty() && ch.status != "待检测") add("状态" to ch.status)
         }

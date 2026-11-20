@@ -184,7 +184,12 @@ class SubscriptionController:
 
             # 获取 ApplicationState
             from core.application_state import app_state
+            from services.channel_dedup_service import carry_over_channel_state
 
+            # 按归一化 URL 保留上一次的检测结果，避免重载后有效/疑似/无效全部丢失
+            channels_data = carry_over_channel_state(
+                channels_data, list(getattr(app_state, 'channels', []) or [])
+            )
             app_state.channels = channels_data
 
             # 记录文件头EPG地址（在订阅EPG加载后再作为补充源加载）

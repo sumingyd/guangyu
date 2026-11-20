@@ -47,6 +47,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Notifications
@@ -360,16 +361,20 @@ fun ScanPanel(viewModel: AppViewModel) {
     var baseUrl by remember { mutableStateOf("http://192.168.1.[1-255]:8080") }
     var timeout by remember { mutableStateOf(10) }
     var threads by remember { mutableStateOf(4) }
+    // 探测深度：fast=HTTP 状态码+内容嗅探；mpv=libmpv 真实拉流
+    var realProbe by remember { mutableStateOf(false) }
 
     // 结果整理：筛选与排序
     var validOnly by remember { mutableStateOf(false) }
     var sortByLatency by remember { mutableStateOf(false) }
+    // 导入时是否带上疑似档
+    var includeSuspected by remember { mutableStateOf(false) }
 
     val running = scanStatus?.running == true
 
     // 应用筛选与排序
     val displayedResults = remember(scanResults, validOnly, sortByLatency) {
-        var list = if (validOnly) scanResults.filter { it.valid } else scanResults
+        var list = if (validOnly) scanResults.filter { it.isConfirmed } else scanResults
         if (sortByLatency) {
             list = list.sortedWith(compareByDescending<ScanResult> { it.latency }
                 .thenBy { it.name })
@@ -454,6 +459,35 @@ fun ScanPanel(viewModel: AppViewModel) {
                 }
             }
 
+            // 探测深度：候选量大用快速嗅探，量小或需要确证时用真实拉流
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                FilterChip(
+                    selected = !realProbe,
+                    onClick = { realProbe = false },
+                    enabled = !running,
+                    label = { Text("快速嗅探", fontSize = 11.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
+                        selectedLabelColor = MaterialTheme.colorScheme.primary
+                    )
+                )
+                FilterChip(
+                    selected = realProbe,
+                    onClick = { realProbe = true },
+                    enabled = !running,
+                    label = { Text("真实拉流", fontSize = 11.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
+                        selectedLabelColor = MaterialTheme.colorScheme.primary
+                    )
+                )
+                DescText(if (realProbe) "使用 libmpv 拉流，并发 2–4" else "只看状态码与内容特征，适合大批量")
+            }
+
             // 控制按钮
             Row(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
@@ -471,7 +505,12 @@ fun ScanPanel(viewModel: AppViewModel) {
                     }
                 } else {
                     OutlinedButton(
-                        onClick = { viewModel.startScan(baseUrl.trim(), timeout, threads) },
+                        onClick = {
+                            viewModel.startScan(
+                                baseUrl.trim(), timeout, threads,
+                                engine = if (realProbe) "mpv" else "fast"
+                            )
+                        },
                         enabled = !scanLoading,
                         modifier = Modifier.tvFocusBorder()
                     ) {
@@ -485,6 +524,21 @@ fun ScanPanel(viewModel: AppViewModel) {
                             Spacer(modifier = Modifier.width(4.dp))
                             Text("开始扫描", color = MaterialTheme.colorScheme.primary)
                         }
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.startValidate(
+                                timeout, threads,
+                                engine = if (realProbe) "mpv" else "fast"
+                            )
+                        },
+                        enabled = !scanLoading,
+                        modifier = Modifier.tvFocusBorder()
+                    ) {
+                        Icon(Icons.Default.CheckCircle, contentDescription = null,
+                            tint = tvPalette.success, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("检测有效性", color = tvPalette.success)
                     }
                 }
             }
@@ -512,7 +566,8 @@ fun ScanPanel(viewModel: AppViewModel) {
                 ) {
                     Text("已扫描: ${status.scanned}/${status.total}", color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
                     Text("有效: ${status.valid}", color = tvPalette.success, fontSize = 13.sp)
-                    Text("无效: ${status.invalid}", color = tvPalette.danger, fontSize = 13.sp)
+                    Text("疑似: ${status.suspected}", color = tvPalette.warningText, fontSize = 13.sp)
+                    Text("无效: ${status.invalid}", color = tvPalette.dangerText, fontSize = 13.sp)
                 }
                 LinearProgressIndicator(
                     progress = { progress },
@@ -535,7 +590,8 @@ fun ScanPanel(viewModel: AppViewModel) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "扫描结果（${scanResults.size} 条，有效 ${scanResults.count { it.valid }}）",
+                    text = "扫描结果（${scanResults.size} 条，有效 ${scanResults.count { it.isConfirmed }}，" +
+                        "疑似 ${scanResults.count { it.isSuspected }}）",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -561,9 +617,19 @@ fun ScanPanel(viewModel: AppViewModel) {
                         selectedLabelColor = MaterialTheme.colorScheme.primary
                     )
                 )
+                // 导入时是否带上疑似档（默认只收确证有效）
+                FilterChip(
+                    selected = includeSuspected,
+                    onClick = { includeSuspected = !includeSuspected },
+                    label = { Text("含疑似", fontSize = 11.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = tvPalette.warning.copy(alpha = 0.3f),
+                        selectedLabelColor = tvPalette.warningText
+                    )
+                )
                 // 导入到播放列表
                 OutlinedButton(
-                    onClick = { viewModel.importScanResultsToChannels() },
+                    onClick = { viewModel.importScanResultsToChannels(includeSuspected) },
                     enabled = !scanLoading,
                     modifier = Modifier.tvFocusBorder().height(32.dp)
                 ) {
@@ -623,14 +689,29 @@ private fun ScanResultRow(result: ScanResult, onDelete: () -> Unit = {}) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // 填充用高饱和色，文字用各主题下可读的 *Text token
+                val tierFill = when {
+                    result.isConfirmed -> tvPalette.success
+                    result.isSuspected -> tvPalette.warning
+                    else -> tvPalette.danger
+                }
+                val tierTextColor = when {
+                    result.isConfirmed -> tvPalette.success
+                    result.isSuspected -> tvPalette.warningText
+                    else -> tvPalette.dangerText
+                }
+                val tierText = when {
+                    result.isConfirmed -> "有效"
+                    result.isSuspected -> "疑似"
+                    else -> "无效"
+                }
                 Surface(
-                    color = if (result.valid) tvPalette.success.copy(alpha = 0.2f)
-                            else tvPalette.danger.copy(alpha = 0.2f),
+                    color = tierFill.copy(alpha = 0.2f),
                     shape = RoundedCornerShape(3.dp)
                 ) {
                     Text(
-                        text = if (result.valid) "有效" else "无效",
-                        color = if (result.valid) tvPalette.success else tvPalette.danger,
+                        text = tierText,
+                        color = tierTextColor,
                         fontSize = 10.sp,
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                     )

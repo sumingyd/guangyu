@@ -5,6 +5,12 @@ import time
 from typing import Dict
 from core.log_manager import global_logger
 from utils.general_utils import build_mpv_http_header_fields
+from services.network_context import (
+    PROBESIZE_BYTES,
+    NetworkContext,
+    build_network_context,
+)
+from services.validity_tiers import INVALID, SUSPECTED, VALID
 from services.mpv_common import (
     MPV_EVENT_FILE_LOADED,
     MPV_EVENT_END_FILE,
@@ -35,7 +41,12 @@ def get_optimal_thread_count():
     return min(max(cpu, 4), 32)
 
 
-def _create_lightweight_mpv():
+def _create_lightweight_mpv(ctx: NetworkContext | None = None):
+    """创建轻量探测用 mpv 实例。
+
+    网络相关选项（TLS 校验、代理、UA、请求头）统一来自 NetworkContext，
+    不再写死 ``tls-verify=no``。
+    """
     if not _is_mpv_available():
         return None
     try:
@@ -52,13 +63,13 @@ def _create_lightweight_mpv():
         _mpv_set_option_string(handle, 'keep-open', 'yes')
         _mpv_set_option_string(handle, 'log-level', 'fatal')
         _mpv_set_option_string(handle, 'config', 'no')
-        _mpv_set_option_string(handle, 'demuxer-lavf-probesize', '1048576')
-        _mpv_set_option_string(handle, 'demuxer-lavf-analyzeduration', '5')
+        _mpv_set_option_string(handle, 'demuxer-lavf-probesize', str(PROBESIZE_BYTES))
+        analyze_secs = ctx.analyze_timeout if ctx else 10
+        _mpv_set_option_string(handle, 'demuxer-lavf-analyzeduration', str(analyze_secs))
         _mpv_set_option_string(handle, 'cache', 'yes')
         _mpv_set_option_string(handle, 'cache-secs', '10')
         _mpv_set_option_string(handle, 'demuxer-max-bytes', '16MiB')
         _mpv_set_option_string(handle, 'demuxer-max-back-bytes', '8MiB')
-        _mpv_set_option_string(handle, 'tls-verify', 'no')
 
         try:
             from core.config_manager import ConfigManager
@@ -71,17 +82,18 @@ def _create_lightweight_mpv():
             net_timeout = DEFAULT_NETWORK_TIMEOUT_SEC
         _mpv_set_option_string(handle, 'network-timeout', str(net_timeout))
 
-        user_agent = MpvStreamValidator.get_user_agent()
-        if not user_agent:
-            user_agent = playback.get('user_agent', '')
-        if user_agent:
-            _mpv_set_option_string(handle, 'user-agent', user_agent)
-
-        http_headers = playback.get('http_headers', '')
-        referer = MpvStreamValidator.get_referer()
-        header_val = build_mpv_http_header_fields(http_headers, referer)
-        if header_val:
-            _mpv_set_option_string(handle, 'http-header-fields', header_val)
+        if ctx is not None:
+            # 跟随用户设置：默认不校验（与播放侧一致），开启后才校验
+            _mpv_set_option_string(handle, 'tls-verify', 'yes' if ctx.tls_verify else 'no')
+            if ctx.user_agent:
+                _mpv_set_option_string(handle, 'user-agent', ctx.user_agent)
+            if ctx.proxy:
+                _mpv_set_option_string(handle, 'http-proxy', ctx.proxy)
+            header_val = build_mpv_http_header_fields(ctx.raw_headers, ctx.referer)
+            if header_val:
+                _mpv_set_option_string(handle, 'http-header-fields', header_val)
+        else:
+            _mpv_set_option_string(handle, 'tls-verify', 'no')
 
         if not initialize_mpv(handle):
             destroy_mpv(handle)
@@ -150,6 +162,7 @@ class MpvStreamValidator:
         result = {
             'url': url,
             'valid': False,
+            'validity': INVALID,
             'latency': None,
             'error': None,
             'error_type': None,
@@ -158,6 +171,7 @@ class MpvStreamValidator:
             'codec': None,
             'bitrate': None,
             'hdr_type': None,
+            'skipped': False,
         }
 
         if not _is_mpv_available():
@@ -182,13 +196,20 @@ class MpvStreamValidator:
                 break
 
         if not acquired:
-            result['error'] = '并发数超限'
+            # 并发槽位不足不代表频道无效：交给扫描器本轮跳过、下一轮再测
+            result['error'] = '并发数超限（本轮跳过）'
             result['error_type'] = 'concurrency_limit'
+            result['skipped'] = True
             return result
 
         handle = None
         try:
-            handle = _create_lightweight_mpv()
+            ctx = build_network_context(
+                connect_timeout=timeout,
+                user_agent=self.get_user_agent(),
+                referer=self.get_referer(),
+            )
+            handle = _create_lightweight_mpv(ctx)
             if not handle:
                 result['error'] = '创建mpv实例失败'
                 result['error_type'] = 'mpv_create_failed'
@@ -204,7 +225,7 @@ class MpvStreamValidator:
                     playback = cfg.load_playback_settings()
                     rtsp_transport = playback.get('rtsp_transport', 'tcp')
                 except Exception as e:
-                    logger.debug(f"validate_stream: {e}")
+                    global_logger.debug(f"validate_stream: {e}")
                 _mpv_set_property_string(handle, 'rtsp-transport', rtsp_transport)
                 _mpv_set_property_string(handle, 'demuxer', 'lavf')
                 _mpv_set_property_string(handle, 'force-seekable', 'yes')
@@ -251,7 +272,7 @@ class MpvStreamValidator:
                                 found_tracks = True
                                 found_tracks_time = time.time()
                     except Exception as e:
-                        logger.debug(f"validate_stream: {e}")
+                        global_logger.debug(f"validate_stream: {e}")
                 else:
                     if found_tracks_time > 0 and (time.time() - found_tracks_time) > 1.5:
                         break
@@ -260,6 +281,7 @@ class MpvStreamValidator:
 
             if found_tracks:
                 result['valid'] = True
+                result['validity'] = VALID
                 result['latency'] = latency
                 wait_for_specific_event(
                     handle, 2.0,
@@ -278,7 +300,11 @@ class MpvStreamValidator:
                     result['service_name'] = ''
 
             elif event_id == MPV_EVENT_FILE_LOADED:
-                result['valid'] = True
+                # 文件能打开但没解析出轨道：只算弱证据
+                result['valid'] = False
+                result['validity'] = SUSPECTED
+                result['error'] = '已连接但未解析出媒体流'
+                result['error_type'] = 'no_streams'
                 result['latency'] = latency
 
                 wait_for_specific_event(
@@ -310,10 +336,14 @@ class MpvStreamValidator:
                         end_reason = end_file.reason
                         end_error = end_file.error
                     except Exception as e:
-                        logger.debug(f"validate_stream: {e}")
+                        global_logger.debug(f"validate_stream: {e}")
 
                 if end_reason in (MPV_END_FILE_REASON_EOF, MPV_END_FILE_REASON_STOP):
-                    result['valid'] = True
+                    # 能连到并读到 EOF，但没有轨道：按疑似处理
+                    result['valid'] = False
+                    result['validity'] = SUSPECTED
+                    result['error'] = '流已结束但未解析出媒体流'
+                    result['error_type'] = 'no_streams'
                     res, codec = _try_get_resolution_and_codec(handle, retries=2, interval=0.2)
                     if res:
                         result['resolution'] = res
@@ -322,6 +352,7 @@ class MpvStreamValidator:
                 elif end_reason == MPV_END_FILE_REASON_ERROR:
                     if found_tracks:
                         result['valid'] = True
+                        result['validity'] = VALID
                         result['error'] = f'播放警告(vo=null,END_FILE错误码:{end_error})'
                         result['error_type'] = 'playback_warning'
                         res, codec = _try_get_resolution_and_codec(handle, retries=2, interval=0.2)
@@ -337,9 +368,10 @@ class MpvStreamValidator:
                                 if len(tracks) > 0:
                                     found_tracks = True
                         except Exception as e:
-                            logger.debug(f"validate_stream: {e}")
+                            global_logger.debug(f"validate_stream: {e}")
                         if found_tracks:
                             result['valid'] = True
+                            result['validity'] = VALID
                             result['error'] = f'播放警告(vo=null,END_FILE错误码:{end_error})'
                             result['error_type'] = 'playback_warning'
                             res, codec = _try_get_resolution_and_codec(handle, retries=2, interval=0.2)
@@ -349,10 +381,12 @@ class MpvStreamValidator:
                                 result['codec'] = codec
                         else:
                             result['valid'] = False
+                            result['validity'] = INVALID
                             result['error'] = f'播放失败(错误码:{end_error})'
                             result['error_type'] = 'playback_failed'
                 else:
                     result['valid'] = False
+                    result['validity'] = SUSPECTED
                     if end_reason is not None:
                         result['error'] = f'流结束(reason:{end_reason})'
                         result['error_type'] = 'stream_ended'
@@ -380,7 +414,7 @@ class MpvStreamValidator:
                     try:
                         terminate_destroy_mpv(handle)
                     except Exception as e:
-                        logger.debug(f"validate_stream: {e}")
+                        global_logger.debug(f"validate_stream: {e}")
             sem.release()
 
         if not result.get('valid', False):
@@ -437,7 +471,7 @@ class MpvStreamValidator:
             try:
                 terminate_destroy_mpv(handle)
             except Exception as e:
-                logger.debug(f"terminate_all: {e}")
+                global_logger.debug(f"terminate_all: {e}")
 
     @classmethod
     def set_terminating(cls):
@@ -454,7 +488,7 @@ class MpvStreamValidator:
             try:
                 terminate_destroy_mpv(handle)
             except Exception as e:
-                logger.debug(f"destroy_all_handles: {e}")
+                global_logger.debug(f"destroy_all_handles: {e}")
 
     @classmethod
     def reset_terminating(cls):

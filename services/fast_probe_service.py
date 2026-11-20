@@ -1,0 +1,387 @@
+"""快速探测：HTTP 状态码 + 内容嗅探，不做真实拉流。
+
+用于「几万个候选」的批量扫描，也供独立模式（Android/无 GUI）使用。
+结论分三档：
+
+- HTTP 状态码 <400 且内容命中媒体特征（#EXTM3U、TS 同步字节、视频/mpegurl
+  Content-Type）→ 确证有效
+- HTTP 能连上但没有任何媒体特征 → 疑似
+- 明确 4xx / 拒连 / 超时 → 不可用
+- RTSP 仅 TCP 连通 → 疑似
+- RTP/UDP 至少收到两个包且校验 0x47 同步字节，才判有效；只有包但不同步 → 疑似
+"""
+import socket
+import time
+from typing import Dict, Optional
+from urllib.parse import urlparse
+
+from core.log_manager import global_logger
+from services.network_context import NetworkContext, build_network_context
+from services.validity_tiers import INVALID, SUSPECTED, VALID
+
+TS_PACKET_SIZE = 188
+# 组播扫描时每个 URL 最多等待的秒数（避免长时间阻塞线程池）
+UDP_MAX_WAIT = 5
+# 需要连续收到的 TS 包数量
+UDP_TS_PACKETS = 2
+
+_MEDIA_CONTENT_TYPES = (
+    'video/',
+    'audio/',
+    'mpegurl',
+    'm3u8',
+    'mp2t',
+    'vnd.apple.mpegurl',
+)
+
+
+def _sniff_http_content(chunk: bytes, content_type: str) -> tuple[str, str]:
+    """判断响应内容是否具备明确的媒体特征。
+
+    Returns:
+        (是否命中, 描述)
+    """
+    ct = (content_type or '').lower()
+    if any(token in ct for token in _MEDIA_CONTENT_TYPES):
+        return True, f'Content-Type: {ct.split(";")[0].strip()}'
+
+    head = (chunk or b'')[:2048]
+    # 容忍 BOM 与前置空白
+    text = head.lstrip(b'\xef\xbb\xbf \t\r\n')
+    if text.startswith(b'#EXTM3U') or b'#EXT-X' in head:
+        return True, 'm3u/m3u8'
+    if _ts_sync_offset(head) is not None:
+        return True, 'mpeg-ts'
+    return False, ''
+
+
+def _ts_sync_offset(data: bytes) -> Optional[int]:
+    """返回 TS 同步字节偏移；不足一个包时返回 None。"""
+    if not data or len(data) < TS_PACKET_SIZE or data[0] != 0x47:
+        return None
+    # 有第二个包时要求同样落在 188 字节处，过滤偶然碰撞
+    if len(data) >= TS_PACKET_SIZE * 2 and data[TS_PACKET_SIZE] != 0x47:
+        return None
+    return 0
+
+
+def _rtp_payload_offset(data: bytes) -> int:
+    """RTP 固定头 12 字节（无 CSRC 时），返回载荷起点。"""
+    if len(data) < 12:
+        return 0
+    cc = data[0] & 0x0F
+    return 12 + cc * 4
+
+
+def _looks_like_ts_packet(data: bytes, is_rtp: bool) -> bool:
+    """校验一个 UDP/RTP 数据包是否携带 TS 同步字节。"""
+    if not data:
+        return False
+    offset = _rtp_payload_offset(data) if is_rtp else 0
+    if offset >= len(data):
+        return False
+    payload = data[offset:]
+    return len(payload) >= TS_PACKET_SIZE and payload[0] == 0x47
+
+
+def _local_ip() -> str:
+    try:
+        return socket.gethostbyname(socket.gethostname())
+    except Exception:
+        return ''
+
+
+def _is_self_source(addr, recv_port: int, local_ip: str) -> bool:
+    """忽略自身回环/自身发出的数据包。"""
+    try:
+        src_ip, src_port = addr[0], addr[1]
+    except Exception:
+        return False
+    if src_ip in ('127.0.0.1', '::1', '0.0.0.0'):
+        return True
+    if local_ip and src_ip == local_ip and src_port == recv_port:
+        return True
+    return False
+
+
+def _probe_http(url: str, timeout: int, ctx: NetworkContext, t0: float) -> Dict:
+    result = {'url': url, 'valid': False, 'validity': INVALID, 'status': '',
+              'latency': 0, 'content_type': '', 'error_type': None}
+    try:
+        from utils.http_session import get as _http_get
+    except Exception as exc:
+        result['status'] = f'HTTP 客户端不可用: {exc}'
+        result['validity'] = SUSPECTED
+        result['error_type'] = 'client_unavailable'
+        return result
+
+    headers = ctx.request_headers()
+    headers['Range'] = 'bytes=0-2047'
+    try:
+        resp = _http_get(url, timeout=timeout, allow_redirects=True,
+                         headers=headers, stream=True)
+    except Exception as exc:
+        result['latency'] = int((time.time() - t0) * 1000)
+        result['status'] = f'错误: {str(exc)[:60]}'
+        result['error_type'] = 'connect_failed'
+        return result
+
+    try:
+        status_code = resp.status_code
+        content_type = resp.headers.get('Content-Type', '')
+        result['content_type'] = content_type
+        result['latency'] = int((time.time() - t0) * 1000)
+        if status_code >= 400:
+            result['status'] = f'HTTP {status_code}'
+            result['error_type'] = f'http_{status_code}'
+            return result
+        chunk = b''
+        try:
+            chunk = next(resp.iter_content(2048), b'') or b''
+        except Exception:
+            chunk = b''
+        hit, kind = _sniff_http_content(chunk, content_type)
+        if hit:
+            result['valid'] = True
+            result['validity'] = VALID
+            result['status'] = kind
+            return result
+        # 能连上但没有任何媒体特征：弱证据
+        result['validity'] = SUSPECTED
+        result['status'] = f'HTTP {status_code} 无媒体特征'
+        result['error_type'] = 'no_media_features'
+        return result
+    finally:
+        try:
+            resp.close()
+        except Exception:
+            pass
+
+
+def _probe_rtsp(url: str, timeout: int, t0: float) -> Dict:
+    result = {'url': url, 'valid': False, 'validity': INVALID, 'status': '',
+              'latency': 0, 'content_type': '', 'error_type': None}
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname or ''
+        port = parsed.port or 554
+        if not host:
+            result['status'] = 'RTSP 地址无效'
+            result['error_type'] = 'invalid_url'
+            return result
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.settimeout(timeout)
+            sock.connect((host, port))
+            result['latency'] = int((time.time() - t0) * 1000)
+            # 仅 TCP 连通属于弱检查
+            result['validity'] = SUSPECTED
+            result['status'] = 'RTSP 端口可达（未拉流）'
+            result['error_type'] = 'weak_check'
+            return result
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+    except Exception as exc:
+        result['latency'] = int((time.time() - t0) * 1000)
+        result['status'] = f'RTSP: {str(exc)[:40]}'
+        result['error_type'] = 'connect_failed'
+        return result
+
+
+def _probe_udp(url: str, timeout: int, t0: float) -> Dict:
+    result = {'url': url, 'valid': False, 'validity': INVALID, 'status': '',
+              'latency': 0, 'content_type': '', 'error_type': None}
+    is_rtp = url.lower().startswith('rtp://')
+    parsed = urlparse(url)
+    host = parsed.hostname or ''
+    port = parsed.port or 5004
+    if not host:
+        result['status'] = 'UDP 地址无效'
+        result['error_type'] = 'invalid_url'
+        return result
+
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        wait_secs = min(max(timeout // 2, 1), UDP_MAX_WAIT)
+        deadline = time.time() + wait_secs
+        try:
+            parts = host.split('.')
+            is_multicast = (len(parts) == 4
+                            and 224 <= int(parts[0]) <= 239
+                            and all(0 <= int(p) <= 255 for p in parts))
+        except ValueError:
+            is_multicast = False
+        if is_multicast:
+            mreq = socket.inet_aton(host) + socket.inet_aton('0.0.0.0')
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        sock.bind(('', port))
+
+        local_ip = _local_ip()
+        ts_packets = 0
+        received = 0
+        while time.time() < deadline:
+            remaining = max(0.1, deadline - time.time())
+            sock.settimeout(remaining)
+            try:
+                data, addr = sock.recvfrom(4096)
+            except socket.timeout:
+                break
+            if _is_self_source(addr, port, local_ip):
+                continue
+            received += 1
+            if _looks_like_ts_packet(data, is_rtp):
+                ts_packets += 1
+                if ts_packets >= UDP_TS_PACKETS:
+                    result['latency'] = int((time.time() - t0) * 1000)
+                    result['valid'] = True
+                    result['validity'] = VALID
+                    result['status'] = f'收到连续 {ts_packets} 个 TS 包'
+                    return result
+
+        result['latency'] = int((time.time() - t0) * 1000)
+        if received > 0:
+            result['validity'] = SUSPECTED
+            result['status'] = f'收到 {received} 个包，但未校验到 TS 同步'
+            result['error_type'] = 'no_ts_sync'
+        else:
+            result['status'] = '超时无数据'
+            result['error_type'] = 'timeout'
+        return result
+    except socket.timeout:
+        result['latency'] = int((time.time() - t0) * 1000)
+        result['status'] = '超时无数据'
+        result['error_type'] = 'timeout'
+        return result
+    except OSError as exc:
+        result['latency'] = int((time.time() - t0) * 1000)
+        result['status'] = f'无法验证: {str(exc)[:40]}'
+        result['error_type'] = 'socket_error'
+        return result
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+
+class FastProbeValidator:
+    """与 ffprobe/mpv 校验器同接口的快速探测器。
+
+    供桌面扫描在「快速嗅探」模式下复用现有 ScannerController 架构：
+    只做状态码与内容特征判断，不真实拉流。
+    """
+
+    _user_agent: str = ''
+    _referer: str = ''
+    _terminating = False
+
+    def __init__(self, main_window=None):
+        self.main_window = main_window
+
+    @classmethod
+    def set_max_concurrent(cls, value: int):
+        # 快速探测没有子进程/解码器，线程数即并发上限，无需再限制
+        return
+
+    @classmethod
+    def reset_terminating(cls):
+        cls._terminating = False
+
+    @classmethod
+    def terminate(cls):
+        cls._terminating = True
+
+    @classmethod
+    def set_terminating(cls):
+        cls._terminating = True
+
+    @classmethod
+    def destroy_all_handles(cls):
+        # 快速探测不持有 mpv/ffprobe 句柄
+        return
+
+    @classmethod
+    def set_user_agent(cls, value: str):
+        cls._user_agent = value or ''
+
+    @classmethod
+    def get_user_agent(cls) -> str:
+        return cls._user_agent
+
+    @classmethod
+    def set_referer(cls, value: str):
+        cls._referer = value or ''
+
+    @classmethod
+    def get_referer(cls) -> str:
+        return cls._referer
+
+    def validate_stream(self, url: str, raw_channel_name: str | None = None,
+                        timeout: int = 10) -> Dict:
+        if type(self)._terminating:
+            return {
+                'url': url, 'valid': False, 'validity': INVALID,
+                'latency': None, 'resolution': None, 'codec': None,
+                'bitrate': None, 'hdr_type': None, 'service_name': None,
+                'error': '验证器正在关闭', 'error_type': 'terminating',
+                'skipped': False,
+            }
+        ctx = build_network_context(
+            connect_timeout=timeout,
+            user_agent=type(self)._user_agent or None,
+            referer=type(self)._referer or None,
+        )
+        probe = probe_stream(url, timeout=timeout, ctx=ctx)
+        return {
+            'url': url,
+            'valid': probe.get('validity') == VALID,
+            'validity': probe.get('validity') or INVALID,
+            'latency': probe.get('latency'),
+            'resolution': None,
+            'codec': None,
+            'bitrate': None,
+            'hdr_type': None,
+            'service_name': probe.get('content_type') or None,
+            'error': probe.get('status'),
+            'error_type': probe.get('error_type'),
+            'skipped': False,
+        }
+
+
+def probe_stream(
+    url: str,
+    timeout: int = 10,
+    ctx: NetworkContext | None = None,
+) -> Dict:
+    """快速探测单个 URL，返回三档结果。
+
+    返回字段：url / valid / validity / status / latency / content_type / error_type
+    """
+    t0 = time.time()
+    low = (url or '').lower()
+    if not low:
+        return {'url': url, 'valid': False, 'validity': INVALID, 'status': 'URL 为空',
+                'latency': 0, 'content_type': '', 'error_type': 'invalid_url'}
+    if ctx is None:
+        ctx = build_network_context(connect_timeout=timeout, user_agent=None, referer=None)
+    try:
+        if low.startswith('http://') or low.startswith('https://'):
+            return _probe_http(url, timeout, ctx, t0)
+        if low.startswith('rtsp://'):
+            return _probe_rtsp(url, timeout, t0)
+        if low.startswith('rtp://') or low.startswith('udp://'):
+            return _probe_udp(url, timeout, t0)
+        return {'url': url, 'valid': False, 'validity': INVALID,
+                'status': '不支持的协议', 'latency': 0, 'content_type': '',
+                'error_type': 'unsupported_protocol'}
+    except Exception as exc:
+        global_logger.debug(f"快速探测异常 {url}: {exc}")
+        return {'url': url, 'valid': False, 'validity': SUSPECTED,
+                'status': f'探测异常: {str(exc)[:50]}', 'latency': 0,
+                'content_type': '', 'error_type': 'scan_exception'}

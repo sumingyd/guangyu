@@ -3,6 +3,7 @@
 """
 
 import os
+import threading
 import time
 import warnings
 from PySide6 import QtWidgets, QtCore, QtGui
@@ -619,6 +620,10 @@ class ScanChannelDialog(FloatingDialog):
         self.scan_engine_combo = QtWidgets.QComboBox()
         self.scan_engine_combo.addItem(tr('scan_engine_ffprobe', 'ffprobe (Detailed)'), "ffprobe")
         self.scan_engine_combo.addItem(tr('scan_engine_mpv', 'mpv (Lightweight)'), "mpv")
+        # 快速嗅探：只看状态码与内容特征，适合几万个候选的批量扫描
+        self.scan_engine_combo.addItem(
+            tr('scan_engine_fast', '快速嗅探（仅状态码+内容特征）'), "fast"
+        )
         self.scan_engine_combo.setFixedHeight(28)
         self.scan_engine_combo.setToolTip(
             tr("scan_engine_tooltip", "Select the core engine for scanning and validation")
@@ -971,7 +976,7 @@ class ScanChannelDialog(FloatingDialog):
             ChannelListModel.COL_URL: 200,           # URL
             ChannelListModel.COL_GROUP: 90,          # 分组
             ChannelListModel.COL_LOGO: 80,           # 台标（加宽以完整显示标题"Logo地址"）
-            ChannelListModel.COL_STATUS: 60,         # 状态（窄）
+            ChannelListModel.COL_STATUS: 72,         # 状态（足够容纳“待检测”，避免被省略号压字）
             ChannelListModel.COL_LATENCY: 75,        # 延迟（加宽以完整显示标题"延迟(ms)"）
             ChannelListModel.COL_TVG_ID: 70,         # TVG-ID（窄）
             ChannelListModel.COL_TVG_CHNO: 60,       # TVG频道号（窄）
@@ -1911,6 +1916,15 @@ class ScanChannelDialog(FloatingDialog):
         match_logo_selected_action.triggered.connect(self._match_selected_logo)
         menu.addAction(match_logo_selected_action)
 
+        # 深度检测：对当前频道真实解码约 2 秒，手工触发、默认关闭
+        deep_probe_action = QtGui.QAction(
+            tr("deep_probe", "深度检测（解码约 2 秒）"), self
+        )
+        deep_probe_action.triggered.connect(
+            lambda: self._deep_probe_channel(source_row)
+        )
+        menu.addAction(deep_probe_action)
+
         menu.addSeparator()
 
         selected_count = len(self.channel_list.selectionModel().selectedRows())
@@ -1923,6 +1937,56 @@ class ScanChannelDialog(FloatingDialog):
 
         # 显示菜单
         menu.exec(self.channel_list.viewport().mapToGlobal(pos))
+
+    def _deep_probe_channel(self, source_row):
+        """对单个频道做深度检测（真实解码约 2 秒），后台线程执行。"""
+        channel = self.model.get_channel(source_row)
+        url = (channel or {}).get('url', '')
+        if not url:
+            return
+        tr = self.language_manager.tr
+        try:
+            self.stats_label.setText(tr('deep_probing', '正在深度检测…'))
+        except Exception:
+            pass
+
+        def _worker():
+            from services.deep_probe_service import deep_probe_stream
+            from utils.thread_safety import invoke_on_thread
+            result = deep_probe_stream(url)
+            invoke_on_thread(
+                self, lambda: self._apply_deep_probe_result(url, result)
+            )
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _apply_deep_probe_result(self, url, result):
+        """把深度检测结果写回扫描列表。"""
+        from services.validity_tiers import VALID
+        tier = result.get('validity') or 'invalid'
+        status = result.get('status') or ''
+        for i, ch in enumerate(self.model.channels):
+            if ch.get('url') != url:
+                continue
+            patch = {
+                'valid': tier == VALID,
+                'validity': tier,
+                'status': status,
+            }
+            if tier == VALID:
+                try:
+                    from services.stream_quality_scorer import StreamQualityScorer
+                    score_info = StreamQualityScorer.score_from_channel({**ch, **patch})
+                    patch['quality_score'] = score_info.get('total', 0)
+                    patch['quality_grade'] = score_info.get('grade', 'F')
+                except Exception as e:
+                    logger.debug(f"_apply_deep_probe_result: {e}")
+            self.model.update_channel(i, patch)
+            break
+        try:
+            self.stats_label.setText(f"深度检测: {status}")
+        except Exception:
+            pass
 
     def _copy_channel_url(self, url):
         """复制频道URL到剪贴板"""
@@ -2067,8 +2131,11 @@ class ScanChannelDialog(FloatingDialog):
                 source_row = row
             channel = source_model.get_channel(source_row)
             if channel:
-                is_valid = channel.get('valid', False)
-                if is_valid == select_valid:
+                from services.validity_tiers import INVALID, VALID, channel_tier
+                is_selected = (
+                    channel_tier(channel) == (VALID if select_valid else INVALID)
+                )
+                if is_selected:
                     selection_model.select(
                         model.index(row, 0),
                         QtCore.QItemSelectionModel.SelectionFlag.Select
@@ -2751,25 +2818,32 @@ class ScanChannelDialog(FloatingDialog):
             except Exception as e:
                 logger.debug(f"_finalize_stop_validation: {e}")
 
-    def _on_channel_validated(self, index, valid, latency, resolution):
+    def _on_channel_validated(self, index, valid, latency, resolution, validity=''):
         """处理频道验证结果（_flush_pending_validations 已通过URL更新模型，此方法为辅助更新）"""
         if not (0 <= index < self.model.rowCount()):
             return
+        from services.validity_tiers import (
+            INVALID, STATUS_TEXT, VALID, VALID_BOOL, valid_bool_for,
+        )
+        tier = validity or (VALID if valid else INVALID)
         channel_info = {
-            'valid': valid,
+            'valid': valid_bool_for(tier),
+            'validity': tier,
             'latency': latency,
             'resolution': resolution,
-            'status': self.language_manager.tr('valid', '有效') if valid else self.language_manager.tr('invalid', '无效')
+            'status': self.language_manager.tr(tier, STATUS_TEXT[tier])
+            if tier in VALID_BOOL else STATUS_TEXT[tier],
         }
 
-        # 即时计算质量评分，避免等待批量刷新的 100ms 视觉延迟
-        try:
-            from services.stream_quality_scorer import StreamQualityScorer
-            score_info = StreamQualityScorer.score_from_channel(channel_info)
-            channel_info['quality_score'] = score_info.get('total', 0)
-            channel_info['quality_grade'] = score_info.get('grade', 'F')
-        except Exception as e:
-            logger.debug(f"_on_channel_validated: {e}")
+        # 即时计算质量评分，避免等待批量刷新的 100ms 视觉延迟（仅确证有效）
+        if tier == VALID:
+            try:
+                from services.stream_quality_scorer import StreamQualityScorer
+                score_info = StreamQualityScorer.score_from_channel(channel_info)
+                channel_info['quality_score'] = score_info.get('total', 0)
+                channel_info['quality_grade'] = score_info.get('grade', 'F')
+            except Exception as e:
+                logger.debug(f"_on_channel_validated: {e}")
 
         self.model.update_channel(index, channel_info)
 
@@ -2782,9 +2856,11 @@ class ScanChannelDialog(FloatingDialog):
             logger.debug(f"_on_validation_completed: {e}")
         # 智能重试：对检测为无效的频道进行重试验证
         if self.enable_retry_checkbox.isChecked():
+            from services.validity_tiers import INVALID, SUSPECTED, channel_tier
             invalid_urls = []
             for ch in self.model.channels:
-                if ch.get('valid') is False and ch.get('url'):
+                # 疑似（含 no_streams / probe_failed）同样值得再试一轮
+                if channel_tier(ch) in (INVALID, SUSPECTED) and ch.get('url'):
                     invalid_urls.append(ch.get('url'))
             if invalid_urls:
                 self.logger.info(f"检测有效性完成，{len(invalid_urls)}个无效频道，启动智能重试...")
@@ -2800,12 +2876,15 @@ class ScanChannelDialog(FloatingDialog):
                 except Exception as e:
                     logger.debug(f"_on_validation_completed: {e}")
         else:
-            valid_count = sum(1 for ch in self.model.channels if ch.get('valid') is True)
+            from services.validity_tiers import SUSPECTED, VALID, channel_tier
+            valid_count = sum(1 for ch in self.model.channels if channel_tier(ch) == VALID)
+            suspected_count = sum(1 for ch in self.model.channels if channel_tier(ch) == SUSPECTED)
             total = len(self.model.channels)
             tr = self.language_manager.tr
             self.stats_label.setText(
                 f"{tr('validate_completed', '检测完成')} | "
-                f"{tr('valid', '有效')}: {valid_count}/{total}"
+                f"{tr('valid', '有效')}: {valid_count}/{total} | "
+                f"{tr('suspected', '疑似')}: {suspected_count}"
             )
             try:
                 self.btn_validate.setText(self.language_manager.tr("validate_button", "Validate"))
@@ -3069,11 +3148,10 @@ class ScanChannelDialog(FloatingDialog):
     def _on_channel_found(self, channel_info):
         """处理发现有效频道事件"""
         self._invalidate_channels_cache()
-        is_valid = channel_info.get('valid') is True
-        channel_info['status'] = (
-            self.language_manager.tr('valid', '有效') if is_valid
-            else self.language_manager.tr('invalid', '无效')
-        )
+        from services.validity_tiers import STATUS_TEXT, channel_tier
+        tier = channel_tier(channel_info)
+        if tier:
+            channel_info['status'] = STATUS_TEXT[tier]
         self.model.add_channel(channel_info)
 
     @QtCore.Slot()
@@ -3135,16 +3213,17 @@ class ScanChannelDialog(FloatingDialog):
             self._is_stopping = False
             return
 
+        from services.validity_tiers import INVALID, SUSPECTED, VALID, channel_tier
         found_urls = set()
         if hasattr(self, 'model') and self.model:
             for ch in self.model.channels:
-                if ch.get('valid') is True and ch.get('url'):
+                if channel_tier(ch) == VALID and ch.get('url'):
                     found_urls.add(ch.get('url'))
 
         url_to_index = {}
         for i, ch in enumerate(self.model.channels):
             url = ch.get('url', '')
-            if url and ch.get('valid') is False:
+            if url and channel_tier(ch) in (INVALID, SUSPECTED):
                 url_to_index.setdefault(url, i)
 
         newly_valid = 0
@@ -3152,7 +3231,10 @@ class ScanChannelDialog(FloatingDialog):
         for url in getattr(self, '_validation_retry_urls', []):
             if url in found_urls and url in url_to_index:
                 idx = url_to_index[url]
-                self.model.update_channel(idx, {'valid': True, 'status': self.language_manager.tr('valid', '有效')})
+                self.model.update_channel(idx, {
+                    'valid': True, 'validity': VALID,
+                    'status': self.language_manager.tr('valid', '有效'),
+                })
                 newly_valid += 1
             else:
                 remaining_invalid.append(url)
@@ -3222,6 +3304,7 @@ class ScanChannelDialog(FloatingDialog):
 
             total_text = tr('scan_total', '本次总数')
             valid_text = tr('valid', '有效')
+            suspected_text = tr('suspected', '疑似')
             invalid_text = tr('invalid', '无效')
             time_text = tr('time_elapsed', '耗时')
 
@@ -3229,6 +3312,7 @@ class ScanChannelDialog(FloatingDialog):
                 f"{task_text}: {task_type} | "
                 f"{total_text}: {stats.get('total', 0)} | "
                 f"{valid_text}: {stats.get('valid', 0)} | "
+                f"{suspected_text}: {stats.get('suspected', 0)} | "
                 f"{invalid_text}: {stats.get('invalid', 0)} | "
                 f"{time_text}: {elapsed}"
             )
@@ -3553,8 +3637,9 @@ class ScanChannelDialog(FloatingDialog):
             self.logger.debug("智能重试开始，准备扫描失败的频道")
 
     def _count_valid_channels(self):
-        """统计当前有效频道数量"""
-        return sum(1 for ch in self.model.channels if ch.get('valid', False))
+        """统计当前确证有效的频道数量（疑似不计入）"""
+        from services.validity_tiers import VALID, channel_tier
+        return sum(1 for ch in self.model.channels if channel_tier(ch) == VALID)
 
     def _start_retry_scan(self):
         """启动重试扫描 - 第二阶段深度扫描"""

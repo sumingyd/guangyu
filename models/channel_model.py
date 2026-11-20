@@ -243,24 +243,41 @@ class ChannelListModel(QtCore.QAbstractTableModel):
             return QtCore.Qt.AlignmentFlag.AlignVCenter | QtCore.Qt.AlignmentFlag.AlignLeft
         elif role == QtCore.Qt.ItemDataRole.BackgroundRole:
             from ui.styles import AppStyles, color_to_qcolor
+            from services.validity_tiers import INVALID, SUSPECTED, channel_tier
             colors = AppStyles._get_colors()
-            valid = channel.get('valid')
-            if valid is False:
+            tier = channel_tier(channel)
+            if tier == INVALID:
                 return color_to_qcolor(colors.get('error_background', '#ffdddd'))
-            else:
-                return color_to_qcolor(colors['table_alternate'])
+            if tier == SUSPECTED:
+                bg = colors.get('warning_background')
+                if bg:
+                    return color_to_qcolor(bg)
+                c = color_to_qcolor(colors.get('warning', '#FF9800'))
+                # 28 在白底上几乎看不出，40 才能与有效行区分又不像无效行那样重
+                c.setAlpha(40)
+                return c
+            return color_to_qcolor(colors['table_alternate'])
         elif role == QtCore.Qt.ItemDataRole.ForegroundRole:
             from ui.styles import AppStyles, color_to_qcolor
+            from services.validity_tiers import INVALID, SUSPECTED, channel_tier
             colors = AppStyles._get_colors()
             status = channel.get('status', '待检测')
-            valid = channel.get('valid')
+            tier = channel_tier(channel)
 
-            if valid is False and status != '待检测':
-                return color_to_qcolor(colors.get('error', '#ff6666'))
-            elif status == '待检测':
+            from ui.palette import get_token
+            mode = AppStyles._get_effective_color_mode()
+            if tier == INVALID and status != '待检测':
+                return color_to_qcolor(
+                    get_token('state.danger_text', mode) or colors.get('error', '#ff6666')
+                )
+            if tier == SUSPECTED:
+                # 浅色下 #FF9800 对白底对比度不足，#8a5200 才不糊
+                return color_to_qcolor(
+                    get_token('state.warning_text', mode) or colors.get('warning', '#d99a00')
+                )
+            if status == '待检测':
                 return color_to_qcolor(colors.get('placeholder', '#999999'))
-            else:
-                return color_to_qcolor(colors['window_text'])
+            return color_to_qcolor(colors['window_text'])
         elif role == QUALITY_SCORE_ROLE:
             # 显示评分条的条件：
             # - 频道已检测（valid 非 None），按数据计算/读取
@@ -303,8 +320,9 @@ class ChannelListModel(QtCore.QAbstractTableModel):
         if actual_col == 5:
             return channel.get('logo', channel.get('logo_url', ''))
         if actual_col == 7:
+            from services.validity_tiers import SUSPECTED, VALID, channel_tier
             latency = channel.get('latency', '')
-            if channel.get('valid') is not True:
+            if channel_tier(channel) not in (VALID, SUSPECTED):
                 return ''
             return str(latency) if latency != '' else ''
         if actual_col == 11:
@@ -604,11 +622,15 @@ class ChannelListModel(QtCore.QAbstractTableModel):
         return sorted(self._name_cache)
 
     def _filter_original_content(self) -> str:
-        """过滤原始文件内容，只保留有效频道的行"""
+        """过滤原始文件内容，只保留非无效频道的行（疑似保留）"""
         if not self._original_file_content or not self._is_hiding_invalid:
             return ""
 
-        valid_urls = {ch.get('url') for ch in self.channels if ch.get('valid', False)}
+        from services.validity_tiers import INVALID, channel_tier
+        valid_urls = {
+            ch.get('url') for ch in self.channels
+            if channel_tier(ch) != INVALID
+        }
 
         lines = self._original_file_content.splitlines()
         filtered_lines = []
@@ -663,8 +685,10 @@ class ChannelListModel(QtCore.QAbstractTableModel):
             if not url:
                 continue
 
-            if self._is_hiding_invalid and not channel.get('valid', False):
-                continue
+            if self._is_hiding_invalid:
+                from services.validity_tiers import INVALID, channel_tier
+                if channel_tier(channel) == INVALID:
+                    continue
 
             # 检查是否有原始数据可用
             original_channel = self._original_channel_data.get(url)

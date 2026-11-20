@@ -611,10 +611,9 @@ def get_channels_json(page=1, size=100, group='', search='', valid_filter='', so
         if search:
             s = search.lower()
             filtered = [c for c in filtered if s in c.get('name', '').lower() or s in c.get('group', '').lower()]
-        if valid_filter == 'valid':
-            filtered = [c for c in filtered if c.get('valid') is True]
-        elif valid_filter == 'invalid':
-            filtered = [c for c in filtered if c.get('valid') is False]
+        if valid_filter in ('valid', 'suspected', 'invalid'):
+            from services.validity_tiers import channel_tier
+            filtered = [c for c in filtered if channel_tier(c) == valid_filter]
         if source_filter == 'local':
             filtered = [c for c in filtered if not c.get('source', '')]
         elif source_filter == 'sub':
@@ -697,7 +696,7 @@ def add_channel(url, name, group=''):
             'logo': '', 'tvg_id': '', 'tvg_name': '', 'tvg_chno': '',
             'tvg_shift': '', 'catchup': '', 'catchup_days': '',
             'catchup_source': '', 'catchup_correction': '', 'fcc': '',
-            'resolution': '', 'valid': None, 'status': '待检测',
+            'resolution': '', 'valid': None, 'validity': None, 'status': '待检测',
             'id': len(ctx._channels) + 1,
             'source': '',  # 空源 = 手动添加/本地频道
         }
@@ -1292,15 +1291,16 @@ def get_scan_results_json():
         return _err(str(e))
 
 
-def start_validate(timeout=10, threads=4):
+def start_validate(timeout=10, threads=4, engine='auto'):
     """开始验证所有频道的 URL 可达性（异步）。
 
     与 PC 端 scanner_service.validate_channels 和
     routes.handle_scan_validate 对齐。
-    更新频道的 valid/status 字段并持久化。
+    engine: 'auto'（默认，libmpv 可用时真实拉流）/ 'mpv' / 'fast'
+    更新频道的 valid/validity/status 字段并持久化。
     """
     try:
-        _log(f'start_validate: timeout={timeout}, threads={threads}')
+        _log(f'start_validate: timeout={timeout}, threads={threads}, engine={engine}')
         ctx = _get_ctx()
         if ctx is None:
             return _err('not inited')
@@ -1310,6 +1310,7 @@ def start_validate(timeout=10, threads=4):
         result = scanner.start_validate(
             timeout=int(timeout),
             threads=int(threads),
+            engine=str(engine or 'auto'),
         )
         _log(f'start_validate: started={result}')
         return _ok({'started': bool(result)})

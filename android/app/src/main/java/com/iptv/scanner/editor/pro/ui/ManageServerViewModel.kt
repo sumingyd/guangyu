@@ -910,8 +910,15 @@ internal fun AppViewModel.startScanPolling() {
             // 每次轮询都获取最新结果（实时显示，不需等扫描结束）
             repository.getScanResults().onSuccess { _scanResults.value = it }
             if (!status.running) {
-                // 扫描结束
-                showOsd("扫描", "完成: 共 ${status.total}，有效 ${status.valid}，无效 ${status.invalid}")
+                // 校验已有频道时结果写回频道列表，需要刷新一次
+                if (status.mode == "validate") {
+                    loadChannels()
+                }
+                showOsd(
+                    "扫描",
+                    "完成: 共 ${status.total}，有效 ${status.valid}，" +
+                        "疑似 ${status.suspected}，无效 ${status.invalid}"
+                )
                 break
             }
         }
@@ -931,11 +938,15 @@ internal fun AppViewModel.clearScanResults() {
     _scanResults.value = emptyList()
 }
 
-internal fun AppViewModel.startValidate(timeout: Int = 10, threads: Int = 4) {
+internal fun AppViewModel.startValidate(
+    timeout: Int = 10,
+    threads: Int = 4,
+    engine: String = "auto"
+) {
     viewModelScope.launch {
         _scanLoading.value = true
         _scanError.value = ""
-        val result = repository.startValidate(timeout, threads)
+        val result = repository.startValidate(timeout, threads, engine)
         _scanLoading.value = false
         result.onSuccess { started ->
             if (started) {
@@ -1022,10 +1033,13 @@ internal fun AppViewModel.exportScanResultsAsM3u() {
     }
 }
 
-internal fun AppViewModel.importScanResultsToChannels() {
-    val validResults = _scanResults.value.filter { it.valid }
+internal fun AppViewModel.importScanResultsToChannels(includeSuspected: Boolean = false) {
+    // 默认只收确证有效；用户勾选「含疑似」后把疑似档一并导入
+    val validResults = _scanResults.value.filter {
+        if (includeSuspected) it.isUsable else it.isConfirmed
+    }
     if (validResults.isEmpty()) {
-        showOsd("导入", "无有效频道可导入")
+        showOsd("导入", if (includeSuspected) "无可导入频道" else "无有效频道可导入")
         return
     }
 

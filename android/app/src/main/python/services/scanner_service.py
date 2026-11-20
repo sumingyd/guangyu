@@ -13,6 +13,13 @@ from PySide6.QtWidgets import QApplication
 from models.channel_mappings import extract_channel_name_from_url
 from utils.scan_state_manager import get_scan_state_manager
 from utils.delay_constants import DelayMs
+from services.validity_tiers import (
+    INVALID,
+    STATUS_TEXT,
+    SUSPECTED,
+    VALID,
+    VALID_BOOL,
+)
 
 
 def calculate_optimal_queue_size(thread_count: int = 10) -> int:
@@ -71,8 +78,8 @@ class ScannerController(QObject):
     scan_completed = Signal()
     stats_updated = Signal(dict)  # 统计信息
 
-    # 在类定义中声明信号
-    channel_validated = Signal(int, bool, int, str)
+    # 在类定义中声明信号（末位为三档有效性：valid / suspected / invalid）
+    channel_validated = Signal(int, bool, int, str, str)
 
     def __init__(self, model: ChannelListModel, main_window=None) -> None:
         super().__init__()
@@ -94,10 +101,13 @@ class ScannerController(QObject):
         self.stats: Dict[str, Any] = {
             'total': 0,
             'valid': 0,
+            'suspected': 0,
             'invalid': 0,
             'start_time': 0,
             'elapsed': 0
         }
+        # 并发槽位不足时本轮跳过、下一轮再测（不判无效）的尝试计数
+        self._skip_attempts: Dict[str, int] = {}
         # 记录无效的URL，用于重试扫描（委托给scan_state_manager）
         self._max_invalid_urls = 50000
 
@@ -148,40 +158,64 @@ class ScannerController(QObject):
 
             try:
                 result = self._check_channel(url)
-                valid = result['valid']
+
+                # 并发槽位不足：本轮跳过、下一轮再测，绝不判无效
+                if result.get('skipped'):
+                    attempts = self._skip_attempts.get(url, 0) + 1
+                    self._skip_attempts[url] = attempts
+                    if attempts <= 5 and not self.stop_event.is_set():
+                        self.scan_queue.put(url)
+                        continue
+                    # 多次抢不到槽位：保留为疑似弱结果，仍不判无效
+                    result['validity'] = SUSPECTED
+                    result['valid'] = False
+                    result['error_type'] = 'concurrency_limit'
+                    result['error'] = '并发数超限（未完成检测）'
+
+                validity = result.get('validity') or (VALID if result.get('valid') else INVALID)
+                valid = validity == VALID
+                suspected = validity == SUSPECTED
                 latency = result['latency']
                 resolution = result.get('resolution', '')
 
                 try:
                     channel_info = self._build_channel_info(
-                        url, valid, latency, resolution, result
+                        url, validity == VALID, latency, resolution, result
                     )
                 except Exception:
                     channel_info = {
                         'url': url,
                         'name': url.split('/')[-1] if '/' in url else url,
                         'raw_name': url.split('/')[-1] if '/' in url else url,
-                        'valid': valid,
+                        'valid': VALID_BOOL[validity],
+                        'validity': validity,
                         'latency': latency,
                         'resolution': resolution,
-                        'status': '有效' if valid else '无效',
+                        'status': STATUS_TEXT[validity],
                         'group': '未分类',
                         'logo': None,
                         'needs_details': False
                     }
 
-                if valid:
+                if valid or suspected:
                     channel_info.setdefault(
                         'name', channel_info.get(
                             'raw_name', extract_channel_name_from_url(url)
                         )
                     )
                     self._run_on_main(self._handle_channel_add, channel_info.copy())
-                    self._start_async_mapping_check(channel_info.copy())
+                    if valid:
+                        self._start_async_mapping_check(channel_info.copy())
 
                 with self.stats_lock:
                     if valid:
                         self.stats['valid'] += 1
+                    elif suspected:
+                        self.stats['suspected'] += 1
+                        self.logger.debug(
+                            f"扫描疑似: {url} | error_type={result.get('error_type')} | "
+                            f"error={result.get('error', '')}"
+                        )
                     else:
                         self.stats['invalid'] += 1
                         error_type = result.get('error_type') or 'unknown_error'
@@ -190,12 +224,13 @@ class ScannerController(QObject):
                         if self.stats['invalid'] % 50 == 1:
                             self.logger.debug(
                                 f"扫描进度: 有效={self.stats['valid']}, "
+                                f"疑似={self.stats['suspected']}, "
                                 f"无效={self.stats['invalid']}, "
                                 f"最新错误类型={error_type}"
                             )
                         self.scan_state_manager.add_invalid_url(self.scan_id, url, error_type)
 
-                    current = self.stats['valid'] + self.stats['invalid']
+                    current = self.stats['valid'] + self.stats['suspected'] + self.stats['invalid']
                     total = self.stats['total']
 
                 if total <= 0:
@@ -281,27 +316,31 @@ class ScannerController(QObject):
             # 注意：这里不再调用 mapping_manager.get_channel_info
             # 映射检查将在异步线程 _fetch_channel_details 中进行
 
+            validity = result.get('validity') or (VALID if valid else INVALID)
+
             # 构建频道信息（只包含基本信息，不包含映射信息）
             channel_info = {
                 'url': url,
                 'name': channel_name,  # 使用URL提取的名称
                 'raw_name': channel_name,
-                'valid': valid,
+                'valid': VALID_BOOL[validity],
+                'validity': validity,
                 'latency': latency,
                 'resolution': result.get('resolution', ''),
                 'codec': result.get('codec', '') or '',
                 'bitrate': result.get('bitrate', '') or '',
-                'status': '有效' if valid else '无效',
+                'status': STATUS_TEXT[validity],
                 'group': '未分类',  # 默认分组，异步线程中更新
                 'logo': None,   # 默认无logo，异步线程中更新
                 'needs_details': False  # 重要：这里设为False，异步线程中再决定是否需要获取详情
             }
 
-            # 计算流质量评分（基于 latency/bitrate/resolution/valid）
-            from services.stream_quality_scorer import StreamQualityScorer
-            score_info = StreamQualityScorer.score_from_channel(channel_info)
-            channel_info['quality_score'] = score_info.get('total', 0)
-            channel_info['quality_grade'] = score_info.get('grade', 'F')
+            # 计算流质量评分（仅确证有效的频道有意义；疑似不展示评分条）
+            if validity == VALID:
+                from services.stream_quality_scorer import StreamQualityScorer
+                score_info = StreamQualityScorer.score_from_channel(channel_info)
+                channel_info['quality_score'] = score_info.get('total', 0)
+                channel_info['quality_grade'] = score_info.get('grade', 'F')
 
             # 注意：这里不启动异步获取详细信息
             # 异步获取将在 _start_async_mapping_check 方法中决定
@@ -310,25 +349,28 @@ class ScannerController(QObject):
 
         except Exception as e:
             # 返回基本的频道信息，即使构建失败
-            from services.stream_quality_scorer import StreamQualityScorer
+            validity = result.get('validity') or (VALID if valid else INVALID)
             fallback_info = {
                 'url': url,
                 'name': extract_channel_name_from_url(url),
                 'raw_name': extract_channel_name_from_url(url),
-                'valid': valid,
+                'valid': VALID_BOOL[validity],
+                'validity': validity,
                 'latency': latency,
                 'resolution': result.get('resolution', ''),
                 'codec': result.get('codec', '') or '',
                 'bitrate': result.get('bitrate', '') or '',
-                'status': '有效' if valid else '无效',
+                'status': STATUS_TEXT[validity],
                 'group': '未分类',
                 'logo': None,
                 'error': str(e),
                 'needs_details': False
             }
-            score_info = StreamQualityScorer.score_from_channel(fallback_info)
-            fallback_info['quality_score'] = score_info.get('total', 0)
-            fallback_info['quality_grade'] = score_info.get('grade', 'F')
+            if validity == VALID:
+                from services.stream_quality_scorer import StreamQualityScorer
+                score_info = StreamQualityScorer.score_from_channel(fallback_info)
+                fallback_info['quality_score'] = score_info.get('total', 0)
+                fallback_info['quality_grade'] = score_info.get('grade', 'F')
             return fallback_info
 
     def _start_async_details_fetch(self, channel_info: dict):
@@ -444,14 +486,16 @@ class ScannerController(QObject):
             settings = ConfigManager().load_scan_engine_settings()
             engine = settings.get('engine', 'ffprobe')
         except Exception as e:
-            logger.debug(f"_get_validator_class: {e}")
+            global_logger.debug(f"_get_validator_class: {e}")
         self._scan_engine = engine
         if engine == 'ffprobe':
             from services.ffprobe_validator_service import FfprobeStreamValidator
             return FfprobeStreamValidator
-        else:
-            from services.mpv_validator_service import MpvStreamValidator
-            return MpvStreamValidator
+        if engine == 'fast':
+            from services.fast_probe_service import FastProbeValidator
+            return FastProbeValidator
+        from services.mpv_validator_service import MpvStreamValidator
+        return MpvStreamValidator
 
     def _check_channel(
         self, url: str, raw_channel_name: str | None = None
@@ -538,6 +582,7 @@ class ScannerController(QObject):
         """内部扫描启动方法"""
 
         self.timeout = timeout
+        self._skip_attempts = {}
 
         self.scan_state_manager.clear_invalid_urls(self.scan_id)
 
@@ -559,6 +604,7 @@ class ScannerController(QObject):
         self.stats = {
             'total': 0,  # 初始为0，由填充线程动态更新
             'valid': 0,
+            'suspected': 0,
             'invalid': 0,
             'start_time': time.time(),
             'elapsed': 0
@@ -646,6 +692,7 @@ class ScannerController(QObject):
         """内部从URL列表开始扫描方法"""
 
         self.timeout = timeout
+        self._skip_attempts = {}
 
         ValidatorClass = self._get_validator_class()
         if self._scan_engine == 'mpv':
@@ -662,6 +709,7 @@ class ScannerController(QObject):
         self.stats = {
             'total': len(urls),
             'valid': 0,
+            'suspected': 0,
             'invalid': 0,
             'start_time': time.time(),
             'elapsed': 0
@@ -726,7 +774,7 @@ class ScannerController(QObject):
             try:
                 self._mapping_executor.shutdown(wait=True)
             except Exception as e:
-                logger.debug(f"stop_scan: {e}")
+                global_logger.debug(f"stop_scan: {e}")
             self._mapping_executor = None
 
         self.workers = []
@@ -762,7 +810,7 @@ class ScannerController(QObject):
                     worker.join(timeout=2.0)
             ValidatorClass.destroy_all_handles()
         except Exception as e:
-            logger.debug(f"_terminate_all_processes: {e}")
+            global_logger.debug(f"_terminate_all_processes: {e}")
 
     def _cleanup_workers_fast(self):
         """快速清理工作线程"""
@@ -811,7 +859,7 @@ class ScannerController(QObject):
             if still_alive:
                 self.logger.warning(f"后台清理后仍有 {len(still_alive)} 个线程存活")
         except Exception as e:
-            logger.debug(f"_background_cleanup: {e}")
+            global_logger.debug(f"_background_cleanup: {e}")
 
     def _cleanup_other_resources(self):
         if hasattr(self, 'stats_thread') and self.stats_thread and self.stats_thread.is_alive():
@@ -825,6 +873,7 @@ class ScannerController(QObject):
         self.is_validating = True
         self._is_validation_retry = False
         self.stop_event.clear()
+        self._skip_attempts = {}
         self.timeout = timeout
 
         ValidatorClass = self._get_validator_class()
@@ -855,6 +904,7 @@ class ScannerController(QObject):
         self.stats = {
             'total': total,
             'valid': 0,
+            'suspected': 0,
             'invalid': 0,
             'start_time': time.time(),
             'elapsed': 0
@@ -918,7 +968,21 @@ class ScannerController(QObject):
                     break
 
                 result = self._check_channel(url)
-                valid = result['valid']
+
+                # 并发槽位不足：本轮跳过、下一轮再测，不判无效
+                if result.get('skipped'):
+                    attempts = self._skip_attempts.get(url, 0) + 1
+                    self._skip_attempts[url] = attempts
+                    if attempts <= 5 and not self.stop_event.is_set():
+                        self.validation_queue.put((url, index))
+                        continue
+                    result['validity'] = SUSPECTED
+                    result['valid'] = False
+                    result['error_type'] = 'concurrency_limit'
+                    result['error'] = '并发数超限（未完成检测）'
+
+                validity = result.get('validity') or (VALID if result.get('valid') else INVALID)
+                valid = validity == VALID
                 latency = result['latency']
                 resolution = result.get('resolution', '')
 
@@ -927,13 +991,15 @@ class ScannerController(QObject):
                 with self.stats_lock:
                     if valid:
                         self.stats['valid'] += 1
+                    elif validity == SUSPECTED:
+                        self.stats['suspected'] += 1
                     else:
                         self.stats['invalid'] += 1
                         error_type = result.get('error_type', 'unknown')
                         error_msg = result.get('error', '')
                         self.logger.debug(f"验证无效: {url} | error_type={error_type} | error={error_msg}")
 
-                    current = self.stats['valid'] + self.stats['invalid']
+                    current = self.stats['valid'] + self.stats['suspected'] + self.stats['invalid']
                     total = self.stats['total']
                     if total <= 0:
                         total = 1
@@ -946,12 +1012,13 @@ class ScannerController(QObject):
 
     def _handle_validation_result(self, url, valid, index, latency, resolution, result=None):
         """攒批处理验证结果，减少视图通知"""
+        validity = (result or {}).get('validity') or (VALID if valid else INVALID)
         with self._pending_lock:
-            self._pending_validations.append((url, valid, result))
+            self._pending_validations.append((url, validity, result))
             if self._validation_flush_timer is None:
                 self._validation_flush_timer = True
                 QtCore.QTimer.singleShot(DelayMs.LAYOUT_SETTLE, self._flush_pending_validations)
-        self.channel_validated.emit(index, valid, latency, resolution)
+        self.channel_validated.emit(index, valid, latency, resolution, validity)
 
     def _flush_pending_validations(self):
         """批量应用验证结果"""
@@ -963,11 +1030,12 @@ class ScannerController(QObject):
         if validations:
             from services.stream_quality_scorer import StreamQualityScorer
             self.model.beginResetModel()
-            for url, valid, result in validations:
+            for url, validity, result in validations:
                 for ch in self.model.channels:
                     if ch.get('url') == url:
-                        ch['valid'] = valid
-                        ch['status'] = '有效' if valid else '无效'
+                        ch['validity'] = validity
+                        ch['valid'] = VALID_BOOL[validity]
+                        ch['status'] = STATUS_TEXT[validity]
                         # 同步更新验证时探测到的字段（保留最新值）
                         if result:
                             if result.get('latency') is not None:
@@ -978,10 +1046,14 @@ class ScannerController(QObject):
                                 ch['codec'] = result['codec']
                             if result.get('bitrate'):
                                 ch['bitrate'] = result['bitrate']
-                        # 重新计算流质量评分
-                        score_info = StreamQualityScorer.score_from_channel(ch)
-                        ch['quality_score'] = score_info.get('total', 0)
-                        ch['quality_grade'] = score_info.get('grade', 'F')
+                        # 重新计算流质量评分（仅确证有效的频道才有意义）
+                        if validity == VALID:
+                            score_info = StreamQualityScorer.score_from_channel(ch)
+                            ch['quality_score'] = score_info.get('total', 0)
+                            ch['quality_grade'] = score_info.get('grade', 'F')
+                        else:
+                            ch.pop('quality_score', None)
+                            ch.pop('quality_grade', None)
                         break
             self.model.endResetModel()
 
@@ -1056,6 +1128,7 @@ class ScannerController(QObject):
                 self.logger.info(
                     f"验证完成: 总数={self.stats['total']}, "
                     f"有效={self.stats['valid']}, "
+                    f"疑似={self.stats['suspected']}, "
                     f"无效={self.stats['invalid']}"
                 )
                 if self.main_window and hasattr(self.main_window, '_on_validation_completed'):
@@ -1074,6 +1147,7 @@ class ScannerController(QObject):
                 self.logger.info(
                     f"扫描完成: 总数={self.stats['total']}, "
                     f"有效={self.stats['valid']}, "
+                    f"疑似={self.stats['suspected']}, "
                     f"无效={self.stats['invalid']}"
                 )
 

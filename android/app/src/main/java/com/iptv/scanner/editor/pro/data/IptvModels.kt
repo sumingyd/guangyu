@@ -56,8 +56,10 @@ data class IptvChannel(
      */
     @SerialName("fcc") val fcc: String = "",
     @SerialName("resolution") val resolution: String = "",
-    /** valid: True=有效, False=无效, null=未检测 */
+    /** valid: True=有效, False=无效, null=未检测（老缓存只有该字段） */
     @SerialName("valid") val valid: Boolean? = null,
+    /** 三档有效性：valid / suspected / invalid；为空时回退到 valid 的布尔含义 */
+    @SerialName("validity") val validity: String? = null,
     @SerialName("status") val status: String = "待检测",
     /** 频道来源：空=手动添加/本地频道，非空=订阅源 URL */
     @SerialName("source") val source: String = "",
@@ -175,6 +177,8 @@ data class ScanStatus(
     @SerialName("running") val running: Boolean = false,
     @SerialName("total") val total: Int = 0,
     @SerialName("valid") val valid: Int = 0,
+    /** 疑似：能连上但没解析出流，或只做了弱检查 */
+    @SerialName("suspected") val suspected: Int = 0,
     @SerialName("invalid") val invalid: Int = 0,
     @SerialName("scanned") val scanned: Int = 0,
     @SerialName("message") val message: String = "",
@@ -187,10 +191,21 @@ data class ScanResult(
     @SerialName("url") val url: String = "",
     @SerialName("name") val name: String = "",
     @SerialName("valid") val valid: Boolean = false,
+    /** 三档有效性：valid / suspected / invalid */
+    @SerialName("validity") val validity: String = "",
     @SerialName("status") val status: String = "",
     @SerialName("latency") val latency: Int = 0,
     @SerialName("group") val group: String = "",
-)
+) {
+    val isConfirmed: Boolean
+        get() = validity == "valid" || (validity.isEmpty() && valid)
+
+    val isSuspected: Boolean
+        get() = validity == "suspected"
+
+    val isUsable: Boolean
+        get() = isConfirmed || isSuspected
+}
 
 // -----------------------------------------------------------------
 // 节目提醒（与 PC 端 services/epg_reminder_service.py 对齐）

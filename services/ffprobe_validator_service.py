@@ -6,6 +6,12 @@ import time
 from typing import Dict
 from core.log_manager import global_logger
 from utils.platform_utils import get_ffprobe_path as _find_ffprobe_path, get_subprocess_creation_flags
+from services.network_context import (
+    PROBESIZE_BYTES,
+    NetworkContext,
+    build_network_context,
+)
+from services.validity_tiers import INVALID, SUSPECTED, VALID
 
 
 def _get_ffprobe_path():
@@ -51,6 +57,7 @@ class FfprobeStreamValidator:
         result = {
             'url': url,
             'valid': False,
+            'validity': INVALID,
             'latency': None,
             'error': None,
             'error_type': None,
@@ -59,6 +66,7 @@ class FfprobeStreamValidator:
             'codec': None,
             'bitrate': None,
             'hdr_type': None,
+            'skipped': False,
         }
 
         ffprobe_path = self._get_ffprobe_path()
@@ -84,17 +92,25 @@ class FfprobeStreamValidator:
                 break
 
         if not acquired:
-            result['error'] = '并发数超限'
+            # 并发槽位不足不代表频道无效：交给扫描器本轮跳过、下一轮再测
+            result['error'] = '并发数超限（本轮跳过）'
             result['error_type'] = 'concurrency_limit'
+            result['skipped'] = True
             return result
 
         try:
-            cmd = self._build_ffprobe_command(ffprobe_path, url, timeout)
+            ctx = build_network_context(
+                connect_timeout=timeout,
+                user_agent=self.get_user_agent(),
+                referer=self.get_referer(),
+            )
+            cmd = self._build_ffprobe_command(ffprobe_path, url, ctx)
             url_lower = url.lower()
             if url_lower.startswith('rtp://') or url_lower.startswith('udp://'):
-                max_wait = max(timeout, 30) + 15
+                # 组播沿用 30 秒分析下限
+                max_wait = max(ctx.analyze_timeout, 30) + 15
             else:
-                max_wait = timeout + 10
+                max_wait = ctx.connect_timeout + ctx.analyze_timeout + 5
             start_time = time.time()
 
             creation_flags = get_subprocess_creation_flags()
@@ -115,7 +131,7 @@ class FfprobeStreamValidator:
                             proc.kill()
                             proc.wait(timeout=1)
                         except Exception as e:
-                            logger.debug(f"validate_stream: {e}")
+                            global_logger.debug(f"validate_stream: {e}")
                         result['error'] = '验证器正在关闭'
                         result['error_type'] = 'terminating'
                         return result
@@ -125,7 +141,7 @@ class FfprobeStreamValidator:
                             proc.kill()
                             proc.wait(timeout=1)
                         except Exception as e:
-                            logger.debug(f"validate_stream: {e}")
+                            global_logger.debug(f"validate_stream: {e}")
                         latency = int(elapsed * 1000)
                         result['latency'] = latency
                         result['error'] = f'超时({timeout}秒)'
@@ -154,7 +170,7 @@ class FfprobeStreamValidator:
                 proc.stdout.close()
                 proc.stderr.close()
             except Exception as e:
-                logger.debug(f"validate_stream: {e}")
+                global_logger.debug(f"validate_stream: {e}")
 
             stderr_output = stderr_data.decode('utf-8', errors='ignore').strip()
 
@@ -163,6 +179,7 @@ class FfprobeStreamValidator:
                 streams = probe_data.get('streams', [])
                 if streams:
                     result['valid'] = True
+                    result['validity'] = VALID
 
                     video_stream = None
                     audio_stream = None
@@ -203,25 +220,18 @@ class FfprobeStreamValidator:
                     return result
 
             if proc.returncode != 0:
-                if 'Server returned 404' in stderr_output or '404 Not Found' in stderr_output:
-                    result['error'] = '服务器返回404'
-                    result['error_type'] = 'http_404'
-                elif 'Connection refused' in stderr_output:
-                    result['error'] = '连接被拒绝'
-                    result['error_type'] = 'connection_refused'
-                elif 'Connection timed out' in stderr_output or 'timed out' in stderr_output.lower():
-                    result['error'] = '连接超时'
-                    result['error_type'] = 'timeout'
-                elif 'No such file' in stderr_output or 'not found' in stderr_output.lower():
-                    result['error'] = '资源未找到'
-                    result['error_type'] = 'not_found'
-                else:
-                    result['error'] = f'探测失败(返回码:{proc.returncode})'
-                    result['error_type'] = 'probe_failed'
+                error_type, error_msg, tier = self._classify_ffprobe_error(
+                    stderr_output, proc.returncode
+                )
+                result['error'] = error_msg
+                result['error_type'] = error_type
+                result['validity'] = tier
                 return result
 
+            # ffprobe 正常退出但没有解析出任何流：能连上但没拿到流，按疑似处理
             result['error'] = '无媒体流'
             result['error_type'] = 'no_streams'
+            result['validity'] = SUSPECTED
 
         except Exception as e:
             global_logger.debug(f"ffprobe 验证未知异常: {e}")
@@ -240,84 +250,101 @@ class FfprobeStreamValidator:
 
         return result
 
-    def _build_ffprobe_command(self, ffprobe_path: str, url: str, timeout: int) -> list:
+    def _build_ffprobe_command(
+        self, ffprobe_path: str, url: str, ctx: NetworkContext
+    ) -> list:
+        """按统一网络上下文构造 ffprobe 命令。
+
+        - 连接超时沿用扫描设置；analyzeduration 单独给 10–15 秒
+        - probesize 提到 10MB，组播沿用 30 秒分析下限
+        - ``-v error`` 让错误分类能真正读到 stderr
+        - HTTP(S) 走配置代理、TLS 跟随用户设置，并开启有限重连
+        """
         u = url.lower()
         is_multicast = u.startswith('rtp://') or u.startswith('udp://')
+        is_http = u.startswith('http://') or u.startswith('https://')
+        connect_us = ctx.connect_timeout * 1_000_000
+        analyze_secs = max(ctx.analyze_timeout, 30) if is_multicast else ctx.analyze_timeout
 
         cmd = [
             ffprobe_path,
-            '-v', 'quiet',
+            '-v', 'error',
             '-print_format', 'json',
             '-show_format',
             '-show_streams',
+            '-analyzeduration', str(analyze_secs * 1_000_000),
+            '-probesize', str(PROBESIZE_BYTES),
+            '-rw_timeout', str(connect_us),
         ]
 
-        if is_multicast:
+        if is_http:
             cmd.extend([
-                '-analyzeduration', str(max(timeout, 30) * 1000000),
-                '-probesize', '10485760',
+                '-timeout', str(connect_us),
+                '-reconnect', '1',
+                '-reconnect_streamed', '1',
+                '-reconnect_delay_max', '2',
             ])
-        else:
-            cmd.extend([
-                '-analyzeduration', str(timeout * 1000000),
-                '-probesize', '5242880',
-                '-timeout', str(timeout * 1000000),
-            ])
-
+            if ctx.proxy:
+                cmd.extend(['-http_proxy', ctx.proxy])
+            if ctx.tls_verify:
+                # ffprobe 默认不校验证书，仅在用户开启校验时显式打开
+                cmd.extend(['-tls_verify', '1'])
 
         if u.startswith('rtsp://'):
             rtsp_transport = 'tcp'
             try:
                 from core.config_manager import ConfigManager
-                cfg = ConfigManager()
-                playback = cfg.load_playback_settings()
+                playback = ConfigManager().load_playback_settings()
                 rtsp_transport = playback.get('rtsp_transport', 'tcp')
             except Exception as e:
-                logger.debug(f"_build_ffprobe_command: {e}")
+                global_logger.debug(f"_build_ffprobe_command: {e}")
             cmd.extend(['-rtsp_transport', rtsp_transport])
 
         if u.startswith('udp://') or u.startswith('rtp://'):
             cmd.extend(['-f', 'mpegts'])
 
-        if u.endswith('.ts') and not (u.startswith('http://') or u.startswith('https://')):
+        if u.endswith('.ts') and not is_http:
             cmd.extend(['-f', 'mpegts'])
 
-        user_agent = self.get_user_agent()
-        if not user_agent:
-            try:
-                from core.config_manager import ConfigManager
-                playback = ConfigManager().load_playback_settings()
-                user_agent = playback.get('user_agent', '')
-            except Exception as e:
-                logger.debug(f"_build_ffprobe_command: {e}")
-
-        headers_parts = []
-        if user_agent:
-            headers_parts.append(f'User-Agent: {user_agent}')
-
-        referer = self.get_referer()
-        if not referer:
-            try:
-                from core.config_manager import ConfigManager
-                playback = ConfigManager().load_playback_settings()
-                http_headers = playback.get('http_headers', '')
-                if http_headers:
-                    for line in http_headers.replace('\r\n', '\n').split('\n'):
-                        line = line.strip()
-                        if line and 'eferer' in line:
-                            referer = line.split(':', 1)[1].strip() if ':' in line else ''
-                            break
-            except Exception as e:
-                logger.debug(f"_build_ffprobe_command: {e}")
-
-        if referer:
-            headers_parts.append(f'Referer: {referer}')
-
-        if headers_parts:
-            cmd.extend(['-headers', '\r\n'.join(headers_parts)])
+        header_lines = ctx.header_lines()
+        if header_lines:
+            cmd.extend(['-headers', '\r\n'.join(header_lines)])
 
         cmd.append(url)
         return cmd
+
+    @staticmethod
+    def _classify_ffprobe_error(stderr: str, returncode: int) -> tuple[str, str, str]:
+        """把 ffprobe stderr 归类成 (error_type, 用户文案, 三档结果)。
+
+        明确的 4xx / 拒连 / 域名解析失败判不可用；
+        其余连上了但读不出内容（无效数据、超时重试后的探测失败）判疑似。
+        """
+        text = (stderr or '')
+        low = text.lower()
+
+        if 'server returned 404' in low or '404 not found' in low:
+            return 'http_404', '服务器返回404', INVALID
+        if 'server returned 403' in low or '403 forbidden' in low:
+            return 'http_403', '服务器返回403', INVALID
+        if 'server returned 401' in low or '401 unauthorized' in low:
+            return 'http_401', '服务器返回401', INVALID
+        if 'connection refused' in low:
+            return 'connection_refused', '连接被拒绝', INVALID
+        if 'certificate' in low or 'ssl' in low or 'tls' in low or 'handshake' in low:
+            return 'tls_error', 'TLS 握手/证书错误', INVALID
+        # 媒体数据不完整先于通用 not found 判断，避免 moov atom not found 被误判 404
+        if 'moov atom not found' in low or 'end of file' in low:
+            return 'probe_failed', '媒体数据不完整', SUSPECTED
+        if 'no such file' in low or 'not found' in low or 'could not resolve host' in low \
+                or 'name or service not known' in low:
+            return 'not_found', '资源未找到', INVALID
+        if 'timed out' in low or 'operation timed out' in low:
+            return 'timeout', '连接超时', INVALID
+        if 'invalid data found' in low or 'could not find codec parameters' in low:
+            return 'probe_failed', '返回内容不是可识别的媒体流', SUSPECTED
+
+        return 'probe_failed', f'探测失败(返回码:{returncode})', SUSPECTED
 
     @staticmethod
     def _extract_hdr_type(video_stream: dict, frames: list) -> str:
@@ -331,14 +358,27 @@ class FfprobeStreamValidator:
             frames: ffprobe -show_frames 输出的帧列表
         """
         codec_name = (video_stream.get('codec_name') or '').lower()
+        codec_tag = (video_stream.get('codec_tag_string') or '').lower()
         color_transfer = (video_stream.get('color_transfer') or '').lower()
         color_space = (video_stream.get('color_space') or '').lower()
         color_primaries = (video_stream.get('color_primaries') or '').lower()
 
-        # 杜比视界检测：编解码器标记
-        has_dovi = ('dovi' in codec_name or 'dolbyvision' in codec_name or
-                    'dvhe' in codec_name or 'dvh1' in codec_name or
-                    'dav1' in codec_name or 'dvc' in codec_name)
+        # 杜比视界检测：优先用可靠信号
+        # 1) stream 级 side_data 里的 DOVI configuration record
+        # 2) codec_tag_string（dvh1/dvhe/dav1 等容器标记）
+        # 3) codec_name 兜底（少数封装会把编码名写成 dvhe）
+        has_dovi = False
+        for sd in (video_stream.get('side_data_list') or []):
+            sd_type = (sd.get('side_data_type') or '').lower()
+            if 'dovi' in sd_type or 'dolby vision' in sd_type:
+                has_dovi = True
+                break
+        if not has_dovi and codec_tag in ('dvhe', 'dvh1', 'dav1', 'dva1', 'dvav', 'davc'):
+            has_dovi = True
+        if not has_dovi:
+            has_dovi = ('dovi' in codec_name or 'dolbyvision' in codec_name or
+                        'dvhe' in codec_name or 'dvh1' in codec_name or
+                        'dav1' in codec_name or 'dvc' in codec_name)
 
         # PQ 传输特性 (SMPTE ST 2084)
         is_pq = 'smpte2084' in color_transfer or 'pq' in color_transfer
@@ -427,7 +467,7 @@ class FfprobeStreamValidator:
                         proc.kill()
                         proc.wait(timeout=1)
                     except Exception as e:
-                        logger.debug(f"terminate_all: {e}")
+                        global_logger.debug(f"terminate_all: {e}")
             cls._active_processes.clear()
 
     @classmethod
@@ -443,7 +483,7 @@ class FfprobeStreamValidator:
                         proc.kill()
                         proc.wait(timeout=1)
                     except Exception as e:
-                        logger.debug(f"destroy_all_handles: {e}")
+                        global_logger.debug(f"destroy_all_handles: {e}")
             cls._active_processes.clear()
 
     @classmethod

@@ -860,11 +860,13 @@ body {{ background:#1a1a2e; color:#E0E0E0;
 async def handle_status(request):
     server = get_server()
     channels = _get_all_channels()
+    from services.validity_tiers import INVALID, SUSPECTED, VALID, channel_tier
     total = len(channels)
-    valid = sum(1 for ch in channels if ch.get('valid') is True)
-    # 未校验（valid 字段缺失/None）不能算成无效，否则会出现 valid=0 / invalid=277
-    invalid = sum(1 for ch in channels if ch.get('valid') is False)
-    unknown = total - valid - invalid
+    valid = sum(1 for ch in channels if channel_tier(ch) == VALID)
+    suspected = sum(1 for ch in channels if channel_tier(ch) == SUSPECTED)
+    invalid = sum(1 for ch in channels if channel_tier(ch) == INVALID)
+    # 未校验（valid 字段缺失/None 且无 validity）不能算成无效
+    unknown = total - valid - suspected - invalid
     config = get_config()
     port = 8080
     if config:
@@ -878,7 +880,8 @@ async def handle_status(request):
         host=server.host if server else '0.0.0.0',
         port=server.port if server else port,
         uptime=server.get_uptime() if server else 0,
-        channels={'total': total, 'valid': valid, 'invalid': invalid, 'unknown': unknown}
+        channels={'total': total, 'valid': valid, 'suspected': suspected,
+                  'invalid': invalid, 'unknown': unknown}
     )
 
 
@@ -889,9 +892,10 @@ async def handle_m3u(request):
     group_filter = request.match_info.get('group', None)
     valid_only = request.rel_url.query.get('valid', '0') == '1'
     search = request.rel_url.query.get('search', '').strip().lower()
+    from services.validity_tiers import VALID, channel_tier
     lines = ['#EXTM3U']
     for ch in channels:
-        if valid_only and ch.get('valid') is not True:
+        if valid_only and channel_tier(ch) != VALID:
             continue
         group = ch.get('group', '')
         if group_filter and group != group_filter:
@@ -947,11 +951,12 @@ async def handle_channels_list(request):
         source_filter = request.rel_url.query.get('source', '').strip()
         page = max(1, int(request.rel_url.query.get('page', '1')))
         page_size = min(500, max(1, int(request.rel_url.query.get('size', '100'))))
+        from services.validity_tiers import INVALID, VALID, channel_tier
         channels = []
         for i, ch in enumerate(all_channels):
-            if valid_only == '1' and ch.get('valid') is not True:
+            if valid_only == '1' and channel_tier(ch) != VALID:
                 continue
-            if valid_only == '0' and ch.get('valid') is False:
+            if valid_only == '0' and channel_tier(ch) == INVALID:
                 continue
             if group and ch.get('group', '') != group:
                 continue
@@ -1590,12 +1595,14 @@ async def handle_scan_status(request):
             running=status.get('running', False),
             total=status.get('total', 0),
             valid=status.get('valid', 0),
+            suspected=status.get('suspected', 0),
             invalid=status.get('invalid', 0),
             scanned=status.get('scanned', 0),
             message=status.get('message', ''),
             stats={
                 'total': status.get('total', 0),
                 'valid': status.get('valid', 0),
+                'suspected': status.get('suspected', 0),
                 'invalid': status.get('invalid', 0),
                 'scanned': status.get('scanned', 0),
             }
@@ -1673,8 +1680,9 @@ async def handle_scan_results(request):
 async def handle_scan_validate(request):
     """验证所有频道的 URL 可达性
 
-    body: {timeout?, threads?}
-    更新频道的 valid/status 字段并持久化。
+    body: {timeout?, threads?, engine?}
+    engine: 'auto'（默认，libmpv 可用时真实拉流）/ 'mpv' / 'fast'
+    更新频道的 valid/validity/status 字段并持久化。
     """
     ctx = get_context()
     if not ctx:
@@ -1693,7 +1701,10 @@ async def handle_scan_validate(request):
         pass
     timeout = max(1, min(int(data.get('timeout', 10) or 10), 60))
     threads = max(1, min(int(data.get('threads', 4) or 4), 32))
-    if scanner.start_validate(timeout, threads):
+    engine = str(data.get('engine', 'auto') or 'auto').lower()
+    if engine not in ('auto', 'fast', 'mpv'):
+        engine = 'auto'
+    if scanner.start_validate(timeout, threads, engine):
         return _json_success(message='频道验证已开始')
     return _json_error('启动验证失败', 500)
 

@@ -370,8 +370,13 @@ class IptvRepository private constructor() {
         callPyTyped("get_scan_results_json")
 
     /** 启动频道网络验证 */
-    suspend fun startValidate(timeout: Int = 10, threads: Int = 4): Result<Boolean> =
-        callPyTyped<StartedResponse>("start_validate", timeout, threads).map { it.started }
+    suspend fun startValidate(
+        timeout: Int = 10,
+        threads: Int = 4,
+        engine: String = "auto"
+    ): Result<Boolean> =
+        callPyTyped<StartedResponse>("start_validate", timeout, threads, engine)
+            .map { it.started }
 
     // -----------------------------------------------------------------
     // 频道映射

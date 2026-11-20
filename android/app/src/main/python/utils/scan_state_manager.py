@@ -151,6 +151,10 @@ class ScanStateManager(Singleton):
             'mpv_create_failed',
             'stream_ended',
             'scan_exception',
+            # 能连上但没解析出流 / 探测失败：换一轮更可能拿到结果
+            'no_streams',
+            'probe_failed',
+            'unknown_error',
         }
 
         if error_type in retry_error_types:

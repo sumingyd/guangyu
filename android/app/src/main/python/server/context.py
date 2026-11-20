@@ -53,7 +53,8 @@ class StandaloneScanner:
                 return False
             self.running = True
             self._stop_event.clear()
-            self.stats = {'total': 0, 'valid': 0, 'invalid': 0, 'scanned': 0}
+            self.stats = {'total': 0, 'valid': 0, 'suspected': 0,
+                          'invalid': 0, 'scanned': 0}
             self._scan_mode = 'subscription'
         self._thread = threading.Thread(target=self._scan_worker, args=(url,), daemon=True)
         self._thread.start()
@@ -85,13 +86,49 @@ class StandaloneScanner:
                 return False
             self.running = True
             self._stop_event.clear()
-            self.stats = {'total': 0, 'valid': 0, 'invalid': 0, 'scanned': 0}
+            self.stats = {'total': 0, 'valid': 0, 'suspected': 0,
+                          'invalid': 0, 'scanned': 0}
             self._scan_mode = 'range'
         self._thread = threading.Thread(
             target=self._range_scan_worker, args=(base_url, timeout, threads, engine, retry, append), daemon=True
         )
         self._thread.start()
         return True
+
+    def _make_probe(self, engine: str, timeout: int, threads: int):
+        """按引擎返回单 URL 探测函数。
+
+        - requests/fast：HTTP 状态码 + 内容嗅探（弱检查）
+        - mpv：使用包里已有的 libmpv 真实拉流（并发压到 2–4）
+        - ffprobe：独立模式通常没有 ffprobe，自动回退到快速探测
+        """
+        engine = (engine or 'requests').lower()
+        if engine == 'mpv':
+            # libmpv 句柄较重，并发压到 2–4，避免创建失败与长时间排队
+            threads = max(2, min(threads, 4))
+            try:
+                from services.mpv_validator_service import (
+                    MpvStreamValidator, _is_mpv_available,
+                )
+                if _is_mpv_available():
+                    MpvStreamValidator.set_max_concurrent(max(2, min(threads, 4)))
+                    MpvStreamValidator.reset_terminating()
+                    validator = MpvStreamValidator()
+                    return lambda u: validator.validate_stream(u, timeout=timeout)
+            except Exception as exc:
+                logger.warning(f"独立模式 mpv 验证器不可用，回退快速探测: {exc}")
+        elif engine == 'ffprobe':
+            try:
+                from services.ffprobe_validator_service import FfprobeStreamValidator
+                FfprobeStreamValidator.set_max_concurrent(max(2, min(threads, 4)))
+                FfprobeStreamValidator.reset_terminating()
+                validator = FfprobeStreamValidator()
+                return lambda u: validator.validate_stream(u, timeout=timeout)
+            except Exception as exc:
+                logger.debug(f"独立模式 ffprobe 不可用，回退快速探测: {exc}")
+
+        from services.fast_probe_service import probe_stream
+        return lambda u: probe_stream(u, timeout=timeout)
 
     def _range_scan_worker(
         self, base_url: str, timeout: int, threads: int,
@@ -121,142 +158,40 @@ class StandaloneScanner:
             logger.info(f"URL 范围扫描：共 {len(all_urls)} 个 URL")
 
             from concurrent.futures import ThreadPoolExecutor, as_completed
-            from utils.http_session import get as _http_get
-            import socket
-            from urllib.parse import urlparse
+            from services.validity_tiers import (
+                INVALID, STATUS_TEXT, SUSPECTED, VALID,
+            )
             found_channels: List[Dict] = []
-            scan_results: List[Dict] = []  # 完整扫描结果列表（含有效/无效）
+            scan_results: List[Dict] = []  # 完整扫描结果列表（含有效/疑似/无效）
             scanned_count = 0
             valid_count = 0
+            suspected_count = 0
             invalid_count = 0
+            if (engine or '').lower() == 'mpv':
+                # 与 _make_probe 的信号量保持一致，避免大量线程空等 30 秒
+                threads = max(2, min(threads, 4))
+            probe = self._make_probe(engine, timeout, threads)
 
             def _check_one(u: str):
-                """验证单个 URL，返回 (url, valid, status, latency_ms, channel_or_none)"""
+                """探测单个 URL，返回 (url, result, channel_or_none)"""
                 if self._stop_event.is_set():
-                    return (u, False, '已取消', 0, None)
-                low = u.lower()
-                name = u.split('/')[-1] or u.split('://')[-1] or u
-                t0 = time.time()
-                # HTTP/HTTPS：用 GET stream 验证可达性（HEAD 很多 IPTV 服务器不支持）
-                if low.startswith('http://') or low.startswith('https://'):
-                    try:
-                        # GET + Range（只读前 2KB，避免下载整个流）
-                        r = _http_get(u, timeout=timeout, allow_redirects=True,
-                                          headers={'User-Agent': APP_USER_AGENT,
-                                                   'Range': 'bytes=0-2047'},
-                                          stream=True)
-                        latency = int((time.time() - t0) * 1000)
-                        status_code = r.status_code
-                        # 2xx / 3xx / 206（Partial Content）视为可达
-                        if status_code < 400:
-                            # 读取前 2KB 检查是否为有效媒体内容
-                            content_type = r.headers.get('Content-Type', '').lower()
-                            chunk = b''
-                            try:
-                                chunk = next(r.iter_content(2048), b'') or b''
-                            except Exception:
-                                pass
-                            try:
-                                r.close()
-                            except Exception:
-                                pass
-                            # 判断内容类型
-                            is_media = False
-                            media_kind = ''
-                            # 1. Content-Type 为媒体类型
-                            if any(t in content_type for t in
-                                   ('video/', 'audio/', 'mpegurl', 'm3u', 'octet-stream', 'mp2t')):
-                                is_media = True
-                                media_kind = content_type.split(';')[0].strip()
-                            # 2. M3U/M3U8 文本特征
-                            elif chunk[:7] == b'#EXTM3U' or b'#EXT-X' in chunk[:2048]:
-                                is_media = True
-                                media_kind = 'm3u/m3u8'
-                            # 3. MPEG-TS 同步字节 0x47（每 188 字节一个）
-                            elif len(chunk) >= 188 and chunk[0] == 0x47:
-                                is_media = True
-                                media_kind = 'mpeg-ts'
-                            # 4. 任意 2xx 响应都视为可达（保守策略，避免漏报）
-                            else:
-                                is_media = True
-                                media_kind = f'HTTP {status_code}'
-                            if is_media:
-                                ch = {'name': name, 'url': u, 'group': '扫描结果', 'logo': '',
-                                      'tvg_id': '', 'tvg_name': name, 'valid': True}
-                                return (u, True, media_kind, latency, ch)
-                            return (u, False, f'HTTP {status_code} 非媒体', latency, None)
-                        return (u, False, f'HTTP {status_code}', latency, None)
-                    except Exception as e:
-                        latency = int((time.time() - t0) * 1000)
-                        logger.debug(f"扫描频道失败 {redact_url(u)}: {e}")
-                        return (u, False, f'错误: {str(e)[:60]}', latency, None)
-                # RTSP：用 TCP socket 连接检查
-                if low.startswith('rtsp://'):
-                    try:
-                        parsed = urlparse(u)
-                        host = parsed.hostname or ''
-                        port = parsed.port or 554
-                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        try:
-                            sock.settimeout(timeout)
-                            sock.connect((host, port))
-                            latency = int((time.time() - t0) * 1000)
-                            ch = {'name': name, 'url': u, 'group': '扫描结果', 'logo': '',
-                                  'tvg_id': '', 'tvg_name': name, 'valid': True}
-                            return (u, True, 'RTSP 可达', latency, ch)
-                        finally:
-                            sock.close()
-                    except Exception as e:
-                        latency = int((time.time() - t0) * 1000)
-                        return (u, False, f'RTSP: {str(e)[:40]}', latency, None)
-                # RTP/UDP：尝试加入组播组并接收数据包验证可达性
-                # 与 PC 端 ffprobe 验证效果类似：能收到数据则视为有效
-                if low.startswith('rtp://') or low.startswith('udp://'):
-                    try:
-                        parsed = urlparse(u)
-                        host = parsed.hostname or ''
-                        port = parsed.port or 5004
-                        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                        # 短超时：扫描时使用 timeout/2（最多 5 秒），避免长时间阻塞
-                        sock_timeout = min(max(timeout // 2, 1), 5) if timeout else 3
-                        sock.settimeout(sock_timeout)
-                        try:
-                            # 组播地址（224.0.0.0 - 239.255.255.255）需要 join 才能接收
-                            parts = host.split('.')
-                            try:
-                                is_multicast = (len(parts) == 4
-                                                and 224 <= int(parts[0]) <= 239
-                                                and all(0 <= int(p) <= 255 for p in parts))
-                            except ValueError:
-                                is_multicast = False
-                            if is_multicast:
-                                # IP_ADD_MEMBERSHIP：加入组播组
-                                mreq = socket.inet_aton(host) + socket.inet_aton('0.0.0.0')
-                                sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
-                            # 绑定到组播端口（监听任意来源）
-                            sock.bind(('', port))
-                            # 尝试接收第一个数据包
-                            data, addr = sock.recvfrom(2048)
-                            latency = int((time.time() - t0) * 1000)
-                            ch = {'name': name, 'url': u, 'group': '扫描结果', 'logo': '',
-                                  'tvg_id': '', 'tvg_name': name, 'valid': True}
-                            return (u, True, f'收到数据 {len(data)}B', latency, ch)
-                        finally:
-                            try:
-                                sock.close()
-                            except Exception:
-                                pass
-                    except socket.timeout:
-                        latency = int((time.time() - t0) * 1000)
-                        # 超时未收到数据：不添加为频道（避免生成大量无效频道）
-                        return (u, False, '超时无数据', latency, None)
-                    except OSError as e:
-                        latency = int((time.time() - t0) * 1000)
-                        # 组播 join 失败/权限不足等：标记无效但不影响其他扫描
-                        return (u, False, f'无法验证: {str(e)[:40]}', latency, None)
-                # 其他协议：标记为不支持
-                return (u, False, '不支持的协议', 0, None)
+                    return (u, {'url': u, 'valid': False, 'validity': INVALID,
+                                'status': '已取消', 'latency': 0}, None)
+                result = probe(u)
+                tier = result.get('validity') or (
+                    VALID if result.get('valid') is True else INVALID)
+                if result.get('skipped'):
+                    return (u, result, None)
+                channel = None
+                if tier in (VALID, SUSPECTED):
+                    name = u.split('/')[-1] or u.split('://')[-1] or u
+                    channel = {
+                        'name': name, 'url': u, 'group': '扫描结果', 'logo': '',
+                        'tvg_id': '', 'tvg_name': name,
+                        'valid': tier == VALID, 'validity': tier,
+                        'status': result.get('status') or STATUS_TEXT[tier],
+                    }
+                return (u, result, channel)
 
             with ThreadPoolExecutor(max_workers=max(1, min(threads, 64))) as pool:
                 futures = {pool.submit(_check_one, u): u for u in all_urls}
@@ -265,78 +200,99 @@ class StandaloneScanner:
                         break
                     scanned_count += 1
                     try:
-                        url, valid, status, latency, ch = fut.result()
-                        # 记录扫描结果（用于前端列表显示）
+                        url, result, ch = fut.result()
+                        tier = result.get('validity') or INVALID
                         result_item = {
-                            'url': url, 'name': ch['name'] if ch else url.split('/')[-1],
-                            'valid': valid, 'status': status, 'latency': latency,
-                            'group': '扫描结果'
+                            'url': url,
+                            'name': (ch or {}).get('name') or url.split('/')[-1],
+                            'valid': tier == VALID,
+                            'validity': tier,
+                            'status': result.get('status', ''),
+                            'latency': result.get('latency', 0),
+                            'group': '扫描结果',
                         }
                         scan_results.append(result_item)
                         if ch:
                             found_channels.append(ch)
-                            if valid is True:
-                                valid_count += 1
+                        if tier == VALID:
+                            valid_count += 1
+                        elif tier == SUSPECTED:
+                            suspected_count += 1
                         else:
                             invalid_count += 1
                     except Exception as e:
                         scan_results.append({
                             'url': futures[fut], 'name': futures[fut].split('/')[-1],
-                            'valid': False, 'status': f'异常: {str(e)[:40]}', 'latency': 0,
+                            'valid': False, 'validity': INVALID,
+                            'status': f'异常: {str(e)[:40]}', 'latency': 0,
                             'group': '扫描结果'
                         })
                         invalid_count += 1
                     with self._lock:
                         self.stats['scanned'] = scanned_count
                         self.stats['valid'] = valid_count
+                        self.stats['suspected'] = suspected_count
                         self.stats['invalid'] = invalid_count
                         # 每 50 个结果或最后一批时才更新完整列表，避免 O(n²) 复制
                         if scanned_count % 50 == 0 or scanned_count == len(all_urls):
                             self._scan_results = list(scan_results)
                     if scanned_count % 10 == 0:
-                        self.last_message = f'已扫描 {scanned_count}/{len(all_urls)}（有效 {valid_count}）'
+                        self.last_message = (
+                            f'已扫描 {scanned_count}/{len(all_urls)}'
+                            f'（有效 {valid_count}，疑似 {suspected_count}）')
 
-            # 智能重试：对失败的 URL 用 2x 超时重新扫描（与 PC 端 _start_retry_scan 对齐）
+            # 智能重试：对不可用的 URL 用 2x 超时重新扫描（与 PC 端 _start_retry_scan 对齐）
             if retry and not self._stop_event.is_set():
-                failed_urls = [r['url'] for r in scan_results if not r.get('valid')]
+                failed_urls = [r['url'] for r in scan_results if r.get('validity') == INVALID]
                 if failed_urls:
                     retry_timeout = min(timeout * 2, 60)
+                    retry_probe = self._make_probe(engine, retry_timeout, threads)
                     self.last_message = f'智能重试：{len(failed_urls)} 个失败 URL（超时 {retry_timeout}s）'
                     logger.info(f"智能重试扫描：{len(failed_urls)} 个 URL，超时={retry_timeout}s")
-                    retry_found: List[Dict] = []
                     retry_scanned = 0
                     retry_valid = 0
                     with ThreadPoolExecutor(max_workers=max(1, min(threads, 64))) as pool:
-                        futures = {pool.submit(_check_one, u): u for u in failed_urls}
+                        futures = {pool.submit(retry_probe, u): u for u in failed_urls}
                         for fut in as_completed(futures):
                             if self._stop_event.is_set():
                                 break
                             retry_scanned += 1
                             try:
-                                url, valid, status, latency, ch = fut.result()
-                                if valid and ch:
-                                    # 重试成功：替换原结果
-                                    retry_found.append(ch)
-                                    retry_valid += 1
-                                    # 更新原结果列表中对应条目
-                                    for i, r in enumerate(scan_results):
-                                        if r['url'] == url:
-                                            scan_results[i] = {
-                                                'url': url, 'name': ch['name'],
-                                                'valid': True, 'status': status + ' (重试)',
-                                                'latency': latency, 'group': '扫描结果'
-                                            }
-                                            break
-                                    found_channels.append(ch)
+                                url = futures[fut]
+                                result = fut.result()
+                                tier = result.get('validity') or INVALID
+                                if tier == INVALID or result.get('skipped'):
+                                    continue
+                                name = url.split('/')[-1] or url
+                                ch = {
+                                    'name': name, 'url': url, 'group': '扫描结果',
+                                    'logo': '', 'tvg_id': '', 'tvg_name': name,
+                                    'valid': tier == VALID, 'validity': tier,
+                                    'status': result.get('status') or STATUS_TEXT[tier],
+                                }
+                                found_channels.append(ch)
+                                for i, r in enumerate(scan_results):
+                                    if r['url'] == url:
+                                        scan_results[i] = {
+                                            'url': url, 'name': name,
+                                            'valid': tier == VALID, 'validity': tier,
+                                            'status': (result.get('status') or '') + ' (重试)',
+                                            'latency': result.get('latency', 0),
+                                            'group': '扫描结果'
+                                        }
+                                        break
+                                if tier == VALID:
                                     valid_count += 1
-                                    invalid_count -= 1
+                                    retry_valid += 1
                                 else:
-                                    pass  # 重试仍失败，保留原结果
+                                    suspected_count += 1
+                                invalid_count -= 1
                             except Exception:
                                 pass
                             with self._lock:
                                 self.stats['scanned'] = scanned_count + retry_scanned
                                 self.stats['valid'] = valid_count
+                                self.stats['suspected'] = suspected_count
                                 self.stats['invalid'] = invalid_count
                                 self._scan_results = list(scan_results)
                     logger.info(f"智能重试完成：新增 {retry_valid} 个有效频道")
@@ -378,36 +334,51 @@ class StandaloneScanner:
                 'running': self.running,
                 'total': self.stats.get('total', 0),
                 'valid': self.stats.get('valid', 0),
+                'suspected': self.stats.get('suspected', 0),
                 'invalid': self.stats.get('invalid', 0),
                 'scanned': self.stats.get('scanned', 0),
                 'message': self.last_message,
                 'mode': getattr(self, '_scan_mode', None),
             }
 
-    def start_validate(self, timeout: int = 10, threads: int = 4) -> bool:
+    def start_validate(self, timeout: int = 10, threads: int = 4,
+                       engine: str = 'auto') -> bool:
         """开始验证所有频道的 URL 可达性
 
-        与 PC 端 scanner_service.validate_channels 对齐：
-        - HTTP/HTTPS：GET + Range 检查
-        - RTSP：TCP socket 连接检查
-        - RTP/UDP：组播 join + 接收数据包
-        - 其他协议：跳过
-        更新频道的 valid/status 字段并持久化。
+        - engine='fast'  ：HTTP 状态码 + 内容嗅探（弱检查）
+        - engine='mpv'   ：用包里已有的 libmpv 真实拉流（并发 2–4）
+        - engine='auto'  ：libmpv 可用时真实拉流，否则快速探测
+
+        结果按三档写回频道（validity / valid / status）并持久化。
         """
         with self._lock:
             if self.running:
                 return False
             self.running = True
             self._stop_event.clear()
-            self.stats = {'total': 0, 'valid': 0, 'invalid': 0, 'scanned': 0}
+            self.stats = {'total': 0, 'valid': 0, 'suspected': 0,
+                          'invalid': 0, 'scanned': 0}
             self._scan_mode = 'validate'
         self._thread = threading.Thread(
-            target=self._validate_worker, args=(timeout, threads), daemon=True
+            target=self._validate_worker, args=(timeout, threads, engine), daemon=True
         )
         self._thread.start()
         return True
 
-    def _validate_worker(self, timeout: int, threads: int):
+    def _resolve_validate_engine(self, engine: str) -> str:
+        """把 auto 解析成实际引擎。"""
+        engine = (engine or 'auto').lower()
+        if engine != 'auto':
+            return engine
+        try:
+            from services.mpv_validator_service import _is_mpv_available
+            if _is_mpv_available():
+                return 'mpv'
+        except Exception:
+            pass
+        return 'fast'
+
+    def _validate_worker(self, timeout: int, threads: int, engine: str = 'auto'):
         """频道验证工作线程"""
         try:
             with self._ctx._channels_lock:
@@ -421,121 +392,97 @@ class StandaloneScanner:
             logger.info(f"频道验证：共 {len(channels)} 个频道")
 
             from concurrent.futures import ThreadPoolExecutor, as_completed
-            from utils.http_session import get as _http_get
-            import socket
-            from urllib.parse import urlparse
+            from services.validity_tiers import (
+                INVALID, STATUS_TEXT, SUSPECTED, VALID,
+            )
             scanned_count = 0
             valid_count = 0
+            suspected_count = 0
             invalid_count = 0
+            resolved_engine = self._resolve_validate_engine(engine)
+            if resolved_engine == 'mpv':
+                threads = max(2, min(threads, 4))
+            probe = self._make_probe(resolved_engine, timeout, threads)
+            logger.info(f"频道验证引擎: {resolved_engine}")
 
             def _validate_one(idx: int, url: str):
-                """验证单个频道 URL，返回 (idx, valid, status)"""
+                """验证单个频道 URL，返回 (idx, url, result)"""
                 if self._stop_event.is_set():
-                    return (idx, False, '已取消')
+                    return (idx, url, {'validity': None, 'status': '已取消'})
                 low = url.lower() if url else ''
                 if not low:
-                    return (idx, False, 'URL 为空')
-                if low.startswith('http://') or low.startswith('https://'):
-                    try:
-                        r = _http_get(url, timeout=timeout, allow_redirects=True,
-                                          headers={'User-Agent': APP_USER_AGENT,
-                                                   'Range': 'bytes=0-2047'},
-                                          stream=True)
-                        status_code = r.status_code
-                        if status_code < 400:
-                            try:
-                                r.close()
-                            except Exception:
-                                pass
-                            return (idx, True, f'HTTP {status_code}')
-                        try:
-                            r.close()
-                        except Exception:
-                            pass
-                        return (idx, False, f'HTTP {status_code}')
-                    except Exception as e:
-                        logger.debug(f"扫描频道失败 {redact_url(url)}: {e}")
-                        return (idx, False, f'错误: {str(e)[:50]}')
-                if low.startswith('rtsp://'):
-                    try:
-                        parsed = urlparse(url)
-                        host = parsed.hostname or ''
-                        port = parsed.port or 554
-                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        try:
-                            sock.settimeout(timeout)
-                            sock.connect((host, port))
-                            return (idx, True, 'RTSP 可达')
-                        finally:
-                            sock.close()
-                    except Exception as e:
-                        return (idx, False, f'RTSP: {str(e)[:40]}')
-                if low.startswith('rtp://') or low.startswith('udp://'):
-                    try:
-                        parsed = urlparse(url)
-                        host = parsed.hostname or ''
-                        port = parsed.port or 5004
-                        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                        sock.settimeout(min(max(timeout // 2, 1), 5))
-                        try:
-                            parts = host.split('.')
-                            is_multicast = (len(parts) == 4 and 224 <= int(parts[0]) <= 239)
-                            if is_multicast:
-                                mreq = socket.inet_aton(host) + socket.inet_aton('0.0.0.0')
-                                sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
-                            sock.bind(('', port))
-                            data, addr = sock.recvfrom(2048)
-                            return (idx, True, f'收到数据 {len(data)}B')
-                        finally:
-                            try:
-                                sock.close()
-                            except Exception:
-                                pass
-                    except socket.timeout:
-                        return (idx, False, '超时无数据')
-                    except OSError as e:
-                        return (idx, False, f'无法验证: {str(e)[:40]}')
-                # 其他协议（file:// 等）：跳过
-                return (idx, None, '跳过')
+                    return (idx, url, {'validity': INVALID, 'status': 'URL 为空'})
+                if not low.startswith(('http://', 'https://', 'rtsp://',
+                                       'rtp://', 'udp://')):
+                    return (idx, url, {'validity': None, 'status': '跳过'})
+                result = probe(url)
+                if result.get('skipped'):
+                    return (idx, url, result)
+                tier = result.get('validity') or (
+                    VALID if result.get('valid') is True else INVALID)
+                result['validity'] = tier
+                result['status'] = result.get('status') or STATUS_TEXT[tier]
+                return (idx, url, result)
 
             with ThreadPoolExecutor(max_workers=max(1, min(threads, 32))) as pool:
-                futures = {pool.submit(_validate_one, i, ch.get('url', '')): i for i, ch in enumerate(channels)}
+                futures = {
+                    pool.submit(_validate_one, i, ch.get('url', '')): i
+                    for i, ch in enumerate(channels)
+                }
                 for fut in as_completed(futures):
                     if self._stop_event.is_set():
                         break
                     scanned_count += 1
                     try:
-                        idx, valid, status = fut.result()
-                        if valid is True:
+                        idx, url, result = fut.result()
+                        tier = result.get('validity')
+                        if result.get('skipped'):
+                            # 并发槽位不足：保持原值，下一轮再测
+                            continue
+                        if tier is None:
+                            continue  # 不支持的协议，跳过不计数
+                        with self._ctx._channels_lock:
+                            for ch in self._ctx._channels:
+                                if ch.get('url') != url:
+                                    continue
+                                ch['validity'] = tier
+                                ch['valid'] = tier == VALID
+                                ch['status'] = result.get('status') or STATUS_TEXT[tier]
+                                if tier == VALID:
+                                    if result.get('latency') is not None:
+                                        ch['latency'] = result['latency']
+                                    for key in ('resolution', 'codec', 'bitrate'):
+                                        if result.get(key):
+                                            ch[key] = result[key]
+                                break
+                        if tier == VALID:
                             valid_count += 1
-                            with self._ctx._channels_lock:
-                                if 0 <= idx < len(self._ctx._channels):
-                                    self._ctx._channels[idx]['valid'] = True
-                                    self._ctx._channels[idx]['status'] = status
-                        elif valid is False:
+                        elif tier == SUSPECTED:
+                            suspected_count += 1
+                        else:
                             invalid_count += 1
-                            with self._ctx._channels_lock:
-                                if 0 <= idx < len(self._ctx._channels):
-                                    self._ctx._channels[idx]['valid'] = False
-                                    self._ctx._channels[idx]['status'] = status
-                        # valid is None: 跳过，不计数
                     except Exception:
                         invalid_count += 1
                     with self._lock:
                         self.stats['scanned'] = scanned_count
                         self.stats['valid'] = valid_count
+                        self.stats['suspected'] = suspected_count
                         self.stats['invalid'] = invalid_count
                     if scanned_count % 20 == 0:
-                        self.last_message = f'已验证 {scanned_count}/{len(channels)}（有效 {valid_count}）'
+                        self.last_message = (
+                            f'已验证 {scanned_count}/{len(channels)}'
+                            f'（有效 {valid_count}，疑似 {suspected_count}）')
 
             # 持久化验证结果
             self._ctx._save_channels_to_cache()
             self.last_message = (
-                f'验证完成：{valid_count} 有效 / {invalid_count} 无效 / '
-                f'{scanned_count - valid_count - invalid_count} 跳过'
+                f'验证完成：{valid_count} 有效 / {suspected_count} 疑似 / '
+                f'{invalid_count} 无效 / '
+                f'{scanned_count - valid_count - suspected_count - invalid_count} 跳过'
             )
-            logger.info(f"频道验证完成：{valid_count} 有效，{invalid_count} 无效")
+            logger.info(
+                f"频道验证完成：{valid_count} 有效，{suspected_count} 疑似，"
+                f"{invalid_count} 无效")
         except Exception as e:
             logger.error(f"频道验证异常: {e}")
             self.last_message = f'验证异常: {e}'
@@ -625,8 +572,11 @@ class StandaloneScanner:
                     with self._lock:
                         self.stats['scanned'] = idx + 1
 
-            # 更新 context 的频道列表
+            # 更新 context 的频道列表（保留已有检测结果）
             if all_channels and not self._stop_event.is_set():
+                with self._ctx._channels_lock:
+                    old_channels = list(self._ctx._channels)
+                all_channels = self._ctx._carry_over_channel_state(all_channels, old_channels)
                 with self._ctx._channels_lock:
                     self._ctx._channels = all_channels
                 self._ctx._last_load_time = time.time()
@@ -763,11 +713,19 @@ class ServerContext:
         except Exception as e:
             logger.warning(f"保存频道缓存失败: {e}")
 
+    def _carry_over_channel_state(self, new_channels: List[Dict],
+                                  old_channels: List[Dict]) -> List[Dict]:
+        """订阅源重载时按归一化 URL 保留已有检测结果与探测字段。"""
+        from services.channel_dedup_service import carry_over_channel_state
+        return carry_over_channel_state(new_channels, old_channels)
+
     def _load_channels_from_file(self):
         if not self._config:
             return
         try:
             sources = self._config.load_playlist_sources()
+            with self._channels_lock:
+                old_channels = list(self._channels)
             with self._sources_lock:
                 self._sources = sources
             all_channels = []
@@ -802,6 +760,7 @@ class ServerContext:
                         all_channels.extend(channels)
                 except Exception as e:
                     logger.warning(f"加载源 {url} 失败: {e}")
+            all_channels = self._carry_over_channel_state(all_channels, old_channels)
             # 网络加载到频道时更新内存+缓存；加载为空时保留已有频道（不覆盖）
             if all_channels:
                 # 合并而非覆盖：保留不在订阅源中的手动添加/本地频道（按 URL 去重）
@@ -973,10 +932,12 @@ class ServerContext:
             # 这样禁用/删除源后，其频道会被正确移除。
             cache_dirty = True
             with self._channels_lock:
+                old_channels = list(self._channels)
                 local_channels = [
                     c for c in self._channels
                     if not c.get('source', '')
                 ]
+                all_channels = self._carry_over_channel_state(all_channels, old_channels)
                 if all_channels:
                     # 去重：本地频道中 URL 与订阅频道重复的移除
                     sub_urls = {c.get('url', '') for c in all_channels if c.get('url', '')}
