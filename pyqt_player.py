@@ -869,7 +869,8 @@ class IPTVPlayer(
         self.video_frame.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.video_frame.customContextMenuRequested.connect(self.media_ctrl.show_video_context_menu)
 
-        # 创建默认背景（空闲态银河壁纸 + 软件图标）
+        # 创建默认背景（未播放时的待机画面：主题化画布 + 图标 + 应用名）
+        # 默认是极慢呼吸形态；想要完全静态的画面，给 WallpaperWidget 传 variant='quiet'
         from utils.general_utils import get_icon_path
         from ui.wallpaper_widget import WallpaperWidget
         ico_path = get_icon_path()
@@ -1099,11 +1100,12 @@ class IPTVPlayer(
             # 歌词滚动：按需创建，使用惰性解析
             ctrl.register_lazy('lyrics', self._resolve_lyrics_timer, policy=POLICY_STOP)
 
-            # 银河壁纸：空闲屏的装饰动画，降到 4fps 保活而不是完全冻住
+            # 待机画面：静态形态没有定时器（此处自动跳过）；呼吸形态 8fps，
+            # 空闲时降到 2fps 保活，避免没人看时还在耗 CPU/GPU。
             wallpaper_timer = getattr(getattr(self, 'video_placeholder', None), '_timer', None)
             if wallpaper_timer is not None:
                 ctrl.register_timer('wallpaper', wallpaper_timer,
-                                    policy=POLICY_SLOW, idle_interval_ms=250)
+                                    policy=POLICY_SLOW, idle_interval_ms=500)
 
             # 音频可视化：16ms 重绘，空闲时降到 10fps；随机风格切换 15s -> 60s
             av = getattr(self, '_audio_visual_widget', None)
