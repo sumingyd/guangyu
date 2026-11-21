@@ -110,6 +110,39 @@ def _remove_path(path):
         logger.debug(f"删除路径失败: {path}: {e}")
 
 
+def cleanup_stale_backup(target_path=None):
+    """清理上次覆盖安装遗留的旧版本备份（当前可执行文件 + .old）。
+
+    覆盖安装时旧进程仍在运行，备份文件会被映射占用，当次删除必然失败；
+    这里在下次启动早期再试一次。只处理当前安装目标旁边的备份，
+    失败只记日志、不弹窗、不重试，留到下一次启动。
+    """
+    if not getattr(sys, 'frozen', False):
+        return False
+    try:
+        target = os.path.abspath(target_path or resolve_install_target())
+    except Exception as e:
+        logger.debug(f"解析安装目标失败，跳过旧版本备份清理: {e}")
+        return False
+    backup = target + BACKUP_SUFFIX
+    if os.path.abspath(backup) == target:
+        return False
+    if not os.path.lexists(backup):
+        return False
+    try:
+        if os.path.islink(backup) or os.path.isfile(backup):
+            os.remove(backup)
+        elif os.path.isdir(backup):
+            shutil.rmtree(backup)
+        else:
+            return False
+        logger.info(f"已清理旧版本备份: {backup}")
+        return True
+    except OSError as e:
+        logger.debug(f"旧版本备份仍被占用，下次启动再试: {backup}: {e}")
+        return False
+
+
 def restore_backup(backup_path, target_path):
     """用备份恢复原安装；返回是否恢复成功"""
     try:

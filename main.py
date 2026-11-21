@@ -128,6 +128,14 @@ class _FileOpenEventFilter(QObject):
 
 def main():
 
+    # 覆盖安装会在旧进程存活时留下 <exe>.old，启动早期尝试清理一次；
+    # 仍被占用则留到下次启动，不弹窗、不重试。
+    try:
+        from controllers.update_controller import cleanup_stale_backup
+        cleanup_stale_backup()
+    except Exception:
+        pass
+
     qInstallMessageHandler(_suppress_qfont_pointsize_warning)
 
     try:
