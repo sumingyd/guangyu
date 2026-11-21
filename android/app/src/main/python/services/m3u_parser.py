@@ -445,7 +445,12 @@ def _parse_extinf_line(extinf_content: str, current_group: Union[str, List[str]]
         if key == 'group-title' and value:
             groups = [g.strip() for g in value.split(';') if g.strip()]
             genre_group_active = False
-        if key != 'tvg-name':
+        if key == 'tvg-name':
+            # tvg-name 单独落到 tvg_name 字段，供 EPG 过滤/匹配使用；
+            # channel['name'] 仍取 EXTINF 逗号后的显示名，语义保持不变。
+            if value:
+                channel['tvg_name'] = value
+        else:
             channel[field_name] = value
 
     final_comma_name = ''

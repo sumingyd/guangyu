@@ -899,6 +899,10 @@ class SubscriptionManager(Singleton):
         for channel in channels:
             if not isinstance(channel, dict):
                 continue
+            tags = channel.get('_all_tags') or {}
+            # 历史数据/旧解析路径可能只有 _all_tags，缺字段时回退，避免过滤期丢掉 tvg-name
+            tvg_name = channel.get('tvg_name') or tags.get('tvg-name') or None
+            comma_name = channel.get('comma_name') or channel.get('name') or None
             display_name = (
                 channel.get('name') or channel.get('tvg_name')
                 or channel.get('tvg_id') or '(未命名频道)'
@@ -908,8 +912,8 @@ class SubscriptionManager(Singleton):
                     channel.get('name', ''),
                     channel_names,
                     tvg_id=channel.get('tvg_id') or None,
-                    tvg_name=channel.get('tvg_name') or None,
-                    comma_name=channel.get('comma_name') or None,
+                    tvg_name=tvg_name,
+                    comma_name=comma_name,
                 )
             except Exception:
                 matched = None
