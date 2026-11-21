@@ -57,6 +57,7 @@ class WindowMixin:
             pass
 
         self._update_video_overlay_position()
+        self._position_floating_docks()
 
     def _raise_overlay_above_video(self):
         """把回看/时移标识提到视频之上。
@@ -104,21 +105,9 @@ class WindowMixin:
         if overlay.isVisible():
             self._raise_overlay_above_video()
 
-        self._position_floating_docks()
-
     def _position_floating_docks(self):
         if getattr(self, '_dock_layout_unlocked', False):
             return
-        import time
-        now = time.time()
-        if hasattr(self, '_last_position_time') and now - self._last_position_time < 0.05:
-            # 节流期间不能直接丢弃请求，否则最后一次尺寸变化不会生效；
-            # 安排一个尾帧，保证最终位置与主窗口一致。
-            if not getattr(self, '_position_pending', False):
-                self._position_pending = True
-                safe_single_shot(50, self, self._flush_floating_position)
-            return
-        self._last_position_time = now
         if hasattr(self, '_main_container') and self._main_container.layout():
             self._main_container.layout().activate()
 
@@ -199,6 +188,7 @@ class WindowMixin:
             fl_x = mw_x + (mw_w - self.floating_dock.width()) // 2
             fl_y = mw_y + mw_h - control_panel_h - status_bar_h - gap
             wayland_move(self.floating_dock, fl_x, fl_y)
+        self._remember_main_window_anchor()
 
     def _sync_floating_dock_width(self):
         """按当前窗口宽度把底栏收/放到目标宽度（全屏与窗口模式同一公式）。
@@ -221,11 +211,47 @@ class WindowMixin:
         if dock.width() != target_w:
             dock.resize(target_w, dock.height())
 
-    def _flush_floating_position(self):
-        """节流窗口结束后的尾帧补算。"""
-        self._position_pending = False
-        self._last_position_time = 0
-        self._position_floating_docks()
+    def _remember_main_window_anchor(self):
+        """记录本次全量定位时的窗口基准，供拖动时的位移路径使用。"""
+        self._last_main_pos = self.pos()
+        self._last_main_dpr = self.devicePixelRatioF()
+        self._last_main_screen = self.screen()
+
+    def _on_main_window_moved(self):
+        """主窗口拖动：只按位移平移浮层，不重排、不改尺寸。
+
+        20Hz 节流与逐帧全量重算会让面板明显落后于窗口；这里改为逐次
+        moveEvent 直接位移。跨屏或缩放比变化时基准不再有效，强制走一次
+        全量重算，避免按旧像素比平移造成错位。
+        """
+        if getattr(self, '_dock_layout_unlocked', False):
+            return
+        last = getattr(self, '_last_main_pos', None)
+        dpr = self.devicePixelRatioF()
+        screen = self.screen()
+        dpr_changed = dpr != getattr(self, '_last_main_dpr', dpr)
+        screen_changed = screen is not getattr(self, '_last_main_screen', screen)
+        if last is None or dpr_changed or screen_changed:
+            self._position_floating_docks()
+            return
+        pos = self.pos()
+        dx = pos.x() - last.x()
+        dy = pos.y() - last.y()
+        if dx == 0 and dy == 0:
+            return
+        self._last_main_pos = pos
+        self._shift_floating_docks(dx, dy)
+
+    def _shift_floating_docks(self, dx, dy):
+        """把所有可见浮层与独立窗口形态的角标按 dx/dy 平移。"""
+        for name in ('epg_dock', 'playlist_dock', 'floating_dock'):
+            dock = getattr(self, name, None)
+            if dock is None or not dock.isVisible() or not dock.isFloating():
+                continue
+            dock.move(dock.x() + dx, dock.y() + dy)
+        overlay = getattr(self, '_video_overlay_label', None)
+        if overlay is not None and overlay.isVisible() and overlay.isWindow():
+            overlay.sync_position(overlay.x() + dx, overlay.y() + dy)
 
     def toggle_dock_layout_lock(self):
         self._dock_layout_unlocked = not getattr(self, '_dock_layout_unlocked', False)
