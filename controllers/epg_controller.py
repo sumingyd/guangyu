@@ -297,10 +297,45 @@ class EPGController:
             label.setText(tr('epg_match_unmatched', 'EPG：未匹配'))
         label.show()
 
+    def _channel_total(self) -> int:
+        """当前实际可用的频道数（订阅频道 + 本地频道）。"""
+        total = 0
+        try:
+            from core.application_state import app_state
+            total += int(app_state.channel_count or 0)
+        except Exception as e:
+            logger.debug(f"_channel_total 读取订阅频道数失败: {e}")
+        local = getattr(self.window, '_local_channels', None) or []
+        try:
+            total += len(local)
+        except TypeError as e:
+            logger.debug(f"_channel_total 读取本地频道数失败: {e}")
+        return total
+
+    def _channels_loading(self) -> bool:
+        """订阅源频道是否仍在加载（用于区分「加载中」与「确实没有频道」）。"""
+        ctrl = getattr(self.window, 'subscription_ctrl', None)
+        workers = getattr(ctrl, '_workers', None) if ctrl is not None else None
+        if not workers:
+            return False
+        try:
+            return any(worker.isRunning() for worker in list(workers))
+        except Exception as e:
+            logger.debug(f"_channels_loading 检查失败: {e}")
+            return False
+
+    def _idle_empty_kind(self) -> str:
+        """未播放时的空态原因：有频道只是没选，不能误报「没有频道」。"""
+        if self._channel_total() > 0:
+            return 'no_selection'
+        if self._has_playlist_sources():
+            return 'loading' if self._channels_loading() else 'no_channel'
+        return 'no_source'
+
     def _show_epg_empty(self, kind: str):
         """统一 EPG 空态：按原因分文案与 CTA，且每次显式设置，避免残留上一次状态。
 
-        kind: 'no_source' | 'no_channel' | 'no_program'
+        kind: 'no_source' | 'no_channel' | 'no_selection' | 'loading' | 'no_program'
         """
         if kind != 'no_program':
             # 没有频道时清掉上一个频道残留的匹配来源说明
@@ -322,6 +357,17 @@ class EPGController:
             label.setToolTip(tr("tooltip_manage_sources_cta", "点击管理订阅源"))
             label.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
             self.window.epg_empty_action = 'manage_sources'
+        elif kind == 'no_selection':
+            # 有频道但还没开始播放：不能误报成「没有频道」
+            label.setText(tr("epg_empty_no_selection", "选择频道查看节目单"))
+            label.setToolTip('')
+            label.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+            self.window.epg_empty_action = None
+        elif kind == 'loading':
+            label.setText(tr("epg_empty_loading", "正在加载频道…"))
+            label.setToolTip('')
+            label.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+            self.window.epg_empty_action = None
         else:
             label.setText(tr("epg_empty_no_program", "该频道暂无节目单"))
             label.setToolTip('')
@@ -348,10 +394,9 @@ class EPGController:
 
         # 检查是否有当前频道
         if not hasattr(self.window, 'current_channel') or not self.window.current_channel:
-            self._show_epg_empty(
-                'no_source' if not self._has_playlist_sources() else 'no_channel'
-            )
-            logger.debug("无当前频道，显示空EPG提示")
+            kind = self._idle_empty_kind()
+            self._show_epg_empty(kind)
+            logger.debug(f"无当前频道，显示 EPG 空态: {kind}")
             return
 
         # 获取当前频道信息

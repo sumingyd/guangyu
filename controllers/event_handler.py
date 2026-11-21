@@ -3,6 +3,8 @@
 从 pyqt_player.py 提取的独立模块
 """
 
+import sys
+import threading
 import time
 
 from core.log_manager import global_logger as logger
@@ -10,6 +12,57 @@ from PySide6.QtCore import Qt, QEvent, QTimer
 from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QDockWidget, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenuBar, QPlainTextEdit, QSpinBox, QTextEdit, QVBoxLayout, QWidget
 from controllers.main_window_protocol import MainWindowProtocol
 from utils.thread_safety import safe_single_shot
+
+_cleanup_lock = threading.Lock()
+_cleanup_done = False
+
+
+def terminate_external_processes(window=None):
+    """结束所有从打包临时目录派生的外部进程（ffprobe/ffmpeg）。
+
+    onefile 引导器要等本进程退出后删除 _MEI 目录，残留子进程会让删除失败并弹出
+    "Failed to remove temporary directory"。closeEvent 与 aboutToQuit 都会调用，
+    重复调用安全。
+    """
+    global _cleanup_done
+    with _cleanup_lock:
+        if _cleanup_done:
+            return []
+        _cleanup_done = True
+
+    leftover_pids = []
+    try:
+        from services.ffprobe_validator_service import FfprobeStreamValidator
+        FfprobeStreamValidator.set_terminating()
+        leftover_pids.extend(FfprobeStreamValidator.terminate_all() or [])
+    except Exception as e:
+        logger.debug(f"终止 ffprobe 子进程失败: {e}")
+    try:
+        from services.mpv_validator_service import MpvStreamValidator
+        MpvStreamValidator.terminate_all()
+    except Exception as e:
+        logger.debug(f"销毁扫描用 mpv 句柄失败: {e}")
+    try:
+        from services.deep_probe_service import terminate_all_deep_probes
+        leftover_pids.extend(terminate_all_deep_probes() or [])
+    except Exception as e:
+        logger.debug(f"终止深度检测子进程失败: {e}")
+    try:
+        clip_export = getattr(window, 'clip_export_service', None) if window else None
+        if clip_export is not None and hasattr(clip_export, 'shutdown'):
+            clip_export.shutdown()
+    except Exception as e:
+        logger.debug(f"结束片段导出子进程失败: {e}")
+
+    if getattr(sys, 'frozen', False):
+        temp_dir = getattr(sys, '_MEIPASS', '')
+        if leftover_pids:
+            logger.warning(
+                f"退出时仍有外部子进程未退出: {leftover_pids}（临时目录 {temp_dir}）"
+            )
+        else:
+            logger.info(f"外部子进程已全部结束，临时目录 {temp_dir}")
+    return leftover_pids
 
 
 class EventHandler:
@@ -1188,6 +1241,11 @@ class EventHandler:
                             logger.warning(f"工作线程 {worker} 未在3秒内退出，将随进程终止")
                     except Exception as e:
                         logger.debug(f"等待工作线程失败: {e}")
+
+        # 7.4 结束所有从打包临时目录派生的外部进程（ffprobe/ffmpeg）。
+        #     onefile 引导器要等本进程退出后删除 _MEI 目录，任何残留子进程
+        #     都会让删除失败并弹出 "Failed to remove temporary directory"。
+        terminate_external_processes(self.window)
 
         # 7.5 断开控制器与主窗口的引用循环
         controller_attrs = [

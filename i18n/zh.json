@@ -446,6 +446,8 @@
   "epg_empty": "暂无节目数据",
   "epg_empty_no_channel": "订阅源中没有频道，点击管理订阅源",
   "epg_empty_no_program": "该频道暂无节目单",
+  "epg_empty_no_selection": "选择频道查看节目单",
+  "epg_empty_loading": "正在加载频道…",
   "epg_empty_no_source": "暂无订阅源，点击打开或导入订阅",
   "epg_goto_channel": "定位到当前频道",
   "epg_loaded": "EPG数据加载成功",

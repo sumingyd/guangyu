@@ -446,6 +446,8 @@
   "epg_empty": "No program data",
   "epg_empty_no_channel": "No channels in subscription sources. Click to manage sources",
   "epg_empty_no_program": "No program guide for this channel",
+  "epg_empty_no_selection": "Select a channel to view its schedule",
+  "epg_empty_loading": "Loading channels…",
   "epg_empty_no_source": "No subscription sources. Click to open or import a subscription",
   "epg_goto_channel": "Locate Current Channel",
   "epg_loaded": "EPG data loaded successfully",

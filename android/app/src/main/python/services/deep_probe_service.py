@@ -3,6 +3,7 @@
 默认不参与扫描，只由用户在扫描整理里对单个频道手工触发。
 """
 import subprocess
+import threading
 import time
 from typing import Dict
 
@@ -10,6 +11,33 @@ from core.log_manager import global_logger
 from services.network_context import PROBESIZE_BYTES, build_network_context
 from services.validity_tiers import INVALID, SUSPECTED, VALID
 from utils.platform_utils import get_ffmpeg_path, get_subprocess_creation_flags
+
+# 正在运行的深度检测子进程：退出时必须全部结束，
+# 否则 onefile 引导器无法删除 _MEI 临时目录。
+_active_procs = set()
+_procs_lock = threading.Lock()
+
+
+def terminate_all_deep_probes():
+    """结束所有在跑的深度检测子进程，返回未能确认退出的 PID 列表。"""
+    with _procs_lock:
+        procs = list(_active_procs)
+    leftover = []
+    for proc in procs:
+        try:
+            if proc.poll() is None:
+                proc.kill()
+        except Exception as e:
+            global_logger.debug(f"终止深度检测子进程失败: {e}")
+    deadline = time.monotonic() + 1.5
+    for proc in procs:
+        try:
+            proc.wait(timeout=max(0.05, deadline - time.monotonic()))
+        except Exception:
+            leftover.append(proc.pid)
+    with _procs_lock:
+        _active_procs.difference_update(procs)
+    return leftover
 
 
 def deep_probe_stream(url: str, duration: float = 2.0, timeout: int = 10) -> Dict:
@@ -77,28 +105,43 @@ def deep_probe_stream(url: str, duration: float = 2.0, timeout: int = 10) -> Dic
     cmd.extend(['-i', url, '-t', str(duration), '-f', 'null', '-'])
 
     max_wait = ctx.connect_timeout + ctx.analyze_timeout + int(duration) + 10
+    proc = None
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            capture_output=True,
-            timeout=max_wait,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             creationflags=get_subprocess_creation_flags(),
         )
-    except subprocess.TimeoutExpired:
-        result['elapsed'] = int((time.time() - t0) * 1000)
-        result['status'] = '深度检测超时'
-        result['error_type'] = 'timeout'
-        return result
+        with _procs_lock:
+            _active_procs.add(proc)
+        try:
+            _, stderr_bytes = proc.communicate(timeout=max_wait)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                _, stderr_bytes = proc.communicate(timeout=2)
+            except Exception:
+                stderr_bytes = b''
+            result['elapsed'] = int((time.time() - t0) * 1000)
+            result['status'] = '深度检测超时'
+            result['error_type'] = 'timeout'
+            return result
+        returncode = proc.returncode
     except Exception as exc:
         result['elapsed'] = int((time.time() - t0) * 1000)
         result['status'] = f'深度检测失败: {str(exc)[:60]}'
         result['error_type'] = 'probe_failed'
         result['validity'] = SUSPECTED
         return result
+    finally:
+        if proc is not None:
+            with _procs_lock:
+                _active_procs.discard(proc)
 
     result['elapsed'] = int((time.time() - t0) * 1000)
-    stderr = (proc.stderr or b'').decode('utf-8', errors='replace')
-    if proc.returncode == 0:
+    stderr = (stderr_bytes or b'').decode('utf-8', errors='replace')
+    if returncode == 0:
         result['valid'] = True
         result['validity'] = VALID
         result['status'] = f'解码 {duration:g} 秒成功'
@@ -106,7 +149,7 @@ def deep_probe_stream(url: str, duration: float = 2.0, timeout: int = 10) -> Dic
 
     from services.ffprobe_validator_service import FfprobeStreamValidator
     error_type, message, tier = FfprobeStreamValidator._classify_ffprobe_error(
-        stderr, proc.returncode)
+        stderr, returncode)
     result['error_type'] = error_type
     result['validity'] = tier
     result['status'] = message

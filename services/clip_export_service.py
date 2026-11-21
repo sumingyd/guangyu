@@ -70,6 +70,27 @@ class ClipExportService:
             except Exception as e:
                 logger.debug(f"cancel: {e}")
 
+    def shutdown(self):
+        """进程退出前强制结束导出子进程。
+
+        onefile 引导器在进程退出后要删除 _MEI 临时目录，残留的 ffmpeg 子进程
+        会占住目录里的可执行文件，导致引导器弹出清理失败提示。
+        """
+        self._cancel = True
+        with self._proc_lock:
+            proc = self._proc
+        if proc is None:
+            return
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except Exception as e:
+                logger.debug(f"shutdown kill: {e}")
+        try:
+            proc.wait(timeout=1)
+        except Exception as e:
+            logger.debug(f"shutdown wait: {e}")
+
     # ---------- 视频切片导出 ----------
     def export_clip(self, source: str, start_sec: float, end_sec: float,
                     output_path: str, stream_copy: bool = True,

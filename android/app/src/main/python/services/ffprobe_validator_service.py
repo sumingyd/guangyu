@@ -471,16 +471,26 @@ class FfprobeStreamValidator:
 
     @classmethod
     def terminate_all(cls):
+        """结束所有在跑的 ffprobe 子进程，返回未能确认退出的 PID 列表。"""
         cls._terminating = True
         with cls._process_lock:
-            for pid, proc in list(cls._active_processes.items()):
-                if proc.poll() is None:
-                    try:
-                        proc.kill()
-                        proc.wait(timeout=1)
-                    except Exception as e:
-                        global_logger.debug(f"terminate_all: {e}")
+            procs = list(cls._active_processes.values())
             cls._active_processes.clear()
+        leftover = []
+        for proc in procs:
+            if proc.poll() is None:
+                try:
+                    proc.kill()
+                except Exception as e:
+                    global_logger.debug(f"terminate_all kill: {e}")
+        # 共享一个截止时间，避免多个顽固进程把退出拖成 N 秒
+        deadline = time.monotonic() + 1.5
+        for proc in procs:
+            try:
+                proc.wait(timeout=max(0.05, deadline - time.monotonic()))
+            except Exception:
+                leftover.append(proc.pid)
+        return leftover
 
     @classmethod
     def set_terminating(cls):

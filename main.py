@@ -193,6 +193,14 @@ def main():
 
     player = IPTVPlayer()
 
+    # 退出兜底：更新重启等路径会直接 QApplication.quit()，不经过 closeEvent，
+    # 这里再挂一次外部子进程清理，避免 onefile 临时目录被残留子进程占住。
+    try:
+        from controllers.event_handler import terminate_external_processes
+        app.aboutToQuit.connect(lambda: terminate_external_processes(player))
+    except Exception:
+        pass
+
     # macOS 双击 m3u/视频文件时路径不在 argv 里，而是以 QFileOpenEvent 投递；
     # 其他平台不会产生该事件，装上也无副作用。
     file_open_filter = _FileOpenEventFilter(player)
