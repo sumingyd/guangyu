@@ -34,8 +34,18 @@ class FfprobeStreamValidator:
     _terminating = False
     _ffprobe_path: str | None = None
     _ffprobe_checked = False
+    # 整轮扫描开始时快照一次；本轮内改设置不生效，结束后由扫描器丢弃
+    _scan_context: NetworkContext | None = None
     _active_processes: Dict[int, subprocess.Popen] = {}
     _process_lock = threading.Lock()
+
+    @classmethod
+    def set_scan_context(cls, ctx: NetworkContext | None):
+        cls._scan_context = ctx
+
+    @classmethod
+    def clear_scan_context(cls):
+        cls._scan_context = None
 
     @classmethod
     def _get_ffprobe_path(cls):
@@ -99,11 +109,13 @@ class FfprobeStreamValidator:
             return result
 
         try:
-            ctx = build_network_context(
-                connect_timeout=timeout,
-                user_agent=self.get_user_agent(),
-                referer=self.get_referer(),
-            )
+            ctx = type(self)._scan_context
+            if ctx is None:
+                ctx = build_network_context(
+                    connect_timeout=timeout,
+                    user_agent=self.get_user_agent(),
+                    referer=self.get_referer(),
+                )
             cmd = self._build_ffprobe_command(ffprobe_path, url, ctx)
             url_lower = url.lower()
             if url_lower.startswith('rtp://') or url_lower.startswith('udp://'):

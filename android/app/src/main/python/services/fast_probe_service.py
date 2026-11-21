@@ -24,6 +24,23 @@ TS_PACKET_SIZE = 188
 UDP_MAX_WAIT = 5
 # 需要连续收到的 TS 包数量
 UDP_TS_PACKETS = 2
+# HTTP 连接超时上限（秒）：用户设定更小时尊重用户值；读取超时始终用用户设定
+HTTP_CONNECT_TIMEOUT_MAX = 3
+
+
+def _timeout_error_type(exc: Exception) -> Optional[str]:
+    """把 requests 超时异常映射为错误类型；非超时返回 None。"""
+    try:
+        from requests import exceptions as req_exc
+    except Exception:
+        return None
+    if isinstance(exc, req_exc.ConnectTimeout):
+        return 'connect_timeout'
+    if isinstance(exc, req_exc.ReadTimeout):
+        return 'read_timeout'
+    if isinstance(exc, req_exc.Timeout):
+        return 'timeout'
+    return None
 
 _MEDIA_CONTENT_TYPES = (
     'video/',
@@ -117,11 +134,21 @@ def _probe_http(url: str, timeout: int, ctx: NetworkContext, t0: float) -> Dict:
 
     headers = ctx.request_headers()
     headers['Range'] = 'bytes=0-2047'
+    # 连接超时短、读取超时长：黑洞地址快速失败，慢源仍有完整读取时间
+    connect_timeout = min(float(timeout), HTTP_CONNECT_TIMEOUT_MAX)
     try:
-        resp = _http_get(url, timeout=timeout, allow_redirects=True,
-                         headers=headers, stream=True)
+        resp = _http_get(url, timeout=(connect_timeout, float(timeout)),
+                         allow_redirects=True, headers=headers, stream=True,
+                         retry=False)
     except Exception as exc:
         result['latency'] = int((time.time() - t0) * 1000)
+        timeout_kind = _timeout_error_type(exc)
+        if timeout_kind:
+            # 超时只说明「没等到」，不能断言不可用
+            result['validity'] = SUSPECTED
+            result['error_type'] = timeout_kind
+            result['status'] = f'超时: {str(exc)[:60]}'
+            return result
         result['status'] = f'错误: {str(exc)[:60]}'
         result['error_type'] = 'connect_failed'
         return result
@@ -138,7 +165,13 @@ def _probe_http(url: str, timeout: int, ctx: NetworkContext, t0: float) -> Dict:
         chunk = b''
         try:
             chunk = next(resp.iter_content(2048), b'') or b''
-        except Exception:
+        except Exception as exc:
+            timeout_kind = _timeout_error_type(exc)
+            if timeout_kind:
+                result['validity'] = SUSPECTED
+                result['error_type'] = timeout_kind
+                result['status'] = f'读取响应超时: {str(exc)[:50]}'
+                return result
             chunk = b''
         hit, kind = _sniff_http_content(chunk, content_type)
         if hit:
@@ -171,7 +204,8 @@ def _probe_rtsp(url: str, timeout: int, t0: float) -> Dict:
             return result
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            sock.settimeout(timeout)
+            # 纯 TCP 握手：同样用短连接超时快速失败；超时只判疑似
+            sock.settimeout(min(float(timeout), HTTP_CONNECT_TIMEOUT_MAX))
             sock.connect((host, port))
             result['latency'] = int((time.time() - t0) * 1000)
             # 仅 TCP 连通属于弱检查
@@ -184,6 +218,13 @@ def _probe_rtsp(url: str, timeout: int, t0: float) -> Dict:
                 sock.close()
             except Exception:
                 pass
+    except TimeoutError:
+        # 连接超时只说明「没等到握手」，不能断言不可用
+        result['latency'] = int((time.time() - t0) * 1000)
+        result['validity'] = SUSPECTED
+        result['status'] = 'RTSP 连接超时'
+        result['error_type'] = 'timeout'
+        return result
     except Exception as exc:
         result['latency'] = int((time.time() - t0) * 1000)
         result['status'] = f'RTSP: {str(exc)[:40]}'
@@ -249,15 +290,19 @@ def _probe_udp(url: str, timeout: int, t0: float) -> Dict:
             result['status'] = f'收到 {received} 个包，但未校验到 TS 同步'
             result['error_type'] = 'no_ts_sync'
         else:
+            # 窗口内没等到数据只说明「没看到」，不能断言不可用
+            result['validity'] = SUSPECTED
             result['status'] = '超时无数据'
             result['error_type'] = 'timeout'
         return result
     except socket.timeout:
         result['latency'] = int((time.time() - t0) * 1000)
+        result['validity'] = SUSPECTED
         result['status'] = '超时无数据'
         result['error_type'] = 'timeout'
         return result
     except OSError as exc:
+        # 端口绑不上、组播加入失败属于本机明确的套接字失败，仍判不可用
         result['latency'] = int((time.time() - t0) * 1000)
         result['status'] = f'无法验证: {str(exc)[:40]}'
         result['error_type'] = 'socket_error'
@@ -280,9 +325,19 @@ class FastProbeValidator:
     _user_agent: str = ''
     _referer: str = ''
     _terminating = False
+    # 整轮扫描开始时快照一次，扫描期间用户改设置不作用于本轮
+    _scan_context: NetworkContext | None = None
 
     def __init__(self, main_window=None):
         self.main_window = main_window
+
+    @classmethod
+    def set_scan_context(cls, ctx: NetworkContext | None):
+        cls._scan_context = ctx
+
+    @classmethod
+    def clear_scan_context(cls):
+        cls._scan_context = None
 
     @classmethod
     def set_max_concurrent(cls, value: int):
@@ -332,11 +387,14 @@ class FastProbeValidator:
                 'error': '验证器正在关闭', 'error_type': 'terminating',
                 'skipped': False,
             }
-        ctx = build_network_context(
-            connect_timeout=timeout,
-            user_agent=type(self)._user_agent or None,
-            referer=type(self)._referer or None,
-        )
+        ctx = type(self)._scan_context
+        if ctx is None:
+            # 未由扫描器快照时（单独调用 / Android 探测）退回逐条构造
+            ctx = build_network_context(
+                connect_timeout=timeout,
+                user_agent=type(self)._user_agent or None,
+                referer=type(self)._referer or None,
+            )
         probe = probe_stream(url, timeout=timeout, ctx=ctx)
         return {
             'url': url,

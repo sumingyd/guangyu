@@ -21,7 +21,7 @@ class NetworkSettingsStore:
         return {
             'url': f.get_value('Network', 'url', ''),
             'timeout': f._parse_int(f.get_value('Network', 'timeout', '5'), 5),
-            'threads': f._parse_int(f.get_value('Network', 'threads', '4'), 4),
+            'threads': f._parse_int(f.get_value('Network', 'threads', '8'), 8),
             'user_agent': f.get_value('Network', 'user_agent', ''),
             'referer': f.get_value('Network', 'referer', '')
         }
@@ -44,6 +44,18 @@ class NetworkSettingsStore:
     def load_scan_retry_settings(self):
         return {
             'enable_retry': self._facade._parse_bool(self._facade.get_value('ScanRetry', 'enable_retry', 'False'))
+        }
+
+    def save_suspected_recheck_settings(self, enabled: bool):
+        """保存「疑似复核」开关（默认关闭，不静默增加耗时）。"""
+        self._facade.set_value('ScanRetry', 'recheck_suspected', str(enabled))
+        return self._facade.save_config()
+
+    def load_suspected_recheck_settings(self):
+        return {
+            'recheck_suspected': self._facade._parse_bool(
+                self._facade.get_value('ScanRetry', 'recheck_suspected', 'False')
+            )
         }
 
     def save_scan_engine_settings(self, engine: str):

@@ -124,6 +124,12 @@ class ConfigManager(Singleton):
     def load_scan_retry_settings(self):
         return self._network_settings_store.load_scan_retry_settings()
 
+    def save_suspected_recheck_settings(self, enabled: bool):
+        return self._network_settings_store.save_suspected_recheck_settings(enabled)
+
+    def load_suspected_recheck_settings(self):
+        return self._network_settings_store.load_suspected_recheck_settings()
+
     def load_config(self):
         with self._lock:
             if os.path.exists(self.config_file):

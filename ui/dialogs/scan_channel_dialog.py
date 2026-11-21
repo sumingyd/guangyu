@@ -35,6 +35,10 @@ from core.log_manager import global_logger
 from core.language_manager import LanguageManager
 from ..floating_dialog import FloatingDialog
 
+# 疑似复核固定低并发、更长超时：刻意不复用用户主轮次的线程数/超时设置
+SUSPECTED_RECHECK_THREADS = 4
+SUSPECTED_RECHECK_TIMEOUT_MIN = 15
+
 
 class _HomeOnFocusOut(QtCore.QObject):
     """事件过滤器：输入框失去焦点时将光标移到开头，使长文本从起始位置显示"""
@@ -594,9 +598,13 @@ class ScanChannelDialog(FloatingDialog):
         threads_label.setStyleSheet(AppStyles.small_label_style())
         self.threads_label = threads_label
         timeout_threads_layout.addWidget(threads_label)
-        self.threads_input = QtWidgets.QLineEdit("4")
+        self.threads_input = QtWidgets.QLineEdit("8")
         self.threads_input.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
-        self.threads_input.setPlaceholderText("1-64")
+        self.threads_input.setPlaceholderText("1-32")
+        self.threads_input.setToolTip(tr(
+            "scan_threads_hint",
+            "并发探测线程数（1-32）。默认 8；超过 24 后源站可能排队、收益很小。"
+        ))
         self.threads_input.setFixedHeight(28)
         timeout_threads_layout.addWidget(self.threads_input)
 
@@ -670,15 +678,30 @@ class ScanChannelDialog(FloatingDialog):
         )
         self.enable_retry_checkbox.setChecked(False)
         retry_layout.addWidget(self.enable_retry_checkbox)
+
+        # 疑似复核：扫描结束后对「疑似」项用低并发 + 更长超时再测一次
+        self.enable_suspected_recheck_checkbox = QtWidgets.QCheckBox(
+            tr("recheck_suspected", "复核疑似（低并发 + 更长超时）")
+        )
+        self.enable_suspected_recheck_checkbox.setToolTip(tr(
+            "recheck_suspected_tooltip",
+            "扫描结束后，仅对判为「疑似」的地址用 4 个线程、更长超时再测一遍；默认关闭。"
+        ))
+        self.enable_suspected_recheck_checkbox.setChecked(False)
+        retry_layout.addWidget(self.enable_suspected_recheck_checkbox)
         retry_layout.addStretch()
 
         # 连接复选框状态变化信号，保存设置
         self.enable_retry_checkbox.stateChanged.connect(
             lambda: self._save_scan_retry_settings()
         )
+        self.enable_suspected_recheck_checkbox.stateChanged.connect(
+            lambda: self._save_suspected_recheck_settings()
+        )
 
         # 加载保存的重试扫描设置
         self._load_scan_retry_settings()
+        self._load_suspected_recheck_settings()
 
         self.retry_layout = retry_layout
 
@@ -696,7 +719,24 @@ class ScanChannelDialog(FloatingDialog):
         except Exception as e:
             self.logger.error(f"加载重试扫描设置失败: {e}")
 
-    def _get_scan_params(self, default_timeout=10, default_threads=4, timeout_multiplier=1):
+    def _save_suspected_recheck_settings(self):
+        try:
+            self.config.save_suspected_recheck_settings(
+                self.enable_suspected_recheck_checkbox.isChecked()
+            )
+        except Exception as e:
+            self.logger.error(f"保存疑似复核设置失败: {e}")
+
+    def _load_suspected_recheck_settings(self):
+        try:
+            settings = self.config.load_suspected_recheck_settings()
+            self.enable_suspected_recheck_checkbox.setChecked(
+                settings.get('recheck_suspected', False)
+            )
+        except Exception as e:
+            self.logger.error(f"加载疑似复核设置失败: {e}")
+
+    def _get_scan_params(self, default_timeout=10, default_threads=8, timeout_multiplier=1):
         """从UI输入框读取扫描参数，若无效则使用配置文件或默认值
 
         Args:
@@ -733,7 +773,7 @@ class ScanChannelDialog(FloatingDialog):
                     configured_timeout = network_settings.get('timeout', default_timeout)
                     if configured_timeout and configured_timeout > 0:
                         timeout = max(3, min(60, int(configured_timeout) * timeout_multiplier))
-                    configured_threads = network_settings.get('threads', default_threads)
+                    configured_threads = network_settings.get('threads', 8)
                     if configured_threads and configured_threads > 0:
                         threads = max(1, min(32, int(configured_threads)))
             except Exception as e:
@@ -746,7 +786,7 @@ class ScanChannelDialog(FloatingDialog):
             if hasattr(self, 'config') and self.config:
                 network_settings = self.config.load_network_settings()
                 timeout = network_settings.get('timeout', 10)
-                threads = network_settings.get('threads', 4)
+                threads = network_settings.get('threads', 8)
                 if hasattr(self, 'timeout_input'):
                     self.timeout_input.setText(str(timeout))
                 if hasattr(self, 'threads_input'):
@@ -2286,7 +2326,7 @@ class ScanChannelDialog(FloatingDialog):
             if hasattr(self, 'timeout_input'):
                 self.timeout_input.setText(str(settings.get('timeout', 10)))
             if hasattr(self, 'threads_input'):
-                self.threads_input.setText(str(settings.get('threads', 4)))
+                self.threads_input.setText(str(settings.get('threads', 8)))
 
         except Exception as e:
             log_config_error(f"加载配置失败: {e}")
@@ -2682,6 +2722,8 @@ class ScanChannelDialog(FloatingDialog):
         self.btn_batch_ops.setEnabled(not disabled)
         self.enable_retry_checkbox.setEnabled(not disabled)
         self.enable_mapping_checkbox.setEnabled(not disabled)
+        if hasattr(self, 'enable_suspected_recheck_checkbox'):
+            self.enable_suspected_recheck_checkbox.setEnabled(not disabled)
 
     def _reset_scan_buttons(self):
         """统一重置扫描按钮文本和状态"""
@@ -3190,10 +3232,88 @@ class ScanChannelDialog(FloatingDialog):
             return
 
         if not is_retry:
+            if self._start_suspected_recheck():
+                return
             if self.enable_retry_checkbox.isChecked():
                 QtCore.QTimer.singleShot(DelayMs.LAYOUT_SETTLE, self._handle_retry_scan)
         else:
             self._handle_retry_scan_completed()
+
+    def _start_suspected_recheck(self) -> bool:
+        """扫描结束后复核「疑似」项；返回 True 表示已启动复核。
+
+        复核固定 4 并发、超时至少 15s，不使用用户主轮次的线程数设置，
+        只有用户勾选「复核疑似」才会执行。
+        """
+        checkbox = getattr(self, 'enable_suspected_recheck_checkbox', None)
+        if checkbox is None or not checkbox.isChecked():
+            return False
+        if getattr(self, '_is_stopping', False):
+            return False
+
+        from services.validity_tiers import SUSPECTED, channel_tier
+        suspect_count = sum(
+            1 for ch in self.model.channels if channel_tier(ch) == SUSPECTED
+        )
+        if suspect_count == 0:
+            return False
+        if not hasattr(self, 'scanner') or self.scanner is None:
+            return False
+
+        scan_timeout, _ = self._get_scan_params()
+        recheck_timeout = max(SUSPECTED_RECHECK_TIMEOUT_MIN, scan_timeout)
+        self.logger.info(
+            f"疑似复核: 并发={SUSPECTED_RECHECK_THREADS}, 超时={recheck_timeout}s"
+        )
+
+        self.scanner.start_validation(
+            self.model,
+            SUSPECTED_RECHECK_THREADS,
+            recheck_timeout,
+            self.user_agent_input.text() or None,
+            self.referer_input.text() or None,
+            only_suspected=True,
+            is_suspected_recheck=True,
+        )
+        self._set_scan_model()
+        self.btn_validate.setText(self.language_manager.tr("stop_validate", "Stop Validate"))
+        self.progress_manager.start_progress(
+            str(self.language_manager.tr('recheck_suspected', '复核疑似')),
+            max_value=max(1, suspect_count)
+        )
+        return True
+
+    def _on_suspected_recheck_completed(self):
+        """疑似复核完成：刷新三档统计，再回到原有的智能重试流程。"""
+        self._set_browse_model()
+        try:
+            self.progress_manager.complete_progress(
+                self.language_manager.tr('recheck_completed', '疑似复核完成')
+            )
+        except Exception as e:
+            logger.debug(f"_on_suspected_recheck_completed: {e}")
+
+        try:
+            self.btn_validate.setText(self.language_manager.tr("validate_button", "Validate"))
+        except Exception as e:
+            logger.debug(f"_on_suspected_recheck_completed: {e}")
+
+        from services.validity_tiers import SUSPECTED, VALID, channel_tier
+        valid_count = sum(1 for ch in self.model.channels if channel_tier(ch) == VALID)
+        suspected_count = sum(1 for ch in self.model.channels if channel_tier(ch) == SUSPECTED)
+        total = len(self.model.channels)
+        tr = self.language_manager.tr
+        self.stats_label.setText(
+            f"{tr('recheck_completed', '疑似复核完成')} | "
+            f"{tr('valid', '有效')}: {valid_count}/{total} | "
+            f"{tr('suspected', '疑似')}: {suspected_count}"
+        )
+
+        if getattr(self, '_is_stopping', False):
+            self._is_stopping = False
+            return
+        if self.enable_retry_checkbox.isChecked():
+            QtCore.QTimer.singleShot(DelayMs.LAYOUT_SETTLE, self._handle_retry_scan)
 
     def _on_validation_retry_completed(self):
         """处理验证重试扫描完成事件"""
@@ -3419,6 +3539,7 @@ class ScanChannelDialog(FloatingDialog):
                     if hasattr(AppStyles, 'scroll_area_style') else ''
                 )
             for chk in [getattr(self, 'enable_retry_checkbox', None),
+                        getattr(self, 'enable_suspected_recheck_checkbox', None),
                         getattr(self, 'enable_mapping_checkbox', None)]:
                 if chk and hasattr(chk, 'setStyleSheet'):
                     chk.setStyleSheet(AppStyles.common_check_box_style())
@@ -3478,6 +3599,14 @@ class ScanChannelDialog(FloatingDialog):
                 self.retry_label.setText(f"{tr('scan_retry_options', 'Scan Retry Options')}：")
             if hasattr(self, 'enable_retry_checkbox'):
                 self.enable_retry_checkbox.setText(tr("enable_smart_retry", "Enable Smart Retry"))
+            if hasattr(self, 'enable_suspected_recheck_checkbox'):
+                self.enable_suspected_recheck_checkbox.setText(
+                    tr("recheck_suspected", "复核疑似（低并发 + 更长超时）")
+                )
+                self.enable_suspected_recheck_checkbox.setToolTip(tr(
+                    "recheck_suspected_tooltip",
+                    "扫描结束后，仅对判为「疑似」的地址用 4 个线程、更长超时再测一遍；默认关闭。"
+                ))
             if hasattr(self, 'mapping_label'):
                 self.mapping_label.setText(f"{tr('mapping_options', 'Mapping Options')}：")
             if hasattr(self, 'enable_mapping_checkbox'):

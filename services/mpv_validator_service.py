@@ -148,6 +148,16 @@ class MpvStreamValidator:
     _active_handles: list = []
     _handles_lock = threading.Lock()
     _terminating = False
+    # 整轮扫描开始时快照一次；本轮内改设置不生效，结束后由扫描器丢弃
+    _scan_context: NetworkContext | None = None
+
+    @classmethod
+    def set_scan_context(cls, ctx: NetworkContext | None):
+        cls._scan_context = ctx
+
+    @classmethod
+    def clear_scan_context(cls):
+        cls._scan_context = None
 
     @classmethod
     def _get_semaphore(cls) -> threading.Semaphore:
@@ -204,11 +214,13 @@ class MpvStreamValidator:
 
         handle = None
         try:
-            ctx = build_network_context(
-                connect_timeout=timeout,
-                user_agent=self.get_user_agent(),
-                referer=self.get_referer(),
-            )
+            ctx = type(self)._scan_context
+            if ctx is None:
+                ctx = build_network_context(
+                    connect_timeout=timeout,
+                    user_agent=self.get_user_agent(),
+                    referer=self.get_referer(),
+                )
             handle = _create_lightweight_mpv(ctx)
             if not handle:
                 result['error'] = '创建mpv实例失败'

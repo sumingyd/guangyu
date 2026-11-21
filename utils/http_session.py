@@ -16,9 +16,13 @@ except ImportError:
     Retry = None
 
 _session = None
+_probe_session = None
 _lock = threading.Lock()
 
 DEFAULT_TIMEOUT = 30.0
+# 连接池与扫描线程上限（32）对齐，避免高并发下「Connection pool is full, discarding connection」
+POOL_CONNECTIONS = 10
+POOL_MAXSIZE = 32
 # 仅对幂等请求做瞬时故障重试：4xx 不重试，5xx/限流做有限退避
 _RETRY_STATUS_CODES = (429, 500, 502, 503, 504)
 
@@ -113,6 +117,18 @@ def _apply_runtime_config(session):
     session._isep_referer = referer
 
 
+def _build_session(max_retries):
+    session = requests.Session()
+    adapter = HTTPAdapter(
+        pool_connections=POOL_CONNECTIONS,
+        pool_maxsize=POOL_MAXSIZE,
+        max_retries=max_retries,
+    )
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
+    return session
+
+
 def get_session():
     global _session
     if not _HAS_REQUESTS:
@@ -120,12 +136,26 @@ def get_session():
     if _session is None:
         with _lock:
             if _session is None:
-                _session = requests.Session()
-                adapter = HTTPAdapter(pool_connections=10, pool_maxsize=20, max_retries=_build_retry())
-                _session.mount('http://', adapter)
-                _session.mount('https://', adapter)
+                _session = _build_session(_build_retry())
     _apply_runtime_config(_session)
     return _session
+
+
+def get_probe_session():
+    """探测专用会话：同样的连接池配置，但连接失败不重试。
+
+    urllib3 的 connect 重试会把「连接超时 3s」放大成 3 次握手（约 10s），
+    批量扫描需要真实的单次超时，因此探测请求单独走这个会话。
+    """
+    global _probe_session
+    if not _HAS_REQUESTS:
+        return None
+    if _probe_session is None:
+        with _lock:
+            if _probe_session is None:
+                _probe_session = _build_session(0)
+    _apply_runtime_config(_probe_session)
+    return _probe_session
 
 
 def _prepare_timeout(kwargs):
@@ -160,9 +190,9 @@ def _is_dead_local_proxy_error(exc) -> bool:
     return bool(_LOCAL_PROXY_HOST_RE.search(text) and _REFUSED_RE.search(text))
 
 
-def _send(method, url, **kwargs):
+def _send(method, url, retry: bool = True, **kwargs):
     global _direct_mode
-    session = get_session()
+    session = get_session() if retry else get_probe_session()
     if session is None:
         raise ImportError('requests is not available')
     _prepare_timeout(kwargs)
@@ -180,8 +210,9 @@ def _send(method, url, **kwargs):
         return getattr(session, method)(target, **kwargs)
 
 
-def get(url, **kwargs):
-    return _send('get', url, **kwargs)
+def get(url, retry: bool = True, **kwargs):
+    """retry=False 用于扫描探测：连接失败只试一次，不吃 urllib3 的连接重试。"""
+    return _send('get', url, retry=retry, **kwargs)
 
 
 def head(url, **kwargs):
@@ -193,9 +224,11 @@ def post(url, **kwargs):
 
 
 def close():
-    global _session
-    if _session is not None:
-        with _lock:
-            if _session is not None:
-                _session.close()
-                _session = None
+    global _session, _probe_session
+    with _lock:
+        if _session is not None:
+            _session.close()
+            _session = None
+        if _probe_session is not None:
+            _probe_session.close()
+            _probe_session = None

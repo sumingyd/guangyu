@@ -5,6 +5,7 @@ import functools
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any
 from services.url_parser_service import URLRangeParser
+from services.network_context import build_network_context
 from core.log_manager import global_logger
 from models.channel_model import ChannelListModel
 from PySide6 import QtCore
@@ -19,6 +20,7 @@ from services.validity_tiers import (
     SUSPECTED,
     VALID,
     VALID_BOOL,
+    channel_tier,
 )
 
 
@@ -116,6 +118,10 @@ class ScannerController(QObject):
         self.scan_id = 'main_scan'
         self._validator = None
         self._scan_engine = None
+        # 本轮是否为「疑似复核」：完成回调与统计口径不同
+        self._is_suspected_recheck = False
+        # 轮次编号：上一轮统计线程收尾时不能清掉新一轮的上下文快照
+        self._round_generation = 0
         self._mapping_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mapper")
         self._pending_channels = []
         self._pending_lock = threading.Lock()
@@ -497,6 +503,34 @@ class ScannerController(QObject):
         from services.mpv_validator_service import MpvStreamValidator
         return MpvStreamValidator
 
+    def _snapshot_network_context(self, timeout, user_agent=None, referer=None):
+        """整轮扫描开始时快照一次网络上下文，本轮跑完即丢弃。
+
+        扫描途中用户改代理/请求头/超时，不影响正在跑的这一轮。
+        """
+        try:
+            ValidatorClass = self._get_validator_class()
+            setter = getattr(ValidatorClass, 'set_scan_context', None)
+            if setter is None:
+                return
+            setter(build_network_context(
+                connect_timeout=timeout,
+                user_agent=user_agent or None,
+                referer=referer or None,
+            ))
+        except Exception as e:
+            self.logger.debug(f"网络上下文快照失败，退回逐条构造: {e}")
+
+    def _clear_network_context(self):
+        """丢弃本轮快照；下次扫描会重新读取设置。"""
+        try:
+            ValidatorClass = self._get_validator_class()
+            clearer = getattr(ValidatorClass, 'clear_scan_context', None)
+            if clearer is not None:
+                clearer()
+        except Exception as e:
+            self.logger.debug(f"清理网络上下文快照失败: {e}")
+
     def _check_channel(
         self, url: str, raw_channel_name: str | None = None
     ) -> Dict[str, Any]:
@@ -583,6 +617,7 @@ class ScannerController(QObject):
 
         self.timeout = timeout
         self._skip_attempts = {}
+        self._round_generation += 1
 
         self.scan_state_manager.clear_invalid_urls(self.scan_id)
 
@@ -599,6 +634,8 @@ class ScannerController(QObject):
             ValidatorClass.set_user_agent(user_agent)
         if referer is not None:
             ValidatorClass.set_referer(referer)
+        # 本轮只读取一次设置；扫描途中改设置不生效
+        self._snapshot_network_context(timeout, user_agent, referer)
 
         # 初始化统计信息
         self.stats = {
@@ -644,6 +681,7 @@ class ScannerController(QObject):
         self.stats_thread = threading.Thread(
             target=self._update_stats,
             name="StatsUpdater",
+            args=(self._round_generation,),
             daemon=True
         )
         self.stats_thread.start()
@@ -693,6 +731,7 @@ class ScannerController(QObject):
 
         self.timeout = timeout
         self._skip_attempts = {}
+        self._round_generation += 1
 
         ValidatorClass = self._get_validator_class()
         if self._scan_engine == 'mpv':
@@ -704,6 +743,7 @@ class ScannerController(QObject):
             ValidatorClass.set_user_agent(user_agent)
         if referer is not None:
             ValidatorClass.set_referer(referer)
+        self._snapshot_network_context(timeout, user_agent, referer)
 
         # 初始化统计信息
         self.stats = {
@@ -743,6 +783,7 @@ class ScannerController(QObject):
         self.stats_thread = threading.Thread(
             target=self._update_stats,
             name="RetryStatsUpdater",
+            args=(self._round_generation,),
             daemon=True
         )
         self.stats_thread.start()
@@ -756,6 +797,7 @@ class ScannerController(QObject):
 
         ValidatorClass = self._get_validator_class()
         ValidatorClass.set_terminating()
+        self._clear_network_context()
 
         self._clear_all_queues()
 
@@ -868,13 +910,36 @@ class ScannerController(QObject):
         import gc
         gc.collect(0)
 
-    def start_validation(self, model, threads, timeout, user_agent=None, referer=None):
-        """开始有效性验证"""
+    @staticmethod
+    def _collect_validation_targets(model, only_suspected: bool = False):
+        """收集待检测的 (url, index)；only_suspected 时只取三档为「疑似」的项。"""
+        targets = []
+        for i in range(model.rowCount()):
+            channel = model.get_channel(i)
+            url = (channel.get('url') or '').strip()
+            if not url:
+                continue
+            if only_suspected and channel_tier(channel) != SUSPECTED:
+                continue
+            targets.append((url, i))
+        return targets
+
+    def start_validation(self, model, threads, timeout, user_agent=None, referer=None,
+                         *, only_suspected: bool = False,
+                         is_suspected_recheck: bool = False):
+        """开始有效性验证
+
+        Args:
+            only_suspected: 只复核当前三档为「疑似」的频道
+            is_suspected_recheck: 本轮是疑似复核，完成时回调专门的槽位
+        """
         self.is_validating = True
         self._is_validation_retry = False
+        self._is_suspected_recheck = is_suspected_recheck
         self.stop_event.clear()
         self._skip_attempts = {}
         self.timeout = timeout
+        self._round_generation += 1
 
         ValidatorClass = self._get_validator_class()
         ValidatorClass.reset_terminating()
@@ -890,15 +955,11 @@ class ScannerController(QObject):
             ValidatorClass.set_user_agent(user_agent)
         if referer is not None:
             ValidatorClass.set_referer(referer)
+        self._snapshot_network_context(timeout, user_agent, referer)
 
         total = 0
-        for i in range(model.rowCount()):
-            channel = model.get_channel(i)
-            url = channel.get('url', '').strip()
-            if not url:
-                self.logger.debug(f"验证跳过: 频道'{channel.get('name', '?')}' URL为空 (索引={i})")
-                continue
-            self.validation_queue.put((url, i))
+        for url, index in self._collect_validation_targets(model, only_suspected):
+            self.validation_queue.put((url, index))
             total += 1
 
         self.stats = {
@@ -923,6 +984,7 @@ class ScannerController(QObject):
         self.stats_thread = threading.Thread(
             target=self._update_stats,
             name="ValidationStatsUpdater",
+            args=(self._round_generation,),
             daemon=True
         )
         self.stats_thread.start()
@@ -941,6 +1003,7 @@ class ScannerController(QObject):
 
         ValidatorClass = self._get_validator_class()
         ValidatorClass.set_terminating()
+        self._clear_network_context()
 
         while not self.validation_queue.empty():
             try:
@@ -1057,7 +1120,7 @@ class ScannerController(QObject):
                         break
             self.model.endResetModel()
 
-    def _update_stats(self):
+    def _update_stats(self, generation: int | None = None):
         """更新统计信息线程"""
         was_validation = False
         workers_snapshot = list(self.workers)
@@ -1131,9 +1194,14 @@ class ScannerController(QObject):
                     f"疑似={self.stats['suspected']}, "
                     f"无效={self.stats['invalid']}"
                 )
-                if self.main_window and hasattr(self.main_window, '_on_validation_completed'):
+                if self._is_suspected_recheck:
+                    self._is_suspected_recheck = False
+                    callback_name = '_on_suspected_recheck_completed'
+                else:
+                    callback_name = '_on_validation_completed'
+                if self.main_window and hasattr(self.main_window, callback_name):
                     try:
-                        self._run_on_main(self.main_window._on_validation_completed)
+                        self._run_on_main(getattr(self.main_window, callback_name))
                     except RuntimeError:
                         self.logger.debug("主窗口已销毁，跳过验证完成回调")
             else:
@@ -1206,3 +1274,7 @@ class ScannerController(QObject):
                             pass
             except Exception as e:
                 self.logger.error(f"发送最终统计信息失败: {e}")
+
+            # 本轮结束即丢弃网络上下文快照，下一轮重新读设置
+            if generation is None or generation == self._round_generation:
+                self._clear_network_context()
