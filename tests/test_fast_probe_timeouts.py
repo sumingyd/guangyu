@@ -24,35 +24,50 @@ def _ctx():
     return network_context.NetworkContext(connect_timeout=5, analyze_timeout=10)
 
 
-def test_http_connect_timeout_is_suspected_and_capped(monkeypatch):
-    seen = {}
+def test_http_connect_timeout_twice_is_invalid(monkeypatch):
+    seen = []
 
     def fake_get(url, **kwargs):
-        seen.update(kwargs)
+        seen.append((kwargs.get('timeout'), kwargs.get('retry')))
         raise requests.exceptions.ConnectTimeout('connect timed out')
 
     monkeypatch.setattr('utils.http_session.get', fake_get)
     result = fast.probe_stream('http://a/x.m3u8', timeout=5, ctx=_ctx())
 
-    assert result['validity'] == SUSPECTED
+    assert result['validity'] == INVALID
     assert result['error_type'] == 'connect_timeout'
-    # 连接超时取 min(用户 5s, 3s)，读取超时保留用户值；探测请求不重试
-    assert seen['timeout'] == (3.0, 5.0)
-    assert seen['retry'] is False
+    # 第一次 min(5,3)，重试只给 min(3,1)；探测请求始终不重试
+    assert seen == [((3.0, 5.0), False), ((1.0, 5.0), False)]
 
 
 def test_http_connect_timeout_respects_smaller_user_value(monkeypatch):
-    seen = {}
+    seen = []
 
     def fake_get(url, **kwargs):
-        seen.update(kwargs)
+        seen.append(kwargs.get('timeout'))
         raise requests.exceptions.ConnectTimeout('connect timed out')
 
     monkeypatch.setattr('utils.http_session.get', fake_get)
     result = fast.probe_stream('http://a/x.m3u8', timeout=2, ctx=_ctx())
 
-    assert result['validity'] == SUSPECTED
-    assert seen['timeout'] == (2.0, 2.0)
+    assert result['validity'] == INVALID
+    assert seen == [(2.0, 2.0), (1.0, 2.0)]
+
+
+def test_http_connect_timeout_then_success_keeps_probing(monkeypatch):
+    calls = []
+
+    def fake_get(url, **kwargs):
+        calls.append(kwargs.get('timeout'))
+        if len(calls) == 1:
+            raise requests.exceptions.ConnectTimeout('connect timed out')
+        return _FakeResponse(200, {'Content-Type': 'application/vnd.apple.mpegurl'})
+
+    monkeypatch.setattr('utils.http_session.get', fake_get)
+    result = fast.probe_stream('http://a/x.m3u8', timeout=5, ctx=_ctx())
+
+    assert result['validity'] == VALID
+    assert len(calls) == 2
 
 
 def test_http_read_timeout_is_suspected(monkeypatch):
@@ -86,13 +101,45 @@ def test_http_404_stays_invalid(monkeypatch):
     assert result['validity'] == INVALID
 
 
-def test_rtsp_connect_timeout_is_suspected(monkeypatch):
+def test_rtsp_connect_timeout_twice_is_invalid(monkeypatch):
+    sockets = []
+
     class _Sock:
-        def settimeout(self, _):
-            pass
+        def settimeout(self, value):
+            self.timeout = value
 
         def connect(self, _):
             raise TimeoutError('timed out')
+
+        def close(self):
+            pass
+
+    def _factory(*args, **kwargs):
+        sock = _Sock()
+        sockets.append(sock)
+        return sock
+
+    monkeypatch.setattr('socket.socket', _factory)
+    result = fast.probe_stream('rtsp://cam/live', timeout=2)
+
+    assert result['validity'] == INVALID
+    assert result['error_type'] == 'connect_timeout'
+    assert len(sockets) == 2
+    assert sockets[0].timeout == 2.0
+    assert sockets[1].timeout == 1.0
+
+
+def test_rtsp_connect_timeout_then_success_is_suspected(monkeypatch):
+    attempts = {'n': 0}
+
+    class _Sock:
+        def settimeout(self, value):
+            pass
+
+        def connect(self, _):
+            attempts['n'] += 1
+            if attempts['n'] == 1:
+                raise TimeoutError('timed out')
 
         def close(self):
             pass
@@ -101,7 +148,8 @@ def test_rtsp_connect_timeout_is_suspected(monkeypatch):
     result = fast.probe_stream('rtsp://cam/live', timeout=2)
 
     assert result['validity'] == SUSPECTED
-    assert result['error_type'] == 'timeout'
+    assert result['error_type'] == 'weak_check'
+    assert attempts['n'] == 2
 
 
 class _FakeUdpSocket:

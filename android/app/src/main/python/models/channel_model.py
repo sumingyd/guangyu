@@ -146,7 +146,14 @@ class ChannelListModel(QtCore.QAbstractTableModel):
         """清空频道列表"""
         self.beginResetModel()
         self.channels = []
+        self._reset_filter_state()
         self.endResetModel()
+
+    def _reset_filter_state(self):
+        """列表内容被整体替换后，旧的筛选快照必须丢弃。"""
+        self._is_hiding_invalid = False
+        if hasattr(self, '_original_channels'):
+            del self._original_channels
 
     def sort_by_indices(self, row_order: list):
         """按指定行顺序重新排列频道"""
@@ -592,11 +599,12 @@ class ChannelListModel(QtCore.QAbstractTableModel):
                     }
 
     def hide_invalid(self):
-        """隐藏无效频道"""
+        """只保留确证有效的频道（疑似与不可用一起隐藏）"""
         if not hasattr(self, '_original_channels'):
             self._original_channels = [dict(c) for c in self.channels]
+        from services.validity_tiers import VALID, channel_tier
         self.beginResetModel()
-        self.channels = [c for c in self.channels if c.get('valid') is not False]
+        self.channels = [c for c in self.channels if channel_tier(c) == VALID]
         self._is_hiding_invalid = True
         self.endResetModel()
 
@@ -622,14 +630,14 @@ class ChannelListModel(QtCore.QAbstractTableModel):
         return sorted(self._name_cache)
 
     def _filter_original_content(self) -> str:
-        """过滤原始文件内容，只保留非无效频道的行（疑似保留）"""
+        """过滤原始文件内容，只保留确证有效的频道行（与「只看有效」一致）"""
         if not self._original_file_content or not self._is_hiding_invalid:
             return ""
 
-        from services.validity_tiers import INVALID, channel_tier
+        from services.validity_tiers import VALID, channel_tier
         valid_urls = {
             ch.get('url') for ch in self.channels
-            if channel_tier(ch) != INVALID
+            if channel_tier(ch) == VALID
         }
 
         lines = self._original_file_content.splitlines()
@@ -1581,6 +1589,7 @@ class ChannelListModel(QtCore.QAbstractTableModel):
             # 使用线程安全的模型重置
             self.beginResetModel()
             self.channels = []
+            self._reset_filter_state()
             self._name_cache = set()
             self._group_cache = set()
             # 清空原始数据存储

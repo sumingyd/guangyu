@@ -6,8 +6,10 @@
 - HTTP 状态码 <400 且内容命中媒体特征（#EXTM3U、TS 同步字节、视频/mpegurl
   Content-Type）→ 确证有效
 - HTTP 能连上但没有任何媒体特征 → 疑似
-- 明确 4xx / 拒连 / 超时 → 不可用
-- RTSP 仅 TCP 连通 → 疑似
+- 4xx / 拒连 / DNS 失败 → 不可用
+- 连接阶段超时（TCP 握手等不到）：短超时重试一次，仍超时 → 不可用；
+  连上之后的读取超时 → 疑似（源站活着，只是慢）
+- RTSP 仅 TCP 连通 → 疑似；TCP 连接超时同样重试一次，仍超时 → 不可用
 - RTP/UDP 至少收到两个包且校验 0x47 同步字节，才判有效；只有包但不同步 → 疑似
 """
 import socket
@@ -26,6 +28,11 @@ UDP_MAX_WAIT = 5
 UDP_TS_PACKETS = 2
 # HTTP 连接超时上限（秒）：用户设定更小时尊重用户值；读取超时始终用用户设定
 HTTP_CONNECT_TIMEOUT_MAX = 3
+# 连接阶段超时的重试次数与重试时的连接超时上限：
+# 死地址通常就是「等不到握手」，一次超时不足以断言，重试一次仍超时才判不可用。
+# 只缩短重试这一次（首次仍最多 3s），让步死地址最坏 3+1 秒，避免死链多的清单耗时翻倍
+CONNECT_ATTEMPTS = 2
+CONNECT_RETRY_TIMEOUT = 1
 
 
 def _timeout_error_type(exc: Exception) -> Optional[str]:
@@ -136,20 +143,40 @@ def _probe_http(url: str, timeout: int, ctx: NetworkContext, t0: float) -> Dict:
     headers['Range'] = 'bytes=0-2047'
     # 连接超时短、读取超时长：黑洞地址快速失败，慢源仍有完整读取时间
     connect_timeout = min(float(timeout), HTTP_CONNECT_TIMEOUT_MAX)
-    try:
-        resp = _http_get(url, timeout=(connect_timeout, float(timeout)),
-                         allow_redirects=True, headers=headers, stream=True,
-                         retry=False)
-    except Exception as exc:
-        result['latency'] = int((time.time() - t0) * 1000)
-        timeout_kind = _timeout_error_type(exc)
-        if timeout_kind:
-            # 超时只说明「没等到」，不能断言不可用
-            result['validity'] = SUSPECTED
-            result['error_type'] = timeout_kind
-            result['status'] = f'超时: {str(exc)[:60]}'
+    resp = None
+    for attempt in range(CONNECT_ATTEMPTS):
+        attempt_timeout = (connect_timeout if attempt == 0
+                           else min(connect_timeout, float(CONNECT_RETRY_TIMEOUT)))
+        try:
+            resp = _http_get(url, timeout=(attempt_timeout, float(timeout)),
+                             allow_redirects=True, headers=headers, stream=True,
+                             retry=False)
+            break
+        except Exception as exc:
+            timeout_kind = _timeout_error_type(exc)
+            if timeout_kind == 'connect_timeout' and attempt + 1 < CONNECT_ATTEMPTS:
+                # 握手超时先重试一次：死地址往往就是等不到 SYN-ACK
+                continue
+            result['latency'] = int((time.time() - t0) * 1000)
+            if timeout_kind == 'connect_timeout':
+                # 两次都等不到握手，判定地址侧不可达
+                result['validity'] = INVALID
+                result['error_type'] = 'connect_timeout'
+                result['status'] = '连接超时（重试仍失败）'
+                return result
+            if timeout_kind:
+                # 连上之后的读取超时只说明「没等到数据」，不能断言不可用
+                result['validity'] = SUSPECTED
+                result['error_type'] = timeout_kind
+                result['status'] = f'超时: {str(exc)[:60]}'
+                return result
+            result['status'] = f'错误: {str(exc)[:60]}'
+            result['error_type'] = 'connect_failed'
             return result
-        result['status'] = f'错误: {str(exc)[:60]}'
+
+    if resp is None:
+        result['latency'] = int((time.time() - t0) * 1000)
+        result['status'] = '连接失败'
         result['error_type'] = 'connect_failed'
         return result
 
@@ -202,29 +229,40 @@ def _probe_rtsp(url: str, timeout: int, t0: float) -> Dict:
             result['status'] = 'RTSP 地址无效'
             result['error_type'] = 'invalid_url'
             return result
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            # 纯 TCP 握手：同样用短连接超时快速失败；超时只判疑似
-            sock.settimeout(min(float(timeout), HTTP_CONNECT_TIMEOUT_MAX))
-            sock.connect((host, port))
-            result['latency'] = int((time.time() - t0) * 1000)
-            # 仅 TCP 连通属于弱检查
-            result['validity'] = SUSPECTED
-            result['status'] = 'RTSP 端口可达（未拉流）'
-            result['error_type'] = 'weak_check'
-            return result
-        finally:
+        connect_timeout = min(float(timeout), HTTP_CONNECT_TIMEOUT_MAX)
+        for attempt in range(CONNECT_ATTEMPTS):
+            attempt_timeout = (connect_timeout if attempt == 0
+                               else min(connect_timeout, float(CONNECT_RETRY_TIMEOUT)))
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
-                sock.close()
-            except Exception:
-                pass
-    except TimeoutError:
-        # 连接超时只说明「没等到握手」，不能断言不可用
-        result['latency'] = int((time.time() - t0) * 1000)
-        result['validity'] = SUSPECTED
-        result['status'] = 'RTSP 连接超时'
-        result['error_type'] = 'timeout'
-        return result
+                # 纯 TCP 握手：同样用短连接超时快速失败；超时先重试一次
+                sock.settimeout(attempt_timeout)
+                sock.connect((host, port))
+                result['latency'] = int((time.time() - t0) * 1000)
+                # 仅 TCP 连通属于弱检查
+                result['validity'] = SUSPECTED
+                result['status'] = 'RTSP 端口可达（未拉流）'
+                result['error_type'] = 'weak_check'
+                return result
+            except (TimeoutError, socket.timeout):
+                if attempt + 1 < CONNECT_ATTEMPTS:
+                    continue
+                # 两次都等不到握手，判定地址侧不可达
+                result['latency'] = int((time.time() - t0) * 1000)
+                result['validity'] = INVALID
+                result['status'] = 'RTSP 连接超时（重试仍失败）'
+                result['error_type'] = 'connect_timeout'
+                return result
+            except Exception as exc:
+                result['latency'] = int((time.time() - t0) * 1000)
+                result['status'] = f'RTSP: {str(exc)[:40]}'
+                result['error_type'] = 'connect_failed'
+                return result
+            finally:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
     except Exception as exc:
         result['latency'] = int((time.time() - t0) * 1000)
         result['status'] = f'RTSP: {str(exc)[:40]}'

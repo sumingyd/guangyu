@@ -2448,12 +2448,27 @@ class ScanChannelDialog(FloatingDialog):
                 logger.debug(f"_exec_themed_dialog: {e}")
 
     def _update_empty_hint(self):
-        """更新空列表提示可见性"""
-        if hasattr(self, '_empty_stack'):
-            if self.model.rowCount() == 0:
-                self._empty_stack.setCurrentIndex(1)
+        """更新空列表提示可见性
+
+        空列表有两种原因：还没扫描/打开列表，或「只看有效」把疑似与无效都滤掉了。
+        后者要让用户知道数据还在、只是被筛选隐藏。
+        """
+        if not hasattr(self, '_empty_stack'):
+            return
+        if self.model.rowCount() == 0:
+            tr = self.language_manager.tr
+            if getattr(self.model, '_is_hiding_invalid', False):
+                self._empty_hint.setText(tr(
+                    "empty_list_valid_only_hint",
+                    "当前筛选下没有确证有效的频道；再点一次「显示全部」恢复完整列表",
+                ))
             else:
-                self._empty_stack.setCurrentIndex(0)
+                self._empty_hint.setText(tr(
+                    "empty_list_hint", "输入地址后点击扫描，或打开已有列表"
+                ))
+            self._empty_stack.setCurrentIndex(1)
+        else:
+            self._empty_stack.setCurrentIndex(0)
 
     def _setup_shortcuts(self):
         """设置快捷键
@@ -2789,7 +2804,7 @@ class ScanChannelDialog(FloatingDialog):
             )
             self._set_scan_model()
             self.btn_validate.setText(self.language_manager.tr("stop_validate", "Stop Validate"))
-            self.btn_hide_invalid.setEnabled(True)
+            self._update_filter_button_state()
             self.btn_hide_invalid.setStyleSheet(
                 AppStyles.button_style(active=True)
             )
@@ -3015,7 +3030,7 @@ class ScanChannelDialog(FloatingDialog):
                 header = self.channel_list.horizontalHeader()
                 header.resizeSections(QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
 
-            self.btn_hide_invalid.setEnabled(True)
+            self._update_filter_button_state()
             self.btn_hide_invalid.setStyleSheet(AppStyles.button_style(active=True))
 
         except FileNotFoundError:
@@ -3154,16 +3169,51 @@ class ScanChannelDialog(FloatingDialog):
     def _on_save_txt_clicked(self):
         self._save_list_as('txt')
 
+    def _update_filter_button_state(self, stats=None):
+        """按当前结果分布同步「只看有效」的可用性与文案。
+
+        只要还有疑似或不可用项，按钮就必须可用；扫描/检测进行中则禁用，
+        避免中途删除行导致扫描线程按旧行号写入。
+        """
+        if not hasattr(self, 'btn_hide_invalid') or not hasattr(self, 'model'):
+            return
+        try:
+            tr = self.language_manager.tr
+            busy = False
+            scanner = getattr(self, 'scanner', None)
+            if scanner is not None:
+                busy = bool(getattr(scanner, 'is_validating', False))
+                if not busy and hasattr(scanner, 'is_scanning'):
+                    busy = bool(scanner.is_scanning())
+            active = getattr(self.model, '_is_hiding_invalid', False)
+
+            if stats:
+                removable = int(stats.get('suspected', 0) or 0) + \
+                    int(stats.get('invalid', 0) or 0)
+            else:
+                from services.validity_tiers import INVALID, SUSPECTED, channel_tier
+                source = getattr(self.model, '_original_channels', None) or self.model.channels
+                removable = sum(
+                    1 for ch in source if channel_tier(ch) in (SUSPECTED, INVALID)
+                )
+
+            self.btn_hide_invalid.setEnabled(
+                (not busy) and (active or removable > 0)
+            )
+            self.btn_hide_invalid.setText(
+                tr("show_hidden", "Show All") if active
+                else tr("hide_invalid_button", "Only Valid")
+            )
+        except Exception as e:
+            logger.debug(f"_update_filter_button_state: {e}")
+
     def _on_hide_invalid_clicked(self):
-        """处理隐藏无效项按钮点击事件"""
-        tr = self.language_manager.tr
-        hide_text = tr("hide_invalid", "Hide Invalid")
-        if self.btn_hide_invalid.text() == hide_text:
-            self.model.hide_invalid()
-            self.btn_hide_invalid.setText(tr("show_hidden", "Show Hidden"))
-        else:
+        """只看有效 / 显示全部"""
+        if getattr(self.model, '_is_hiding_invalid', False):
             self.model.show_all()
-            self.btn_hide_invalid.setText(hide_text)
+        else:
+            self.model.hide_invalid()
+        self._update_filter_button_state()
 
     def save_before_exit(self):
         """退出前保存配置"""
@@ -3204,6 +3254,7 @@ class ScanChannelDialog(FloatingDialog):
         was_stopping = getattr(self, '_is_stopping', False)
 
         self._set_browse_model()
+        self._update_filter_button_state()
 
         if hasattr(self, '_validation_retry_urls') and self._validation_retry_urls:
             self._on_validation_retry_completed()
@@ -3437,6 +3488,7 @@ class ScanChannelDialog(FloatingDialog):
                 f"{time_text}: {elapsed}"
             )
             self.stats_label.setText(stats_text)
+            self._update_filter_button_state(stats)
         except Exception as e:
             self.logger.error(f"更新统计信息显示失败: {e}", exc_info=True)
 
@@ -3555,6 +3607,8 @@ class ScanChannelDialog(FloatingDialog):
                 self.left_title.setText(tr('scan_settings_title', 'Scan Settings'))
             if hasattr(self, 'list_title'):
                 self.list_title.setText(tr('channel_list_title', 'Channel List'))
+            # 空态文案随筛选状态变化，语言切换后需要重算
+            self._update_empty_hint()
             if hasattr(self, 'right_title'):
                 self.right_title.setText(tr('channel_edit_title', 'Channel Edit'))
             if hasattr(self, 'close_btn'):
