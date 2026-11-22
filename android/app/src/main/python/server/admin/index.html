@@ -3051,7 +3051,7 @@ init();
     <div class="token-login-icon">🔒</div>
     <h2>访问认证</h2>
     <p>此服务需要访问令牌。<br>请在 TV 应用端的局域网管理页面查看令牌并输入。</p>
-    <input type="text" id="tokenInput" placeholder="4 位数字" maxlength="4" inputmode="numeric" pattern="[0-9]*" autocomplete="off" onkeydown="if(event.key==='Enter')_submitTokenLogin()">
+    <input type="text" id="tokenInput" placeholder="6 位数字" maxlength="6" inputmode="numeric" pattern="[0-9]{6}" autocomplete="off" onkeydown="if(event.key==='Enter')_submitTokenLogin()">
     <button class="token-login-btn" onclick="_submitTokenLogin()">确认连接</button>
     <div id="tokenLoginError" class="token-login-error"></div>
   </div>

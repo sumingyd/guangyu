@@ -1740,17 +1740,21 @@ _admin_server_lock = _threading.Lock()
 def set_admin_token(token=''):
     """设置局域网管理服务器的认证 token。
 
-    传入空字符串则清除自定义 token，下次启动时自动生成随机 token。
-    传入非空字符串则使用该字符串作为 token（方便用户记忆）。
+    传入空字符串则清除自定义 token，下次启动时自动生成 6 位数字认证码。
+    传入非空字符串则使用该字符串作为 token（必须是 6 位数字）。
     注意：仅在服务器未运行时生效。
     """
     global _admin_auth_token
+    token = token.strip()
+    # 认证码统一为 6 位纯数字；留空表示清除自定义值，启动时自动生成
+    if token and not (len(token) == 6 and token.isascii() and token.isdigit()):
+        return _err('访问令牌必须是 6 位数字')
     with _admin_server_lock:
         if _admin_server_running:
             return _err('服务器运行中，请先停止后再修改令牌')
-        _admin_auth_token = token.strip()
+        _admin_auth_token = token
     if _admin_auth_token:
-        _log(f'Admin server token set to custom: {_admin_auth_token}')
+        _log('Admin server token set to custom')
     else:
         _log('Admin server token cleared, will auto-generate on start')
     return _ok({'ok': True, 'token': _admin_auth_token})
@@ -1801,11 +1805,11 @@ def start_admin_server(port=8080):
     except Exception as e:
         return _err(f'获取局域网 IP 失败: {e}')
 
-    # 生成认证 token（首次启动时生成，之后复用）
-    # 6 位字母数字令牌，平衡安全性与手动输入便利性
+    # 生成认证码（首次启动时生成，之后复用）
+    # 6 位纯数字认证码（000000-999999），便于在浏览器上手动输入
     if not _admin_auth_token:
-        _admin_auth_token = secrets.token_urlsafe(6)
-        _log(f'Admin server auth token generated: {_admin_auth_token}')
+        _admin_auth_token = f'{secrets.randbelow(1_000_000):06d}'
+        _log('Admin server auth token generated (6-digit PIN)')
 
     def _run_server():
         global _admin_server_running, _admin_loop, _admin_server_error, _admin_server_task

@@ -680,7 +680,7 @@ private fun LanAdminInfoBar(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "$url/admin/" + (if (token.isNotEmpty()) "?token=****" else ""),
+                        text = "$url/admin/" + (if (token.isNotEmpty()) "?token=******" else ""),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary,
                         maxLines = 1,
@@ -768,7 +768,7 @@ private fun LanAdminInfoBar(
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = if (tokenVisible) token else "••••",
+                                    text = if (tokenVisible) token else "••••••",
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = MaterialTheme.colorScheme.onSurface,
                                     fontWeight = FontWeight.Bold
@@ -790,7 +790,7 @@ private fun LanAdminInfoBar(
 
 /**
  * 自定义访问令牌输入（仅在服务器未运行时显示）
- * 用户可设置一个好记的令牌，留空则启动时自动生成随机令牌
+ * 令牌统一为 6 位数字，留空则启动时自动生成随机令牌
  */
 @Composable
 private fun LanAdminTokenInput(viewModel: AppViewModel) {
@@ -811,7 +811,7 @@ private fun LanAdminTokenInput(viewModel: AppViewModel) {
             )
             if (adminToken.isNotEmpty()) {
                 Text(
-                    text = if (showInput) "" else "••••",
+                    text = if (showInput) "" else "••••••",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Medium
@@ -835,11 +835,13 @@ private fun LanAdminTokenInput(viewModel: AppViewModel) {
             ) {
                 OutlinedTextField(
                     value = tokenInput,
-                    onValueChange = { tokenInput = it },
-                    placeholder = { Text("留空自动生成", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) },
+                    onValueChange = { input ->
+                        tokenInput = input.filter { it.isDigit() }.take(6)
+                    },
+                    placeholder = { Text("6 位数字，留空自动生成", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) },
                     modifier = Modifier.weight(1f).tvTextField(),
                     singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     shape = RoundedCornerShape(8.dp)
                 )
                 OutlinedButton(
@@ -848,13 +850,14 @@ private fun LanAdminTokenInput(viewModel: AppViewModel) {
                         showInput = false
                         tokenInput = ""
                     },
+                    enabled = tokenInput.isEmpty() || tokenInput.length == 6,
                     modifier = Modifier.tvFocusBorder()
                 ) {
                     Text("保存", fontSize = 12.sp)
                 }
             }
             Text(
-                text = "留空则自动生成 4 位数字令牌，也可自定义",
+                text = "留空则自动生成 6 位数字令牌，也可自定义",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp)

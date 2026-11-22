@@ -34,7 +34,7 @@ class ServerMixin:
                 msg += '  ' + tr('server_port_shifted', '端口 {requested} 已被占用，已改用 {port}').format(
                     requested=server.requested_port, port=actual_port)
             self.status_bar_show_message(msg, 10000)
-            logger.info(f"HTTP 服务器已按用户设置启动: http://{host}:{actual_port}, 认证码: {token}")
+            logger.info(f"HTTP 服务器已按用户设置启动: http://{host}:{actual_port}（认证码见服务设置）")
             if self._server_action is not None:
                 self._server_action.setText(tr('server_stop', '停止服务'))
         except Exception as e:

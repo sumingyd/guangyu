@@ -16,26 +16,41 @@ from utils.general_utils import redact_url
 logger = logging.getLogger('server.routes')
 
 # --- 安全配置 ---
-# 认证 Token 优先级：环境变量 ISEP_AUTH_TOKEN > config.ini [Server] auth_token > 自动生成并持久化
-# 持久化后客户端重启无需重新获取 Token，避免每次启动随机 Token 导致已登录客户端 401
+# 认证码统一为 6 位纯数字（000000-999999），便于在浏览器/遥控器上手动输入
+_PIN_RE = re.compile(r'^\d{6}$')
+
+
+def _generate_auth_pin() -> str:
+    """生成 6 位纯数字认证码（保留前导零）"""
+    return f'{_secrets_mod.randbelow(1_000_000):06d}'
+
+
+# 认证码优先级：环境变量 ISEP_AUTH_TOKEN > config.ini [Server] auth_token > 自动生成并持久化
+# 持久化后客户端重启无需重新获取认证码，避免每次启动随机认证码导致已登录客户端 401
 def _resolve_auth_token() -> str:
     env_token = os.environ.get('ISEP_AUTH_TOKEN', '').strip()
     if env_token:
+        # 环境变量属于显式覆盖，保持原值；非 6 位数字时提示，避免手动登录时输入不匹配
+        if not _PIN_RE.match(env_token):
+            logger.warning('ISEP_AUTH_TOKEN 不是 6 位数字，仍按环境变量原值使用')
         return env_token
     try:
         from core.config_manager import ConfigManager
         config = ConfigManager()
         token = (config.get_value('Server', 'auth_token', '') or '').strip()
-        if token:
+        if token and _PIN_RE.match(token):
             return token
-        token = _secrets_mod.token_hex(16)
+        if token:
+            # 旧版本的 32 位十六进制/8 位 base64url 令牌不再可用，重新生成并写回
+            logger.info('检测到旧格式认证码，已重新生成 6 位数字认证码')
+        token = _generate_auth_pin()
         config.set_value('Server', 'auth_token', token)
         config.save_config(immediate=True)
-        logger.info('已在 config.ini [Server] auth_token 中生成并保存认证 Token')
+        logger.info('已在 config.ini [Server] auth_token 中生成并保存 6 位数字认证码')
         return token
     except Exception as e:
-        logger.warning(f'读取/持久化认证 Token 失败，使用进程内临时 Token: {e}')
-        return _secrets_mod.token_hex(16)
+        logger.warning(f'读取/持久化认证码失败，使用进程内临时认证码: {e}')
+        return _generate_auth_pin()
 
 
 _AUTH_TOKEN = _resolve_auth_token()
