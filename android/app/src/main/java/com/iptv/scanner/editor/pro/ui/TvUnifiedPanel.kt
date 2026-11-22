@@ -69,6 +69,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.focus.FocusRequester
@@ -145,6 +146,13 @@ fun TvUnifiedPanel(viewModel: AppViewModel) {
     val osdHideChannelNum by viewModel.osdHideChannelNum.collectAsState()
     val osdDisableFavorite by viewModel.osdDisableFavorite.collectAsState()
     val osdDisableEpg by viewModel.osdDisableEpg.collectAsState()
+
+    // 主题 / 界面模式：侧边栏补齐这两个入口后需要在本层弹单选窗
+    // （纯 UI 状态，不能放进 ViewModel）
+    val themeMode by viewModel.themeMode.collectAsState()
+    val uiModePref by viewModel.uiModePref.collectAsState()
+    var showThemePicker by remember { mutableStateOf(false) }
+    var showUiModePicker by remember { mutableStateOf(false) }
 
     // 订阅源加载态：服务端状态 + 本地重载标志，任一为真即视为加载中。
     // 频道列空态必须依赖真实加载状态，不能用「列表为空」反推。
@@ -437,77 +445,39 @@ fun TvUnifiedPanel(viewModel: AppViewModel) {
                     // -----------------------------------------------------------------
                     MenuColumn(
                         viewModel = viewModel,
-                        currentIdx = currentIdx,
-                        isFavorite = isFavorite,
-                        multiViewActive = multiViewState.active,
-                        currentMultiViewLayout = if (multiViewState.active) multiViewState.layout else null,
-                        onEnterMultiView = { layout ->
-                            // 进入多画面：关闭统一面板，让多画面网格可见
-                            viewModel.setLandscapeSidebarVisible(false)
-                            viewModel.enterMultiView(layout)
-                        },
-                        onExitMultiView = {
-                            viewModel.exitMultiView()
-                            viewModel.setLandscapeSidebarVisible(false)
-                        },
-                        onOpenPlaylist = {
-                            // SAF launcher 注册在 TvUnifiedPanel 内，必须在结果返回时保持面板存活。
-                            // 之前用 openOverlay 先关面板再 launch，导致 launcher 被反注册、SAF 结果被丢弃。
-                            // 修复：SAF 是系统级浮层会覆盖面板，保持面板打开让 launcher 存活；
-                            //       FileBrowser 路径才需要关闭统一面板（FileBrowser 在统一面板之后渲染会被遮挡）。
-                            if (!viewModel.isSafAvailable()) {
+                        host = MenuHost(
+                            kind = MenuHostKind.TV_SIDEBAR,
+                            closeHost = {
                                 viewModel.setLandscapeSidebarVisible(false)
-                                viewModel.showFileBrowser()
-                            } else {
-                                playlistLauncher.launch(arrayOf(
-                                    "application/x-mpegurl", "application/vnd.apple.mpegurl",
-                                    "audio/x-mpegurl", "video/x-mpegurl",
-                                    "text/plain", "application/octet-stream"
-                                ))
-                            }
-                        },
-                        onOpenUrl = { openOverlay { viewModel.toggleOpenUrlDialog() } },
-                        onOpenLocalVideo = {
-                            // 同 onOpenPlaylist：SAF 路径保持面板打开，FileBrowser 路径关闭面板
-                            if (!viewModel.isSafAvailable()) {
-                                viewModel.setLandscapeSidebarVisible(false)
-                                viewModel.showMediaFileBrowser()
-                            } else {
-                                videoLauncher.launch(arrayOf("video/*", "audio/*", "application/x-matroska", "application/octet-stream"))
-                            }
-                        },
-                        onSources = {
-                            openOverlay {
-                                viewModel.setSourceTab(SourceTab.PLAYLIST)
-                                viewModel.toggleSourceManager()
-                            }
-                        },
-                        onEpgSources = {
-                            openOverlay {
-                                viewModel.setSourceTab(SourceTab.EPG)
-                                viewModel.toggleSourceManager()
-                            }
-                        },
-                        onMapping = { openOverlay { viewModel.toggleMappingPanel() } },
-                        onChannels = { openOverlay { viewModel.showChannelsPanel() } },
-                        onEpg = { openOverlay { viewModel.showEpgPanel() } },
-                        onSubtitle = { openOverlay { viewModel.toggleSubtitleSettings() } },
-                        onVideo = { openOverlay { viewModel.toggleVideoSettings() } },
-                        onAudio = { openOverlay { viewModel.toggleAudioSettings() } },
-                        onPlayback = { openOverlay { viewModel.togglePlaybackPanel() } },
-                        onScreenshot = { openOverlay { viewModel.toggleScreenshotPanel() } },
-                        onAvsync = { openOverlay { viewModel.toggleAvSyncPanel() } },
-                        onNetwork = { openOverlay { viewModel.toggleNetworkPanel() } },
-                        onTools = { openOverlay { viewModel.toggleToolsPanel() } },
-                        onView = { openOverlay { viewModel.toggleViewSettings() } },
-                        onSettings = { openOverlay { viewModel.togglePlayerSettings() } },
-                        onAbout = { openOverlay { viewModel.toggleAboutPanel() } },
-                        onToggleFavorite = { viewModel.toggleFavorite() },
-                        onClearChannelSettings = {
-                            val idx = viewModel.currentIdx.value
-                            if (idx >= 0) viewModel.clearChannelSettings(idx)
-                        },
-                        onQuit = { viewModel.showOsd("退出", "请使用系统返回键退出") },
+                                viewModel.closeTvUnifiedPanel()
+                            },
+                            launchPlaylist = {
+                                // SAF launcher 注册在 TvUnifiedPanel 内，必须在结果返回时保持面板存活。
+                                // SAF 是系统级浮层会覆盖面板，保持面板打开让 launcher 存活；
+                                // FileBrowser 路径才需要关闭统一面板（FileBrowser 在统一面板之后渲染会被遮挡）。
+                                if (!viewModel.isSafAvailable()) {
+                                    viewModel.setLandscapeSidebarVisible(false)
+                                    viewModel.showFileBrowser()
+                                } else {
+                                    playlistLauncher.launch(arrayOf(
+                                        "application/x-mpegurl", "application/vnd.apple.mpegurl",
+                                        "audio/x-mpegurl", "video/x-mpegurl",
+                                        "text/plain", "application/octet-stream"
+                                    ))
+                                }
+                            },
+                            launchVideo = {
+                                // 同 launchPlaylist：SAF 路径保持面板打开，FileBrowser 路径关闭面板
+                                if (!viewModel.isSafAvailable()) {
+                                    viewModel.setLandscapeSidebarVisible(false)
+                                    viewModel.showMediaFileBrowser()
+                                } else {
+                                    videoLauncher.launch(arrayOf("video/*", "audio/*", "application/x-matroska", "application/octet-stream"))
+                                }
+                            },
+                            openThemePicker = { showThemePicker = true },
+                            openUiModePicker = { showUiModePicker = true }
+                        ),
                         modifier = Modifier.width(360.dp).focusRequester(channelListFocus)
                     )
                     // 第三~五列占位
@@ -517,6 +487,32 @@ fun TvUnifiedPanel(viewModel: AppViewModel) {
                 }
             }
         }
+    }
+
+    // 侧边栏补齐主题 / 界面模式入口：与右侧菜单共用同一组单选弹窗
+    if (showThemePicker) {
+        ThemePickerDialog(
+            current = themeMode,
+            onPick = { mode ->
+                showThemePicker = false
+                viewModel.setThemeMode(mode)
+            },
+            onDismiss = { showThemePicker = false }
+        )
+    }
+    if (showUiModePicker) {
+        UiModePickerDialog(
+            current = uiModePref,
+            onPick = { pref ->
+                showUiModePicker = false
+                if (pref != uiModePref) {
+                    viewModel.setUiModePreference(pref)
+                    // 形态切换会重建布局，关闭侧边栏避免停在旧形态的树上
+                    viewModel.setLandscapeSidebarVisible(false)
+                }
+            },
+            onDismiss = { showUiModePicker = false }
+        )
     }
 }
 
@@ -1063,106 +1059,76 @@ private fun TvChannelItem(
 @Composable
 private fun MenuColumn(
     viewModel: AppViewModel,
-    currentIdx: Int,
-    isFavorite: Boolean,
-    multiViewActive: Boolean,
-    currentMultiViewLayout: MultiViewLayout?,
-    onEnterMultiView: (MultiViewLayout) -> Unit,
-    onExitMultiView: () -> Unit,
-    onOpenPlaylist: () -> Unit,
-    onOpenUrl: () -> Unit,
-    onOpenLocalVideo: () -> Unit,
-    onSources: () -> Unit,
-    onEpgSources: () -> Unit,
-    onMapping: () -> Unit,
-    onChannels: () -> Unit,
-    onEpg: () -> Unit,
-    onSubtitle: () -> Unit,
-    onVideo: () -> Unit,
-    onAudio: () -> Unit,
-    onPlayback: () -> Unit,
-    onScreenshot: () -> Unit,
-    onAvsync: () -> Unit,
-    onNetwork: () -> Unit,
-    onTools: () -> Unit,
-    onView: () -> Unit,
-    onSettings: () -> Unit,
-    onAbout: () -> Unit,
-    onToggleFavorite: () -> Unit,
-    onClearChannelSettings: () -> Unit,
-    onQuit: () -> Unit,
+    host: MenuHost,
     modifier: Modifier = Modifier
 ) {
-    val hasCurrentChannel = currentIdx >= 0
+    val currentIdx by viewModel.currentIdx.collectAsState()
+    val favorites by viewModel.favorites.collectAsState()
+    val multiViewState by viewModel.multiViewState.collectAsState()
+    val actualVo by viewModel.actualVo.collectAsState()
     val perChannelEnabled by viewModel.perChannelSettingsEnabled.collectAsState()
-    val hasChannelSettings = remember(currentIdx) { currentIdx >= 0 && viewModel.hasChannelSettings(currentIdx) }
+    val hasChannelSettings = remember(currentIdx, perChannelEnabled) {
+        currentIdx >= 0 && viewModel.hasChannelSettings(currentIdx)
+    }
+    // 补齐右侧独有条目后，动态文案与开关态需要同一份运行时状态
+    val themeMode by viewModel.themeMode.collectAsState()
+    val uiModePref by viewModel.uiModePref.collectAsState()
+    val bottomBarStyle by viewModel.bottomBarStyle.collectAsState()
+    val liquidGlass by viewModel.liquidGlass.collectAsState()
+    val glassRefraction by viewModel.glassRefraction.collectAsState()
+    val osdShowTime by viewModel.osdShowTime.collectAsState()
+    val osdShowNetSpeed by viewModel.osdShowNetSpeed.collectAsState()
+    val osdHideChannelNum by viewModel.osdHideChannelNum.collectAsState()
+    val osdDisableEpg by viewModel.osdDisableEpg.collectAsState()
+    val osdDisableFavorite by viewModel.osdDisableFavorite.collectAsState()
+    val osdShowListIcon by viewModel.osdShowListIcon.collectAsState()
+    val osdShowBottomIcon by viewModel.osdShowBottomIcon.collectAsState()
+    val sources by viewModel.sources.collectAsState()
+    val selectedSource by viewModel.selectedSource.collectAsState()
+    val githubProxyEnabled by viewModel.githubProxyEnabled.collectAsState()
+    val githubProxySelected by viewModel.githubProxySelected.collectAsState()
 
-    val menuItems = remember(hasCurrentChannel, isFavorite, multiViewActive, currentMultiViewLayout, perChannelEnabled, hasChannelSettings) {
-        buildList {
-            // 快捷分组
-            add(TvMenuItem("频道列表", "订阅 / 本地 / 收藏 / 历史", Icons.AutoMirrored.Filled.ListAlt, onChannels, highlight = true))
-            add(TvMenuItem("节目单 EPG", "当前频道节目 / 日期切换 / 提醒", Icons.Default.CalendarMonth, onEpg, highlight = true))
-            // 文件分组
-            add(TvMenuItem("打开播放列表", "选择 M3U/M3U8 文件", Icons.Default.FileOpen, onOpenPlaylist))
-            add(TvMenuItem("打开网络流", "输入订阅源 URL", Icons.Default.Link, onOpenUrl))
-            add(TvMenuItem("打开本地文件", "播放设备视频/音频文件", Icons.Default.Movie, onOpenLocalVideo))
-            add(TvMenuItem("订阅源管理", "添加 / 编辑 / 删除 M3U", Icons.Default.Web, onSources))
-            add(TvMenuItem("EPG 订阅源", "管理节目单订阅地址", Icons.Default.CalendarMonth, onEpgSources))
-            add(TvMenuItem("频道映射", "远程 + 用户映射管理", Icons.Default.SyncAlt, onMapping))
-            // 播放分组
-            add(TvMenuItem("字幕", "轨 / 显示 / 延迟 / 样式", Icons.Default.ClosedCaption, onSubtitle))
-            add(TvMenuItem("视频", "图像 / 旋转 / 翻转 / 3D", Icons.Default.VideoSettings, onVideo))
-            add(TvMenuItem("音频", "音轨 / 延迟 / EQ / 音调", Icons.Default.Equalizer, onAudio))
-            add(TvMenuItem("播放", "速度 / 循环 / 随机 / AB", Icons.Default.PlayCircle, onPlayback))
-            add(TvMenuItem("截图", "单张 / 连拍 / 含字幕", Icons.Default.ScreenshotMonitor, onScreenshot))
-            add(TvMenuItem("A/V 同步", "数值 / 波形 / 延迟", Icons.Default.GraphicEq, onAvsync))
-            add(TvMenuItem("网络增强", "Referer / Proxy / Headers", Icons.Default.Public, onNetwork))
-            add(TvMenuItem("工具", "搜索 / 时间线 / 提醒 / 扫描", Icons.Default.Tune, onTools))
-            add(TvMenuItem("视图", "视频比例 / OSD", Icons.Default.ViewInAr, onView))
-            // 多画面分组（主画面 MPV，副画面 ExoPlayer）
-            if (multiViewActive && currentMultiViewLayout != null) {
-                // 已激活：在 DUAL → QUAD → NINE → DUAL 之间循环切换
-                val otherLayout = when (currentMultiViewLayout) {
-                    MultiViewLayout.DUAL -> MultiViewLayout.QUAD
-                    MultiViewLayout.QUAD -> MultiViewLayout.NINE
-                    MultiViewLayout.NINE -> MultiViewLayout.DUAL
-                    else -> MultiViewLayout.DUAL
-                }
-                add(TvMenuItem(
-                    "切换为${otherLayout.displayName}",
-                    "当前 ${currentMultiViewLayout.displayName}",
-                    Icons.Default.ViewModule,
-                    { onEnterMultiView(otherLayout) }
-                ))
-                add(TvMenuItem("退出多画面", "退出多画面模式", Icons.AutoMirrored.Filled.ExitToApp, onExitMultiView, highlight = true))
-            } else {
-                add(TvMenuItem("双画面", "左右分屏", Icons.Default.ViewModule, { onEnterMultiView(MultiViewLayout.DUAL) }))
-                add(TvMenuItem("四画面", "2x2 网格", Icons.Default.GridView, { onEnterMultiView(MultiViewLayout.QUAD) }))
-                add(TvMenuItem("九画面", "3x3 网格", Icons.Default.GridView, { onEnterMultiView(MultiViewLayout.NINE) }))
-            }
-            // 系统分组
-            add(TvMenuItem("设置", "VO / HWDEC / HDR", Icons.Default.Settings, onSettings))
-            add(TvMenuItem("关于", "版本 / 功能特性", Icons.Default.Info, onAbout))
-            add(TvMenuItem(
-                if (isFavorite) "取消收藏" else "收藏",
-                if (hasCurrentChannel) "当前频道" else "未选择频道",
-                Icons.Default.Favorite,
-                onToggleFavorite,
-                highlight = hasCurrentChannel
-            ))
-            // 频道记忆（仅在开启时显示）
-            if (perChannelEnabled && hasCurrentChannel) {
-                if (hasChannelSettings) {
-                    add(TvMenuItem(
-                        "清除频道专属设置",
-                        "恢复使用全局设置",
-                        Icons.Default.Delete,
-                        onClearChannelSettings,
-                        highlight = true
-                    ))
-                }
-            }
-            add(TvMenuItem("退出", "关闭应用", Icons.AutoMirrored.Filled.ExitToApp, onQuit))
+    // 与右侧菜单共用同一份条目定义，只保留侧边栏渲染面可见的条目
+    val state = MenuRuntimeState(
+        surfaceDirect = actualVo == "mediacodec_embed",
+        hasChannel = currentIdx >= 0,
+        isFavorite = currentIdx >= 0 && favorites.contains(currentIdx),
+        themeMode = themeMode,
+        uiModeLabel = uiModePref.label,
+        bottomBarStyleLabel = TV_BOTTOM_BAR_STYLES.firstOrNull { it.first == bottomBarStyle }?.second
+            ?: "信息详情式",
+        liquidGlass = liquidGlass,
+        glassRefraction = glassRefraction,
+        showTime = osdShowTime,
+        showNetSpeed = osdShowNetSpeed,
+        hideChannelNum = osdHideChannelNum,
+        disableEpg = osdDisableEpg,
+        disableFavorite = osdDisableFavorite,
+        showListIcon = osdShowListIcon,
+        showBottomIcon = osdShowBottomIcon,
+        sources = sources,
+        selectedSource = selectedSource,
+        multiViewLayout = if (multiViewState.active) multiViewState.layout else null,
+        perChannelEnabled = perChannelEnabled,
+        hasChannelSettings = hasChannelSettings,
+        githubProxyEnabled = githubProxyEnabled,
+        githubProxySelected = githubProxySelected
+    )
+    val entries = MenuCatalog.sections(state, MenuSurface.SIDEBAR_ONLY).flatMap { it.entries }
+
+    // 侧边栏用真实焦点（不是手绘焦点）。焦点变化时若目标项已完全可见就不动，
+    // 只在超出视口时才滚动，避免每一步都跳。
+    val listState = rememberLazyListState()
+    var focusedIdx by remember { mutableStateOf(-1) }
+    fun isFullyVisible(index: Int): Boolean {
+        val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index } ?: return false
+        val start = listState.layoutInfo.viewportStartOffset
+        val end = listState.layoutInfo.viewportEndOffset
+        return item.offset >= start && item.offset + item.size <= end
+    }
+    LaunchedEffect(focusedIdx, entries.size) {
+        if (focusedIdx in entries.indices && !isFullyVisible(focusedIdx)) {
+            listState.animateScrollToItem(focusedIdx)
         }
     }
 
@@ -1184,37 +1150,39 @@ private fun MenuColumn(
             Divider(color = tvPalette.borderSubtle)
 
             LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)
             ) {
                 itemsIndexed(
-                    items = menuItems,
-                    // 菜单项标题可能重复（如多个「打开文件」入口），用序号+标题保证 key 唯一，
-                    // 否则 LazyColumn 会因重复 key 直接抛异常
-                    key = { index, item -> "${index}_${item.title}" }
-                ) { _, item ->
-                    TvMenuItemRow(item)
+                    items = entries,
+                    // 条目 id 在数据层唯一（含动态源列表），直接用作 key
+                    key = { _, item -> item.id }
+                ) { idx, item ->
+                    TvMenuItemRow(
+                        item = item,
+                        onClick = { item.action?.let { viewModel.dispatchMenuAction(it, host) } },
+                        onFocused = { focusedIdx = idx }
+                    )
                 }
             }
         }
     }
 }
 
-private data class TvMenuItem(
-    val title: String,
-    val subtitle: String,
-    val icon: androidx.compose.ui.graphics.vector.ImageVector,
-    val onClick: () -> Unit,
-    val highlight: Boolean = false
-)
-
 @Composable
-private fun TvMenuItemRow(item: TvMenuItem) {
+private fun TvMenuItemRow(
+    item: MenuEntryModel,
+    onClick: () -> Unit,
+    onFocused: () -> Unit
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .tvFocusBorder()
-            .clickable { item.onClick() }
+            .alpha(if (item.enabled) 1f else 0.38f)
+            .clickable(enabled = item.enabled, onClick = onClick)
+            .onFocusChanged { if (it.isFocused) onFocused() }
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1235,11 +1203,21 @@ private fun TvMenuItemRow(item: TvMenuItem) {
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                text = item.subtitle,
+                text = if (!item.enabled && item.disabledReason.isNotEmpty()) item.disabledReason else item.subtitle,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 11.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
+            )
+        }
+        // 开关项状态点：与右侧菜单一致，避免补进来的开关只能盲切
+        if (item.isToggle) {
+            Spacer(modifier = Modifier.width(8.dp))
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(if (item.toggleValue) AptvAccent else tvPalette.borderSubtle)
             )
         }
     }
