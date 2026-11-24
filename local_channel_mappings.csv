@@ -75,6 +75,11 @@ CCTV-16 4K,239.21.2.195:5002,https://raw.githubusercontent.com/sumingyd/guangyu/
 深圳卫视-4K,239.21.2.174:5002,https://raw.githubusercontent.com/sumingyd/guangyu/main/img/深圳卫视4K.png,💎 4K超高清,深圳卫视,209,0,default,7,rtsp://150.138.8.132/PLTV/88888888/224/3221227307/521682571.smil?playseek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss},3840x2160
 山东卫视-4K,239.21.2.179:5002,https://raw.githubusercontent.com/sumingyd/guangyu/main/img/山东卫视4K.png,💎 4K超高清,山东卫视,210,0,default,7,rtsp://150.138.8.132/PLTV/88888888/224/3221227442/527218192.smil?playseek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss},3840x2160
 四川卫视-4K,239.21.2.185:5002,https://raw.githubusercontent.com/sumingyd/guangyu/main/img/四川卫视4K.png,💎 4K超高清,四川卫视,212,0,default,7,rtsp://150.138.8.132/PLTV/88888888/224/3221227335/527738522.smil?playseek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss},3840x2160
+辽宁卫视-4K,239.21.2.196:5002,https://raw.githubusercontent.com/sumingyd/guangyu/main/img/辽宁卫视4K.png,💎 4K超高清,辽宁卫视,213,0,default,7,,3840x2160
+天津卫视-4K,239.21.2.197:5002,https://raw.githubusercontent.com/sumingyd/guangyu/main/img/天津卫视4K.png,💎 4K超高清,天津卫视,214,0,default,7,,3840x2160
+重庆卫视-4K,239.21.2.199:5002,https://raw.githubusercontent.com/sumingyd/guangyu/main/img/重庆卫视4K.png,💎 4K超高清,重庆卫视,214,0,default,7,,3840x2160
+贵州卫视-4K,239.21.2.198:5002,https://raw.githubusercontent.com/sumingyd/guangyu/main/img/贵州卫视4K.png,💎 4K超高清,贵州卫视,214,0,default,7,,3840x2160
+江西卫视-4K,239.21.2.200:5002,https://raw.githubusercontent.com/sumingyd/guangyu/main/img/江西卫视4K.png,💎 4K超高清,贵州卫视,214,0,default,7,,3840x2160
 金鹰卡通,239.21.2.121:5002,https://raw.githubusercontent.com/sumingyd/guangyu/main/img/金鹰卡通.png,🎬 特色频道,金鹰卡通,301,0,default,7,http://150.138.8.143/00/SNM/CHANNEL00002027/index.m3u8?startTime=${(b)10}&endTime=${(e)10},1920x1080
 卡酷少儿,239.21.2.120:5002,https://raw.githubusercontent.com/sumingyd/guangyu/main/img/卡酷少儿.png,🎬 特色频道,卡酷少儿,302,0,default,7,http://150.138.8.143/00/SNM/CHANNEL00000661/index.m3u8?startTime=${(b)10}&endTime=${(e)10},1920x1080
 CHC家庭影院,239.21.2.126:5002,https://raw.githubusercontent.com/sumingyd/guangyu/main/img/CHC家庭影院.png,🎬 特色频道,CHC家庭影院,303,0,default,7,http://150.138.8.143/00/SNM/CHANNEL00002028/index.m3u8?startTime=${(b)10}&endTime=${(e)10},1920x1080
