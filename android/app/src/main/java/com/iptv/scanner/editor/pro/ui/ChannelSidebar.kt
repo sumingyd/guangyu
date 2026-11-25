@@ -183,7 +183,8 @@ import java.io.File
 
 /**
  * 频道卡片徽章黑名单：容器格式（TS/MP4/MKV 等）与传输协议（HTTP/UDP 等）
- * 对用户没有选择价值，不作为徽章显示；仅保留分辨率/帧率/码率等有价值的标识
+ * 对用户没有选择价值，不作为徽章显示；分辨率、帧率、码率等有参考价值的标识保留，
+ * 其中码率与播放页徽章统一用紧凑写法（5.0M / 640K）。
  */
 private val badgeDisplayBlocklist = setOf(
     "TS", "MP4", "MKV", "AVI", "FLV", "WEBM",

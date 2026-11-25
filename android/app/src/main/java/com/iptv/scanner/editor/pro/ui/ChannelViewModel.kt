@@ -1327,8 +1327,8 @@ internal fun AppViewModel.generateMissingThumbnails(channelsToGen: List<IptvChan
                         }
                         // 帧率
                         if (fps != null && fps > 0) parts.add("${fps.toInt()}FPS")
-                        // 码率
-                        if (br > 0) parts.add("${br / 1000}kbps")
+                        // 码率（与播放页徽章同一套紧凑写法：5.0M / 640K）
+                        if (br > 0) parts.add(formatBitrateCompact(br.toLong()))
                         // 协议
                         val proto = ch.url.substringBefore("://").lowercase()
                         when (proto) { "http" -> parts.add("HTTP"); "https" -> parts.add("HTTPS"); "rtsp" -> parts.add("RTSP"); "udp" -> parts.add("UDP"); "rtp" -> parts.add("RTP") }
