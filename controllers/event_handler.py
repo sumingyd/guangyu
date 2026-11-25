@@ -1113,11 +1113,11 @@ class EventHandler:
                 except Exception as e:
                     logger.debug(f"停止定时器{attr}失败: {e}")
         sub_ctrl = getattr(self.window, 'subscription_ctrl', None)
-        if sub_ctrl and hasattr(sub_ctrl, '_refresh_timer') and sub_ctrl._refresh_timer:
+        if sub_ctrl and hasattr(sub_ctrl, 'stop_refresh_timers'):
             try:
-                sub_ctrl._refresh_timer.stop()
+                sub_ctrl.stop_refresh_timers()
             except Exception as e:
-                logger.debug(f"停止订阅刷新定时器失败: {e}")
+                logger.debug(f"停止订阅/EPG刷新定时器失败: {e}")
         if hasattr(self, '_position_timer'):
             try:
                 self._position_timer.stop()

@@ -237,9 +237,14 @@ class PanelMixin:
         self.subscription_ctrl.start_subscription_timers()
         logger.debug("start_subscription_timers: 完成")
 
-    def reload_subscription(self):
+    def reload_subscription(self, url: str = ''):
         if self.subscription_ctrl:
-            self.subscription_ctrl.reload_subscription()
+            self.subscription_ctrl.reload_subscription(url)
+
+    def restart_refresh_timers(self):
+        """按最新配置重建订阅 / EPG 刷新定时器"""
+        if self.subscription_ctrl:
+            self.subscription_ctrl.restart_refresh_timers()
 
     def update_playlist_subscription(self, source_index=None):
         self.subscription_ctrl.update_playlist_subscription(source_index)

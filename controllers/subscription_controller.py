@@ -6,10 +6,10 @@
 import hashlib
 import os
 import time
-from collections import Counter, deque
 from typing import Optional, Dict, Any
 from datetime import datetime
 from PySide6.QtCore import QThread, Signal, QTimer
+from PySide6.QtWidgets import QApplication
 
 from core.log_manager import global_logger as logger
 from core.config_manager import ConfigManager
@@ -48,7 +48,13 @@ class SubscriptionController:
         self.window: EpgProtocol = main_window
         self._subscription_checked = False
         self._workers = []
-        self._last_header_epg_url = None
+        # M3U 文件头里出现的 EPG 地址（可能有多个源）
+        self._last_header_epg_urls = []
+        # 订阅 / EPG 各自独立的刷新定时器，互不阻塞
+        self._subscription_timer = None
+        self._epg_timer = None
+        self._refresh_busy = False
+        self._epg_busy = False
 
     def _cleanup_worker(self, worker):
         """从_workers列表中移除已完成的worker"""
@@ -195,10 +201,11 @@ class SubscriptionController:
             # 记录文件头EPG地址（在订阅EPG加载后再作为补充源加载）
             epg_url = header_attrs.get('epg_url', '')
             if epg_url:
-                self._last_header_epg_url = epg_url
+                urls = list(getattr(self, '_last_header_epg_urls', None) or [])
+                if epg_url not in urls:
+                    urls.append(epg_url)
+                self._last_header_epg_urls = urls
                 logger.info(f"M3U文件头包含EPG地址: {epg_url[:80]}，将在订阅EPG加载后补充")
-            else:
-                self._last_header_epg_url = None
 
             return 'ok'
 
@@ -248,136 +255,402 @@ class SubscriptionController:
         now = datetime.now()
         elapsed = (now - last_update).total_seconds() / 60  # 转换为分钟
 
-        if elapsed >= update_interval:
+        # 定时器按「间隔」整点触发，下载完成时间总比触发点略晚；
+        # 留 1 分钟容差，避免每个周期都被判成“还差几秒”而拖到下一个周期。
+        tolerance = min(1.0, max(update_interval * 0.1, 0.05))
+        if elapsed >= update_interval - tolerance:
             logger.info(f"订阅源 '{source.get('name', '')}' 缓存已过期（上次: {last_update_str}, 已过 {elapsed:.0f} 分钟, 间隔: {update_interval} 分钟）")
             return True
 
         logger.debug(f"订阅源 '{source.get('name', '')}' 缓存有效（上次: {last_update_str}, 已过 {elapsed:.0f} 分钟, 间隔: {update_interval} 分钟）")
         return False
 
-    def start_subscription_timers(self):
-        """启动订阅更新定时器"""
-        logger.debug("start_subscription_timers: 开始")
+    # 一次刷新会话的总时长上限：按顺序刷新多个源，避免慢源把刷新挂死
+    REFRESH_SESSION_DEADLINE_SEC = 90.0
+    # EPG 定时检查粒度的上限（TTL 可能配得很长，但“今天有没有节目”需要更早发现）
+    EPG_CHECK_MAX_MINUTES = 60
 
+    # ---------- 定时器：订阅与 EPG 完全独立 ----------
+
+    def restart_refresh_timers(self):
+        """按当前配置重建订阅 / EPG 两个独立定时器（改更新间隔后立即生效）"""
+        self._start_subscription_timer()
+        self._start_epg_timer()
+
+    def stop_refresh_timers(self):
+        """应用退出时停止两个刷新定时器"""
+        for attr in ('_subscription_timer', '_epg_timer'):
+            timer = getattr(self, attr, None)
+            if timer is not None:
+                try:
+                    timer.stop()
+                except Exception as e:
+                    logger.debug(f"停止定时器 {attr} 失败: {e}")
+
+    @staticmethod
+    def _is_main_thread() -> bool:
+        """QTimer/QObject 只能在 GUI 线程创建；HTTP API 会从其他线程触发重载"""
         try:
+            app = QApplication.instance()
+            if app is not None:
+                return QThread.currentThread() == app.thread()
+        except Exception:
+            pass
+        return True
 
-            active_source = global_subscription_manager.get_active_playlist_source()
-            playlist_url = active_source.get('url', '') if active_source else ''
+    @staticmethod
+    def _config_minutes(section: str, default: int = 60) -> int:
+        """读取更新间隔（分钟），非法值回退默认值且至少为 1 分钟"""
+        try:
+            value = int(ConfigManager().get_value(section, 'update_interval', str(default)) or default)
+        except (TypeError, ValueError):
+            value = default
+        return max(value, 1)
 
-            if not playlist_url:
-                logger.debug("无活跃的播放列表源")
+    def _drop_timer(self, attr: str):
+        timer = getattr(self, attr, None)
+        if timer is None:
+            return
+        try:
+            timer.stop()
+            timer.deleteLater()
+        except Exception as e:
+            logger.debug(f"释放定时器 {attr} 失败: {e}")
+        setattr(self, attr, None)
+
+    def _start_subscription_timer(self):
+        """订阅定时器：周期 = PlaylistSources.update_interval，与 EPG 无耦合"""
+        self._drop_timer('_subscription_timer')
+        sources = [
+            s for s in global_subscription_manager.get_playlist_sources()
+            if s.get('url') and s.get('enabled', True)
+        ]
+        if not sources:
+            logger.debug("没有启用的订阅源，不启动订阅刷新定时器")
+            return
+        interval = self._config_minutes('PlaylistSources', 60)
+        timer = QTimer(self.window)
+        timer.timeout.connect(self._on_subscription_timer)
+        timer.start(interval * 60 * 1000)
+        self._subscription_timer = timer
+        logger.debug(f"订阅刷新定时器已启动: 每 {interval} 分钟")
+
+    def _start_epg_timer(self):
+        """EPG 定时器：TTL 由 EPGSources.update_interval 决定，检查粒度最多 60 分钟"""
+        self._drop_timer('_epg_timer')
+        if not global_subscription_manager.get_epg_sources():
+            logger.debug("没有配置 EPG 源，不启动 EPG 刷新定时器")
+            return
+        ttl_minutes = self._config_minutes('EPGSources', 60)
+        tick_minutes = min(ttl_minutes, self.EPG_CHECK_MAX_MINUTES)
+        timer = QTimer(self.window)
+        timer.timeout.connect(self._on_epg_timer)
+        timer.start(tick_minutes * 60 * 1000)
+        self._epg_timer = timer
+        logger.debug(
+            f"EPG 刷新定时器已启动: 每 {tick_minutes} 分钟检查一次（TTL {ttl_minutes} 分钟）"
+        )
+
+    # ---------- 启动 ----------
+
+    def start_subscription_timers(self):
+        """启动时调用：重建两个定时器，并先刷新频道再加载 EPG（保持过滤依赖）"""
+        logger.debug("start_subscription_timers: 开始")
+        try:
+            self.restart_refresh_timers()
+            sources = [
+                s for s in global_subscription_manager.get_playlist_sources()
+                if s.get('url') and s.get('enabled', True)
+            ]
+            if not sources:
+                logger.debug("没有启用的订阅源，跳过启动期订阅/EPG 刷新")
                 return
-
-            # 启动后台更新
-            worker = SubscriptionWorker(
-                lambda: self._do_start_subscription(playlist_url),
-                self.window
-            )
-            worker.finished.connect(self._on_subscription_finished)
-            worker.finished.connect(lambda: self._cleanup_worker(worker))
-            worker.error.connect(lambda err: logger.error(f"订阅更新错误: {err}"))
-            self._workers.append(worker)
-            worker.start()
-
-            # 启动定期刷新定时器
-            if not hasattr(self, '_refresh_timer') or self._refresh_timer is None:
-                config = ConfigManager()
-                update_interval = int(config.get_value('PlaylistSources', 'update_interval', '60') or 60)
-                refresh_ms = min(update_interval, 60) * 60 * 1000
-                self._refresh_timer = QTimer(self.window)
-                self._refresh_timer.timeout.connect(self._on_refresh_timer)
-                self._refresh_timer.start(refresh_ms)
-                logger.debug(f"订阅/EPG定期刷新定时器已启动: 每 {refresh_ms // 60000} 分钟")
-
+            # 顺序不能变：频道表先落盘，EPG 解析才能按频道表过滤
+            self._spawn_source_refresh(force=False, with_epg=True)
         except Exception as e:
             logger.error(f"启动订阅定时器失败: {e}", exc_info=True)
 
-    def _on_refresh_timer(self):
-        """定期检查并刷新订阅和EPG"""
-        try:
-            active_source = global_subscription_manager.get_active_playlist_source()
-            playlist_url = active_source.get('url', '') if active_source else ''
-            if playlist_url:
-                if not global_subscription_manager.is_epg_valid():
-                    logger.info("EPG缓存已过期，触发后台刷新")
-                    worker = SubscriptionWorker(
-                        lambda: self._do_start_subscription(playlist_url),
-                        self.window
-                    )
-                    worker.finished.connect(self._on_subscription_finished)
-                    worker.finished.connect(lambda: self._cleanup_worker(worker))
-                    worker.error.connect(lambda err: logger.error(f"订阅更新错误: {err}"))
-                    self._workers.append(worker)
-                    worker.start()
-        except Exception as e:
-            logger.error(f"定期刷新失败: {e}")
+    # ---------- 定时器回调 ----------
 
-    def _do_start_subscription(self, playlist_url: str):
-        """执行订阅更新"""
-        sources = global_subscription_manager.get_playlist_sources()
+    def _on_subscription_timer(self):
+        """订阅定时器：只刷新订阅源，不再看 EPG 是否有效"""
+        sources = [
+            s for s in global_subscription_manager.get_playlist_sources()
+            if s.get('url') and s.get('enabled', True)
+        ]
         if not sources:
-            logger.warning("没有配置播放列表源")
-            return False
+            logger.debug("订阅定时器触发：没有启用的订阅源，跳过")
+            return
+        logger.info(f"订阅定时器触发：按顺序刷新 {len(sources)} 个启用源")
+        self._spawn_source_refresh(force=False, with_epg=False)
 
-        for i, source in enumerate(sources):
-            if source.get('url') == playlist_url:
-                need_update = self._should_update_source(source, i)
-                logger.debug(f"订阅源 '{source.get('name', '')}' 需要更新: {need_update}")
-                self.handle_playlist_subscription(need_update, playlist_url, i)
+    def _on_epg_timer(self):
+        """EPG 定时器：按自己的 TTL 检查，缓存有效时不做任何事"""
+        if not global_subscription_manager.get_epg_sources():
+            return
+        try:
+            from core.application_state import app_state
+            has_channels = bool(app_state.channels)
+        except Exception:
+            has_channels = False
+        if not has_channels:
+            # EPG 解析会按频道表过滤；没有频道时不下载，避免整份源全量驻留内存
+            logger.debug("EPG 定时器触发：频道表为空，跳过（过滤依赖频道表）")
+            return
+        if global_subscription_manager.is_epg_valid():
+            return
+        logger.info("EPG 缓存已过期，触发独立刷新")
+        self._spawn_epg_refresh()
 
-                from utils.thread_safety import invoke_on_thread
-                if QThread.currentThread() != self.window.thread():
-                    invoke_on_thread(self.window, self.window._do_on_playlist_updated_in_main_thread)
-                else:
-                    self.window._do_on_playlist_updated_in_main_thread()
+    # ---------- 订阅刷新 ----------
+
+    def _spawn_source_refresh(self, force: bool, with_epg: bool, only_url: str = ''):
+        if self._refresh_busy:
+            logger.info("已有订阅刷新在进行中，跳过本次请求")
+            return
+        self._refresh_busy = True
+        # 跨线程调用（HTTP API）时不能把 worker 挂到 GUI 对象上作为子对象
+        parent = self.window if self._is_main_thread() else None
+        worker = SubscriptionWorker(
+            lambda: self._refresh_sources_blocking(
+                force=force, with_epg=with_epg, only_url=only_url),
+            parent,
+        )
+        worker.finished.connect(lambda result, w=worker: self._on_refresh_worker_done(w, result))
+        worker.error.connect(lambda err, w=worker: self._on_refresh_worker_error(w, err))
+        self._workers.append(worker)
+        worker.start()
+
+    def _on_refresh_worker_done(self, worker, result):
+        self._refresh_busy = False
+        self._cleanup_worker(worker)
+        self._on_subscription_finished(result)
+
+    def _on_refresh_worker_error(self, worker, err):
+        self._refresh_busy = False
+        logger.error(f"订阅刷新错误: {err}")
+        self._cleanup_worker(worker)
+
+    def _refresh_sources_blocking(self, force: bool = False, with_epg: bool = False,
+                                  only_url: str = '') -> dict:
+        """在后台线程里按配置顺序刷新所有启用源，并把结果聚合成一份频道列表
+
+        - force=True：忽略缓存强制下载（手动重载 / 设置页保存后）
+        - only_url 非空：只刷新指定地址的源
+        - with_epg=True：频道提交后再刷新 EPG（启动路径，保证过滤依赖频道表）
+        """
+        sources = global_subscription_manager.get_playlist_sources()
+        targets = []
+        for idx, source in enumerate(sources):
+            url = source.get('url', '')
+            if not url:
+                continue
+            if only_url:
+                if url != only_url:
+                    continue
+            elif not source.get('enabled', True):
+                continue
+            targets.append((idx, source))
+
+        stats = {'ok': 0, 'empty': 0, 'failed': 0, 'timeout': 0}
+        merged_channels = []
+        header_epg_urls = []
+        deadline = time.monotonic() + self.REFRESH_SESSION_DEADLINE_SEC
+
+        for pos, (idx, source) in enumerate(targets):
+            if time.monotonic() >= deadline:
+                remaining = len(targets) - pos
+                stats['timeout'] += remaining
+                logger.warning(f"订阅刷新会话超时，剩余 {remaining} 个源本次跳过")
                 break
+            result = self._refresh_one_source(
+                idx, source, force, merged_channels, header_epg_urls)
+            stats[result] = stats.get(result, 0) + 1
+
+        if header_epg_urls:
+            self._last_header_epg_urls = list(dict.fromkeys(header_epg_urls))
+
+        if merged_channels:
+            self._commit_subscription_channels(merged_channels)
+        elif targets:
+            # 全部失败或全部为空：保留现有频道列表，避免网络抖动把数据洗掉
+            logger.warning(f"本次订阅刷新未得到任何频道（{stats}），保留现有频道列表")
+
+        logger.info(
+            f"订阅刷新完成：ok={stats['ok']} empty={stats['empty']} "
+            f"failed={stats['failed']} timeout={stats['timeout']}，"
+            f"共 {len(merged_channels)} 个频道"
+        )
+
+        if with_epg:
+            self._refresh_epg_blocking()
+        return stats
+
+    def _refresh_one_source(self, index: int, source: dict, force: bool,
+                            merged_channels: list, header_epg_urls: list) -> str:
+        """按缓存策略刷新单个源，成功解析后把频道追加到 merged_channels"""
+        url = source.get('url', '')
+        name = source.get('name', '') or url
+        try:
+            if not force and not self._should_update_source(source, index):
+                content = self._load_from_local_cache(url)
+                if not content:
+                    logger.warning(f"订阅源 '{name}' 缓存缺失，强制重新下载")
+                    content = self._download_subscription_content(url)
+                    if not content:
+                        return 'failed'
+                    self._save_to_local_cache(content, url)
+            else:
+                content = self._download_subscription_content(url)
+                if not content:
+                    return 'failed'
+                self._save_to_local_cache(content, url)
+
+            channels, header_attrs = self._parse_m3u_content_pure_python(content)
+            if not channels:
+                logger.warning(f"M3U内容解析为空: {url[:50]}...")
+                return 'empty'
+
+            if url.startswith('http'):
+                ConfigManager().add_recent_file(url)
+                global_subscription_manager.update_playlist_source_last_update(
+                    index, datetime.now().isoformat())
+
+            epg_url = header_attrs.get('epg_url', '') if header_attrs else ''
+            if epg_url:
+                header_epg_urls.append(epg_url)
+                logger.info(f"M3U文件头包含EPG地址: {epg_url[:80]}")
+
+            merged_channels.extend(channels)
+            logger.info(f"订阅源 '{name}' 刷新完成: {len(channels)} 个频道")
+            return 'ok'
+        except Exception as e:
+            logger.error(f"刷新订阅源 '{name}' 失败: {e}", exc_info=True)
+            return 'failed'
+
+    def _commit_subscription_channels(self, channels: list):
+        """聚合后的频道整体替换订阅列表（按播放地址去重，保留已有检测结果）"""
+        from core.application_state import app_state
+        from services.channel_dedup_service import (
+            carry_over_channel_state, normalize_stream_url,
+        )
+
+        deduped = []
+        seen = set()
+        for ch in channels:
+            key = normalize_stream_url(ch.get('url', ''))
+            if key:
+                if key in seen:
+                    continue
+                seen.add(key)
+            deduped.append(ch)
+
+        deduped = carry_over_channel_state(
+            deduped, list(getattr(app_state, 'channels', None) or []))
+        app_state.channels = deduped
+        logger.info(f"订阅频道已更新: {len(deduped)} 个（已按播放地址去重）")
+        self._notify_channels_updated()
+
+    def _notify_channels_updated(self):
+        """把频道更新通知回主线程刷新界面"""
+        from utils.thread_safety import invoke_on_thread
+        if QThread.currentThread() != self.window.thread():
+            invoke_on_thread(self.window, self.window._do_on_playlist_updated_in_main_thread)
+        else:
+            self.window._do_on_playlist_updated_in_main_thread()
+
+    # ---------- EPG 刷新 ----------
+
+    def _spawn_epg_refresh(self):
+        if self._epg_busy:
+            logger.info("已有 EPG 刷新在进行中，跳过本次请求")
+            return
+        self._epg_busy = True
+        worker = SubscriptionWorker(lambda: self._refresh_epg_blocking(), self.window)
+        worker.finished.connect(lambda result, w=worker: self._on_epg_worker_done(w, result))
+        worker.error.connect(lambda err, w=worker: self._on_epg_worker_error(w, err))
+        self._workers.append(worker)
+        worker.start()
+
+    def _on_epg_worker_done(self, worker, result):
+        self._epg_busy = False
+        self._cleanup_worker(worker)
+        self._on_epg_refresh_finished(result)
+
+    def _on_epg_worker_error(self, worker, err):
+        self._epg_busy = False
+        logger.error(f"EPG刷新错误: {err}")
+        self._cleanup_worker(worker)
+
+    def _refresh_epg_blocking(self) -> bool:
+        """按 TTL 读取缓存或全量重下 EPG（调用方需保证频道表已就绪）"""
+        from core.application_state import app_state
+
+        failure = {'msg': ''}
 
         def status_callback(msg):
             # 失败原因要留在日志和状态栏里，不能再以 debug 级别吞掉
             if '失败' in msg or '为空' in msg:
-                self._last_epg_failure_msg = msg
+                failure['msg'] = msg
                 logger.warning(f"EPG加载状态: {msg}")
             else:
                 logger.debug(f"EPG加载状态: {msg}")
 
         self._last_epg_failure_msg = ''
-        need_download_epg = not global_subscription_manager.is_epg_valid()
+        need_download = not global_subscription_manager.is_epg_valid()
 
-        if not need_download_epg:
+        if not need_download:
             logger.debug("EPG缓存有效，从本地缓存加载")
-            cached_loaded = global_subscription_manager.load_cached_epg_data()
-            if cached_loaded:
-                from core.application_state import app_state
+            if global_subscription_manager.load_cached_epg_data():
                 app_state.epg_data = global_subscription_manager.get_epg_data_copy()
-                success = True
-            else:
-                logger.warning("EPG缓存加载失败，重新下载")
-                need_download_epg = True
+                return True
+            logger.warning("EPG缓存加载失败，改为重新下载")
+            need_download = True
 
-        if need_download_epg:
-            logger.info("EPG缓存无效或不存在，重新下载所有EPG源")
-            success = global_subscription_manager.load_all_epg_data(status_callback)
-            if success:
-                from core.application_state import app_state
-                app_state.epg_data = global_subscription_manager.get_epg_data_copy()
+        logger.info("EPG缓存无效或不存在，重新下载所有EPG源")
+        success = global_subscription_manager.load_all_epg_data(status_callback)
+        if success:
+            app_state.epg_data = global_subscription_manager.get_epg_data_copy()
 
-            header_epg_url = getattr(self, '_last_header_epg_url', None)
-            if header_epg_url:
-                epg_sources = global_subscription_manager.get_epg_sources()
-                existing_urls = [src.get('url', '') for src in epg_sources] if epg_sources else []
-                if header_epg_url in existing_urls:
-                    logger.info("M3U文件头EPG已存在于订阅源中，跳过")
-                else:
-                    logger.info(f"补充加载M3U文件头EPG: {header_epg_url[:80]}")
-                    try:
-                        header_success = global_subscription_manager.load_single_epg(header_epg_url)
-                        if header_success:
-
-                            app_state.epg_data = global_subscription_manager.get_epg_data_copy()
-                    except Exception as epg_err:
-                        logger.warning(f"补充加载M3U文件头EPG失败: {epg_err}")
-
+        # 仅在本轮确实下载过 EPG 时补充 M3U 文件头里的 EPG 地址（与旧行为一致）
+        self._load_header_epg_urls(status_callback)
+        self._last_epg_failure_msg = failure['msg']
         return success
+
+    def _load_header_epg_urls(self, status_callback=None):
+        """补充加载 M3U 文件头里的 EPG 地址（已配置的源跳过）"""
+        urls = list(getattr(self, '_last_header_epg_urls', None) or [])
+        if not urls:
+            return
+        from core.application_state import app_state
+        configured = {
+            src.get('url', '') for src in (global_subscription_manager.get_epg_sources() or [])
+        }
+        for url in urls:
+            if not url or url in configured:
+                continue
+            logger.info(f"补充加载M3U文件头EPG: {url[:80]}")
+            try:
+                if global_subscription_manager.load_single_epg(url, status_callback):
+                    app_state.epg_data = global_subscription_manager.get_epg_data_copy()
+            except Exception as epg_err:
+                logger.warning(f"补充加载M3U文件头EPG失败: {epg_err}")
+
+    def _on_epg_refresh_finished(self, result):
+        """EPG 刷新完成：立即重绘节目单，失败原因带到状态栏"""
+        def refresh():
+            try:
+                if hasattr(self.window, '_populate_epg_list'):
+                    self.window._populate_epg_list()
+                failure = getattr(self, '_last_epg_failure_msg', '')
+                if failure and hasattr(self.window, 'status_bar_show_message'):
+                    self.window.status_bar_show_message(failure, 8000)
+                    self._last_epg_failure_msg = ''
+            except Exception as e:
+                logger.error(f"刷新EPG界面失败: {e}", exc_info=True)
+
+        from utils.thread_safety import invoke_on_thread
+        invoke_on_thread(self.window, refresh)
 
     def _on_subscription_finished(self, result):
         """订阅更新完成回调 - EPG加载完成后刷新EPG列表（在主线程中执行）"""
@@ -437,87 +710,29 @@ class SubscriptionController:
             self.window._update_groups_for('subscription')
             self.window._update_groups_for('local')
 
-    # 多订阅源刷新：并发窗口 4，会话总截止 90s，避免慢源把队列占满
-    MAX_CONCURRENT_SOURCES = 4
-    RELOAD_SESSION_DEADLINE_SEC = 90.0
-
-    def reload_subscription(self):
-        """重新加载订阅源：按并发窗口逐个提交，并统计每类结果。"""
+    def reload_subscription(self, url: str = ''):
+        """手动重载入口：按配置顺序强制刷新所有启用源（传 url 时只刷该源）"""
         try:
             sources = global_subscription_manager.get_playlist_sources()
-            queue = deque(
-                (i, source) for i, source in enumerate(sources)
-                if source.get('enabled', True)
-            )
-            if not queue:
+            targets = [
+                s for s in sources
+                if s.get('url') and (s.get('url') == url if url else s.get('enabled', True))
+            ]
+            if not targets:
+                logger.warning("没有可重载的订阅源")
                 return
-            self._reload_session = {
-                'queue': queue,
-                'active': 0,
-                'stats': Counter(),
-                'deadline': time.monotonic() + self.RELOAD_SESSION_DEADLINE_SEC,
-                'total': len(queue),
-            }
-            self._pump_reload_queue()
+            # 首次添加源后也能把定时器补起来（原先只在启动时创建一次）
+            if self._is_main_thread():
+                self.restart_refresh_timers()
+                if hasattr(self.window, 'status_bar_show_message'):
+                    tr = getattr(getattr(self.window, 'language_manager', None),
+                                 'tr', lambda _k, d='': d)
+                    self.window.status_bar_show_message(
+                        tr('reloading_subscription', '正在重新加载订阅...'), 0)
+            self._spawn_source_refresh(force=True, with_epg=False, only_url=url)
         except Exception as e:
             logger.error(f"重新加载订阅源失败: {e}", exc_info=True)
 
-    def _pump_reload_queue(self):
-        session = getattr(self, '_reload_session', None)
-        if not session:
-            return
-        while session['active'] < self.MAX_CONCURRENT_SOURCES and session['queue']:
-            if time.monotonic() >= session['deadline']:
-                pending = len(session['queue'])
-                session['stats']['timeout'] += pending
-                session['queue'].clear()
-                logger.warning(f"订阅刷新会话超时，剩余 {pending} 个源标记为超时")
-                break
-            index, source = session['queue'].popleft()
-            url = source.get('url', '')
-            worker = SubscriptionWorker(
-                lambda i=index, u=url: self.handle_playlist_subscription(True, u, i)
-            )
-            session['active'] += 1
-            self._workers.append(worker)
-            worker.finished.connect(lambda result, w=worker: self._on_reload_worker_done(w, result))
-            worker.error.connect(lambda err, w=worker: self._on_reload_worker_error(w, err))
-            worker.start()
-        self._maybe_finish_reload()
-
-    def _on_reload_worker_done(self, worker, result):
-        self._cleanup_worker(worker)
-        session = getattr(self, '_reload_session', None)
-        if session:
-            session['active'] = max(0, session['active'] - 1)
-            session['stats'][result or 'failed'] += 1
-        self._pump_reload_queue()
-
-    def _on_reload_worker_error(self, worker, err):
-        logger.error(f"刷新订阅源错误: {err}")
-        self._cleanup_worker(worker)
-        session = getattr(self, '_reload_session', None)
-        if session:
-            session['active'] = max(0, session['active'] - 1)
-            session['stats']['failed'] += 1
-        self._pump_reload_queue()
-
-    def _maybe_finish_reload(self):
-        session = getattr(self, '_reload_session', None)
-        if not session or session['active'] > 0 or session['queue']:
-            return
-        stats = session['stats']
-        self._reload_session = None
-        summary = (
-            f"ok={stats.get('ok', 0)} empty={stats.get('empty', 0)} "
-            f"failed={stats.get('failed', 0)} timeout={stats.get('timeout', 0)}"
-        )
-        logger.info(f"订阅源重新加载完成：{summary}")
-        if hasattr(self.window, 'status_bar_show_message'):
-            tr = getattr(self.window.language_manager, 'tr', lambda _k, d='': d)
-            total = session['total']
-            self.window.status_bar_show_message(
-                tr('subscription_reload_summary',
-                   '订阅刷新完成：{ok}/{total} 成功，{failed} 失败，{timeout} 超时').format(
-                    ok=stats.get('ok', 0), total=total,
-                    failed=stats.get('failed', 0), timeout=stats.get('timeout', 0)), 4000)
+    def refresh_enabled_sources(self, force: bool = True):
+        """设置页保存订阅源后调用：后台按顺序刷新所有启用源"""
+        self._spawn_source_refresh(force=force, with_epg=False)

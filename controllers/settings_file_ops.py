@@ -52,31 +52,23 @@ from controllers.main_window_protocol import MainWindowProtocol
 
 class _EpgLoadThread(QThread):
     """EPG 数据加载线程（替代裸 daemon Thread，确保生命周期可管理）"""
+    done = Signal(str)
+
     def run(self):
+        last_msg = {'text': ''}
+
+        def _status(msg):
+            last_msg['text'] = msg
+
         try:
-            global_subscription_manager.load_all_epg_data()
+            ok = global_subscription_manager.load_all_epg_data(_status)
+            if ok:
+                app_state.epg_data = global_subscription_manager.get_epg_data_copy()
         except Exception as e:
             logger.error(f"EPG数据加载失败: {e}")
-
-
-class _PlaylistReloadThread(QThread):
-    """播放列表重新加载线程（网络下载 + M3U 解析，完成后通知主线程刷新 UI）"""
-    reload_complete = Signal()
-    reload_error = Signal(str)
-
-    def __init__(self, window, url, source_index, parent=None):
-        super().__init__(parent)
-        self._window = window
-        self._url = url
-        self._source_index = source_index
-
-    def run(self):
-        try:
-            self._window._handle_playlist_subscription(True, self._url, self._source_index)
-            self.reload_complete.emit()
-        except Exception as e:
-            logger.error(f"重新加载播放列表失败: {e}")
-            self.reload_error.emit(str(e))
+            last_msg['text'] = f"EPG 更新失败: {e}"
+        finally:
+            self.done.emit(last_msg['text'])
 
 
 # 使用说明默认内容 —— 定义在模块级别便于维护
@@ -1765,6 +1757,8 @@ class SettingsFileOperations:
             global_subscription_manager._config.save_epg_sources(new_epg)
 
             self._save_intervals(dialog)
+            # 更新间隔改动后立即重建定时器，不用重启程序
+            self._apply_refresh_interval_changes()
             self._save_close_behavior(dialog)
             self._save_screensaver_settings(dialog)
             self._save_github_proxy_settings(dialog)
@@ -1779,6 +1773,7 @@ class SettingsFileOperations:
 
             if self._check_epg_changed(old_epg, new_epg):
                 epg_thread = _EpgLoadThread(self.window)
+                epg_thread.done.connect(self._on_epg_reload_done)
                 epg_thread.finished.connect(epg_thread.deleteLater)
                 epg_thread.start()
 
@@ -2322,16 +2317,41 @@ class SettingsFileOperations:
         return any(old_s.get('url') != new_s.get('url') for old_s, new_s in zip(old, new))
 
     def _reload_playlist_async(self, new_sources, new_active_index):
-        if new_active_index < 0 or new_active_index >= len(new_sources):
+        """保存订阅源后按顺序强制刷新所有启用源，结果聚合后刷新界面"""
+        ctrl = getattr(self.window, 'subscription_ctrl', None)
+        if not ctrl:
             return
-        active = new_sources[new_active_index]
+        try:
+            ctrl.refresh_enabled_sources(force=True)
+        except Exception as e:
+            logger.error(f"重新加载播放列表失败: {e}")
 
-        thread = _PlaylistReloadThread(
-            self.window, active.get('url', ''), new_active_index, self.window
-        )
-        thread.reload_complete.connect(self.window._do_on_playlist_updated_in_main_thread)
-        thread.finished.connect(thread.deleteLater)
-        thread.start()
+    def _apply_refresh_interval_changes(self):
+        """更新间隔保存后立即重建订阅 / EPG 定时器"""
+        ctrl = getattr(self.window, 'subscription_ctrl', None)
+        if not ctrl:
+            return
+        try:
+            ctrl.restart_refresh_timers()
+        except Exception as e:
+            logger.warning(f"重建订阅/EPG刷新定时器失败: {e}")
+
+    def _on_epg_reload_done(self, message: str):
+        """设置页 EPG 源变更后的加载完成回调：立刻重绘节目单
+
+        信号由工作线程发出，必须切回主线程再碰控件。
+        """
+        def _refresh():
+            try:
+                if hasattr(self.window, '_populate_epg_list'):
+                    self.window._populate_epg_list()
+                if message and ('失败' in message or '为空' in message):
+                    self.window.status_bar_show_message(message, 8000)
+            except Exception as e:
+                logger.error(f"EPG更新后刷新界面失败: {e}", exc_info=True)
+
+        from utils.thread_safety import invoke_on_thread
+        invoke_on_thread(self.window, _refresh)
 
     # ==================== 语言 / 主题 ====================
 
