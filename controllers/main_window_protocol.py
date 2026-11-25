@@ -242,6 +242,7 @@ class PlaybackProtocol(UiProtocol):
     _subtitle_style_dialog: Any
     _video_3d_dialog: Any
     _stream_quality_dialog: Any
+    _media_properties_dialog: Any
     _network_enhance_dialog: Any
     _burst_screenshot_dialog: Any
     _playback_queue_dialog: Any

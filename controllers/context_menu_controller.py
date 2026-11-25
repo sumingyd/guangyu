@@ -105,6 +105,7 @@ class ContextMenuController:
             tools_menu.addAction(tr("ctx_bookmarks", "Bookmarks & Chapters..."), lambda *a: self._facade._show_bookmark_dialog())
             tools_menu.addAction(tr("ctx_av_sync", "A/V Sync Monitor..."), lambda *a: self._facade._show_av_sync_dialog())
             tools_menu.addAction(tr("ctx_stream_quality", "Stream Quality..."), lambda *a: self._facade._show_stream_quality_dialog())
+            tools_menu.addAction(tr("ctx_properties", "Properties..."), lambda *a: self._facade._show_media_properties_dialog())
             tools_menu.addAction(tr("ctx_3d_video", "3D / 360° Video..."), lambda *a: self._facade._show_3d_dialog())
             tools_menu.addSeparator()
             tools_menu.addAction(tr("ctx_playback_queue", "Playback Queue..."), lambda *a: self._facade._show_playback_queue_dialog())
@@ -996,6 +997,18 @@ class ContextMenuController:
             self._facade.window._stream_quality_dialog.activateWindow()
         except Exception as e:
             logger.error(f"打开流质量检测对话框失败: {e}")
+
+    def _show_media_properties_dialog(self):
+        """打开媒体属性对话框（对齐安卓分屏播放页的信息面板）"""
+        try:
+            from ui.dialogs.media_properties_dialog import MediaPropertiesDialog
+            if not hasattr(self._facade.window, '_media_properties_dialog') or not self._facade.window._media_properties_dialog:
+                self._facade.window._media_properties_dialog = MediaPropertiesDialog(self._facade.window)
+            self._facade.window._media_properties_dialog.show()
+            self._facade.window._media_properties_dialog.raise_()
+            self._facade.window._media_properties_dialog.activateWindow()
+        except Exception as e:
+            logger.error(f"打开媒体属性对话框失败: {e}")
 
     def _show_3d_dialog(self):
         """打开 3D / 360° 视频对话框"""

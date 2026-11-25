@@ -378,13 +378,32 @@ class UIController:
             return f"{bps:.0f}bps"
 
     @staticmethod
-    def format_bytes_per_second(bps: float) -> str:
+    def format_bitrate_compact(bps: float) -> str:
+        """底栏徽章用的紧凑码率：5.4M / 640K。
+
+        徽章一行能放的宽度有限，长单位（kbps/Mbps）会把整行挤成两行甚至被收起，
+        这里收成「数值+单位」的短写法，与安卓分屏徽章的紧凑格式保持一致。
+        字段名仍保留在徽章 tooltip 里，信息不丢。
+        """
         if bps >= 1000000:
-            return f"{bps*8/1000000:.1f}Mbps"
+            value = f"{bps / 1000000:.1f}"
+            if value.endswith('.0'):
+                value = value[:-2]
+            return f"{value}M"
         elif bps >= 1000:
-            return f"{bps*8/1000:.0f}kbps"
+            return f"{bps / 1000:.0f}K"
         else:
-            return f"{bps*8:.0f}bps"
+            return f"{bps:.0f}bps"
+
+    @staticmethod
+    def format_bytes_per_second(bps: float) -> str:
+        """字节/秒的速率文本（缓存速度、网速），与安卓端统一用字节口径。"""
+        if bps >= 1048576:
+            return f"{bps / 1048576:.1f}MB/s"
+        elif bps >= 1024:
+            return f"{bps / 1024:.0f}KB/s"
+        else:
+            return f"{bps:.0f}B/s"
 
     @staticmethod
     def format_bytes(num_bytes: float) -> str:
@@ -453,11 +472,11 @@ class UIController:
         v_br = info.get('video_bitrate', 0) or 0
         a_br = info.get('audio_bitrate', 0) or 0
         if v_br > 0:
-            video_parts.append("{}: {}".format(tr('vbitrate_label', 'V.Bitrate') or 'V.Bitrate', self.format_bitrate(v_br)))
+            video_parts.append("{}: {}".format(tr('vbitrate_label', 'V.Bitrate') or 'V.Bitrate', self.format_bitrate_compact(v_br)))
         elif a_br == 0:
             demux_br = info.get('demuxer_bitrate', 0) or 0
             if demux_br > 0:
-                video_parts.append("{}: {}".format(tr('bitrate_label', 'Bitrate') or 'Bitrate', self.format_bitrate(demux_br)))
+                video_parts.append("{}: {}".format(tr('bitrate_label', 'Bitrate') or 'Bitrate', self.format_bitrate_compact(demux_br)))
 
         video_text = " | ".join(video_parts) if video_parts else (tr('live_stream', 'Live Stream') or 'Live Stream')
 
@@ -478,7 +497,7 @@ class UIController:
             audio_parts.append("{}: {}Hz".format(tr('sample_rate_label', 'Sample Rate') or 'Sample Rate', sample_rate))
 
         if a_br and a_br > 0:
-            audio_parts.append("{}: {}".format(tr('bitrate_label', 'Bitrate') or 'Bitrate', self.format_bitrate(a_br)))
+            audio_parts.append("{}: {}".format(tr('bitrate_label', 'Bitrate') or 'Bitrate', self.format_bitrate_compact(a_br)))
 
         audio_text = ' | '.join(audio_parts) if audio_parts else tr('no_audio_info', 'No audio info available')
 
@@ -499,9 +518,10 @@ class UIController:
             if demux_br > 0:
                 total_br_net = demux_br
         if total_br_net > 0:
-            network_parts.append("{}: {}".format(tr('bitrate_label', 'Bitrate') or 'Bitrate', self.format_bitrate(total_br_net)))
+            network_parts.append("{}: {}".format(tr('bitrate_label', 'Bitrate') or 'Bitrate', self.format_bitrate_compact(total_br_net)))
         cache_speed = info.get('cache_speed', 0) or 0
         if cache_speed > 0:
+            # cache-speed 是字节/秒，与安卓端一致用字节单位（1.5MB/s）
             network_parts.append("{}: {}".format(tr('cache_speed_label', 'Cache') or 'Cache', self.format_bytes_per_second(cache_speed)))
 
         network_text = ' | '.join(network_parts) if network_parts else tr('no_network_info', 'No network info available')
@@ -1445,6 +1465,9 @@ class UIController:
             stream_quality = QAction(tr("menu_stream_quality", "Stream Quality..."), self.window)
             stream_quality.triggered.connect(lambda: self.window.media_ctrl._show_stream_quality_dialog() if hasattr(self.window, 'media_ctrl') else None)
             adv_tools_menu.addAction(stream_quality)
+            properties = QAction(tr("menu_properties", "Properties..."), self.window)
+            properties.triggered.connect(lambda: self.window.media_ctrl._show_media_properties_dialog() if hasattr(self.window, 'media_ctrl') else None)
+            adv_tools_menu.addAction(properties)
             video_3d = QAction(tr("menu_3d_video", "3D / 360° Video..."), self.window)
             video_3d.triggered.connect(lambda: self.window.media_ctrl._show_3d_dialog() if hasattr(self.window, 'media_ctrl') else None)
             adv_tools_menu.addAction(video_3d)
@@ -1569,6 +1592,13 @@ class UIController:
             tools_menu.addAction(reminder_manager)
 
             tools_menu.addSeparator()
+
+            reload_subscription = QAction(
+                tr("menu_reload_subscription", "重载订阅"), self.window)
+            # 用 lambda 吞掉 triggered 的 checked 参数，避免被当成 url 传入
+            reload_subscription.triggered.connect(
+                lambda _checked=False: self.window.reload_subscription())
+            tools_menu.addAction(reload_subscription)
 
             player_settings = QAction(tr("menu_subscription_settings", "Settings"), self.window)
             player_settings.triggered.connect(lambda: self.window.player_settings())

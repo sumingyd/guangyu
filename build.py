@@ -190,6 +190,7 @@ HIDDEN_IMPORTS = [
     "ui.dialogs.bookmark_dialog",
     "ui.dialogs.av_sync_dialog",
     "ui.dialogs.stream_quality_dialog",
+    "ui.dialogs.media_properties_dialog",
     "ui.dialogs.video_3d_dialog",
     "controllers.file_queue_controller",
     "controllers.resume_playback_controller",

@@ -232,6 +232,9 @@ class MediaController:
     def _show_stream_quality_dialog(self):
         return self._context_menu._show_stream_quality_dialog()
 
+    def _show_media_properties_dialog(self):
+        return self._context_menu._show_media_properties_dialog()
+
     def _show_3d_dialog(self):
         return self._context_menu._show_3d_dialog()
 

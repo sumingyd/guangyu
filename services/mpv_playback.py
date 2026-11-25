@@ -1639,9 +1639,24 @@ class MpvPlayback:
                 v_br = demux_br
             a_br = get_double('audio-params/bitrate')
             if v_br == 0 and a_br == 0 and demux_br == 0:
-                est_br = get_double('demuxer-cache-state/bytes-per-second') or 0
-                if est_br > 0:
-                    v_br = est_br
+                # 三条码率属性都取不到时用解复用缓存的输入速率估算。
+                # 当前 libmpv 不支持按路径读 demuxer-cache-state 的子字段
+                # （demuxer-cache-state/raw-input-rate 恒返回 property error），
+                # 只能整体按字符串读出 JSON 再取 raw-input-rate；
+                # 它的单位是字节/秒，换成比特/秒才和 video_bitrate 同口径。
+                # 取不到或解析失败时保持 0，由上层决定不显示。
+                import json as _json
+                state_raw = get_str('demuxer-cache-state') or ''
+                raw_input_rate = 0.0
+                if state_raw:
+                    try:
+                        raw_input_rate = float(
+                            (_json.loads(state_raw) or {}).get('raw-input-rate') or 0
+                        )
+                    except (ValueError, TypeError):
+                        raw_input_rate = 0.0
+                if raw_input_rate > 0:
+                    v_br = raw_input_rate * 8
 
             container = get_str('file-format') or ''
 
