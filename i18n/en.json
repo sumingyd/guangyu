@@ -694,6 +694,7 @@
   "mapping_empty": "No custom mappings yet. Add one below",
   "mapping_manager": "Channel Mapping Manager",
   "mapping_options": "Mapping Options",
+  "mapping_status_error": "Check failed: {} | Remote (cached): {} | Custom mappings: {}",
   "mapping_status_no_cache": "Remote rules: {} | Custom mappings: {} | Not checked yet",
   "mapping_status_ok": "Remote rules: {} | Custom mappings: {} | Last check: {}",
   "mapping_tip_desc": "Remote mapping automatically standardizes channel names.\nIf the mapping file is updated, click the button below to refresh.",

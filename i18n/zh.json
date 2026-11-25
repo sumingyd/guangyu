@@ -694,6 +694,7 @@
   "mapping_empty": "暂无自定义映射，请在下方添加",
   "mapping_manager": "频道映射管理器",
   "mapping_options": "映射功能选项",
+  "mapping_status_error": "检查失败：{} | 远程: 缓存 {} 条 | 自定义映射: {} 条",
   "mapping_status_no_cache": "远程规则: {} 条 | 自定义映射: {} 条 | 尚未检查",
   "mapping_status_ok": "远程规则: {} 条 | 自定义映射: {} 条 | 上次检查: {}",
   "mapping_tip_desc": "远程映射会自动将扫描出的频道名称统一为标准名称。\n如果映射文件有更新，请点击下方按钮刷新。",

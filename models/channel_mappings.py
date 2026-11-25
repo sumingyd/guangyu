@@ -766,12 +766,17 @@ class ChannelMappingManager:
             return []
 
     def check_remote_update_status(self) -> dict:
-        """检查远程映射是否有更新，返回状态信息"""
+        """检查远程映射是否有更新，返回状态信息
+
+        remote_count 为远端规则的真实条数（网络失败时回落到缓存条数并标记来源），
+        user_count 为用户自定义映射条数，两者口径互不混用。
+        """
         result = {
             'has_update': False,
             'last_cache_time': 0,
-            'local_count': len(self.remote_mappings),
             'remote_count': 0,
+            'user_count': len(self.user_mappings),
+            'remote_source': 'none',
             'error': None
         }
 
@@ -793,13 +798,12 @@ class ChannelMappingManager:
                 logger.debug(f"获取远程映射URL失败: {e}")
 
             try:
-                head_resp = _http_head(remote_url, timeout=5, allow_redirects=True)
+                # retry=False：状态检查只做一次 HEAD，避免连接重试把检查拖到十几秒
+                head_resp = _http_head(remote_url, timeout=5, allow_redirects=True, retry=False)
                 try:
                     remote_etag = ''
                     if head_resp.status_code == 200:
                         remote_etag = head_resp.headers.get('ETag', '')
-                        remote_last_modified = head_resp.headers.get('Last-Modified', '')
-
                         etag_file = self.cache_file + '.etag'
                         local_etag = ''
                         if os.path.exists(etag_file):
@@ -808,35 +812,55 @@ class ChannelMappingManager:
 
                         if remote_etag and local_etag and remote_etag != local_etag:
                             result['has_update'] = True
-                            return result
-                        if not remote_etag and not remote_last_modified:
-                            pass
-                    else:
-                        with _http_get(remote_url, timeout=10, stream=True) as get_resp:
-                            if get_resp.status_code == 200:
-                                content = get_resp.content
-                                content_hash = hashlib.md5(content).hexdigest()
-                                hash_file = self.cache_file + '.hash'
-                                local_hash = ''
-                                if os.path.exists(hash_file):
-                                    with open(hash_file, 'r', encoding='utf-8') as f:
-                                        local_hash = f.read().strip()
-                                if local_hash and content_hash != local_hash:
-                                    result['has_update'] = True
-                                decoded = content.decode('utf-8-sig', errors='replace')
-                                result['remote_count'] = len(_parse_mappings_content(decoded, remote_url))
-                                # 无论本地是否已有记录都要更新哈希，否则“有更新”会一直保持
+                            result['remote_count'], result['remote_source'] = self._count_remote_live()
+                        elif remote_etag and local_etag and self.remote_mappings:
+                            # ETag 一致：缓存内容即远端当前内容，无需再次下载
+                            result['remote_count'] = len(self.remote_mappings)
+                            result['remote_source'] = 'cache'
+                        else:
+                            # 无 ETag，或本地尚无 ETag（首次运行/缓存被清理）：拉一次真实内容计数
+                            result['remote_count'], result['remote_source'] = self._count_remote_live()
+
+                        logger.info(
+                            f"远程映射检查: HEAD={head_resp.status_code}, "
+                            f"ETag={'有' if remote_etag else '无'}, "
+                            f"本地ETag={'有' if local_etag else '无'}, "
+                            f"has_update={result['has_update']}, "
+                            f"remote_count={result['remote_count']}({result['remote_source']}), "
+                            f"user_count={result['user_count']}"
+                        )
+                        return result
+
+                    # HEAD 非 200（部分源不支持 HEAD）：GET 兜底计数，并记录哈希用于更新判断
+                    with _http_get(remote_url, timeout=10, stream=True) as get_resp:
+                        if get_resp.status_code == 200:
+                            content = get_resp.content
+                            content_hash = hashlib.md5(content).hexdigest()
+                            hash_file = self.cache_file + '.hash'
+                            local_hash = ''
+                            if os.path.exists(hash_file):
+                                with open(hash_file, 'r', encoding='utf-8') as f:
+                                    local_hash = f.read().strip()
+                            if local_hash and content_hash != local_hash:
+                                result['has_update'] = True
+                            decoded = content.decode('utf-8-sig', errors='replace')
+                            result['remote_count'] = len(_parse_mappings_content(decoded, remote_url))
+                            result['remote_source'] = 'live'
+                            # 无论本地是否已有记录都要更新哈希，否则“有更新”会一直保持
+                            try:
+                                _atomic_write_text(hash_file, content_hash)
+                            except Exception as e:
+                                logger.debug(f"写入映射哈希失败: {e}")
+                            if remote_etag:
                                 try:
-                                    _atomic_write_text(hash_file, content_hash)
+                                    _atomic_write_text(self.cache_file + '.etag', remote_etag)
                                 except Exception as e:
-                                    logger.debug(f"写入映射哈希失败: {e}")
-                                if remote_etag:
-                                    etag_file = self.cache_file + '.etag'
-                                    try:
-                                        _atomic_write_text(etag_file, remote_etag)
-                                    except Exception as e:
-                                        logger.debug(f"写入映射ETag失败: {e}")
-                                return result
+                                    logger.debug(f"写入映射ETag失败: {e}")
+                            logger.info(
+                                f"远程映射检查(HEAD {head_resp.status_code}，改用GET): "
+                                f"remote_count={result['remote_count']}, has_update={result['has_update']}"
+                            )
+                            return result
                 finally:
                     try:
                         head_resp.close()
@@ -844,11 +868,23 @@ class ChannelMappingManager:
                         pass
             except requests.exceptions.RequestException as e:
                 result['error'] = str(e)
+                result['remote_count'] = len(self.remote_mappings)
+                result['remote_source'] = 'cache'
+                logger.warning(f"远程映射检查请求失败: {e}, 远程条数回落到缓存 {result['remote_count']} 条")
 
         except Exception as e:
             result['error'] = str(e)
+            result['remote_count'] = len(self.remote_mappings)
+            result['remote_source'] = 'cache'
 
         return result
+
+    def _count_remote_live(self):
+        """实际拉取远端内容计数，返回 (条数, 来源)；拉取失败时回落到缓存条数"""
+        mappings = try_load_remote_mappings()
+        if mappings is None:
+            return len(self.remote_mappings), 'cache'
+        return len(mappings), 'live'
 
     def refresh_cache(self):
         """刷新远程映射缓存（失败时保留现有映射，不清空）"""

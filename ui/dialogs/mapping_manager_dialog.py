@@ -16,7 +16,7 @@ class _UpdateCheckWorker(QThread):
             status = mapping_manager.check_remote_update_status()
         except Exception as e:
             status = {'has_update': False, 'last_cache_time': 0,
-                      'local_count': 0, 'remote_count': 0, 'error': str(e)}
+                      'remote_count': 0, 'user_count': 0, 'error': str(e)}
         self.finished.emit(status)
 
 
@@ -266,8 +266,12 @@ class MappingManagerDialog(FloatingDialog):
         from ui.styles import AppStyles
         colors = AppStyles._get_colors()
         color = colors.get('success')
+        remote_count = status.get('remote_count', 0)
+        user_count = status.get('user_count', 0)
         if status.get('error'):
-            text = _('update_check_failed', 'Update check failed: {}').format(status['error'])
+            text = _('mapping_status_error',
+                'Check failed: {} | Remote (cached): {} | Custom mappings: {}'
+            ).format(status['error'], remote_count, user_count)
             color = colors.get('error')
         elif status.get('has_update'):
             text = _('update_available',
@@ -275,19 +279,17 @@ class MappingManagerDialog(FloatingDialog):
             color = colors.get('warning')
         else:
             last_time = status.get('last_cache_time', 0)
-            local_count = status.get('local_count', 0)
-            remote_count = status.get('remote_count', 0)
             if last_time > 0:
                 from datetime import datetime
                 dt = datetime.fromtimestamp(last_time)
                 time_str = dt.strftime('%Y-%m-%d %H:%M')
                 text = _('mapping_status_ok',
                     'Remote rules: {} | Custom mappings: {} | Last check: {}'
-                ).format(remote_count, local_count, time_str)
+                ).format(remote_count, user_count, time_str)
             else:
                 text = _('mapping_status_no_cache',
                     'Remote rules: {} | Custom mappings: {} | Not checked yet'
-                ).format(remote_count, local_count)
+                ).format(remote_count, user_count)
         self.update_status_label.setText(text)
         self.update_status_label.setStyleSheet(
             f"color: {color}; font-size: 11px; border: none; background: transparent; padding: 4px 8px;"
