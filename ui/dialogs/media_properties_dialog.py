@@ -7,9 +7,11 @@
 - MpvPlayerController.get_live_media_info()（每秒刷新一次的扁平字典）
 - 少量 mpv 属性直接读取（display-fps / total-avsync-change / metadata 等）
 """
+import math
+
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QApplication, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QPushButton,
+    QApplication, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QGroupBox, QScrollArea, QSizePolicy, QWidget, QFrame,
 )
 
@@ -18,6 +20,44 @@ from ui.styles import AppStyles
 from controllers.ui_controller import UIController
 from core.log_manager import global_logger as logger
 from utils.delay_constants import DelayMs
+
+
+class _ElidedValueLabel(QLabel):
+    """定宽单行数值标签。
+
+    单元格宽度由对话框尺寸固定，文本超出时右侧省略并保留完整 tooltip，
+    这样每秒刷新时数值长短变化不会改变控件尺寸，也就不会带动整行抖动或换行。
+    """
+
+    def __init__(self, text: str = '--'):
+        super().__init__()
+        self._full_text = ''
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.set_full_text(text)
+
+    def set_full_text(self, text: str):
+        self._full_text = text or ''
+        self.setToolTip(self._full_text)
+        self._update_elided()
+
+    def full_text(self) -> str:
+        return self._full_text
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_elided()
+
+    def _update_elided(self):
+        fm = self.fontMetrics()
+        width = max(0, self.width() - 2)
+        if width <= 0:
+            text = self._full_text
+        else:
+            text = fm.elidedText(self._full_text, Qt.TextElideMode.ElideRight, width)
+        if text != QLabel.text(self):
+            QLabel.setText(self, text)
 
 
 class MediaPropertiesDialog(FloatingDialog):
@@ -68,21 +108,9 @@ class MediaPropertiesDialog(FloatingDialog):
         tr = main_window.language_manager.tr
         self.setWindowTitle(tr('properties_title', '属性'))
         self._labels = {}
-        self._setup_ui()
+        self._size_applied = False
         self._apply_theme()
-
-        # 高度受屏幕可用区约束，内容超出时在内部滚动
-        self.setMinimumSize(520, 420)
-        try:
-            screen = self.screen() or QApplication.primaryScreen()
-            if screen:
-                avail = screen.availableGeometry()
-                self.resize(
-                    min(620, int(avail.width() * 0.7)),
-                    min(760, int(avail.height() * 0.85)),
-                )
-        except Exception as e:
-            logger.debug(f"设置属性对话框尺寸失败: {e}")
+        self._setup_ui()
 
         from ui.theme_manager import safe_register_window
         safe_register_window(self)
@@ -108,7 +136,7 @@ class MediaPropertiesDialog(FloatingDialog):
                 color: {text_color};
                 border: 1px solid {c.get('mid')};
                 border-radius: {r}px;
-                margin-top: 12px; padding: 8px;
+                margin-top: 8px; padding: 4px 6px;
             }}
             QGroupBox::title {{
                 subcontrol-origin: margin; left: 10px; padding: 0 4px;
@@ -126,73 +154,139 @@ class MediaPropertiesDialog(FloatingDialog):
     def _setup_ui(self):
         tr = self.window.language_manager.tr
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(14, 12, 14, 10)
+        layout.setSpacing(8)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(8)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll = scroll
 
-        self._add_group(
-            content_layout,
+        content = QWidget()
+        self._content = content
+
+        # 用带对话框样式的探针标签取真实字体度量：QSS 里 QLabel 固定 12px，
+        # 直接读 self.fontMetrics() 会跟随系统字号把列宽算大。
+        probe = QLabel('--', self)
+        probe.ensurePolished()
+        self._fm = probe.fontMetrics()
+        probe.deleteLater()
+
+        grid = QGridLayout(content)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(0)
+
+        # 左列：播放信息 + 网络与性能（各 4 行），右列：媒体信息（21 项分两列排布）
+        left_col = QVBoxLayout()
+        left_col.setSpacing(6)
+        left_col.addWidget(self._build_group(
             tr('properties_group_playback', '播放信息'),
             [(key, tr(label_key, label_default)) for key, label_key, label_default in self.PLAYBACK_ROWS],
-        )
-        self._add_group(
-            content_layout,
-            tr('properties_group_media', '媒体信息'),
-            [(key, tr(label_key, label_default)) for key, label_key, label_default in self.MEDIA_ROWS],
-        )
-        self._add_group(
-            content_layout,
+            columns=1,
+        ))
+        left_col.addWidget(self._build_group(
             tr('properties_group_network', '网络与性能'),
             [(key, tr(label_key, label_default)) for key, label_key, label_default in self.NETWORK_ROWS],
-        )
-        content_layout.addStretch(1)
+            columns=1,
+        ))
+        left_col.addStretch(1)
 
+        grid.addLayout(left_col, 0, 0)
+        grid.addWidget(self._build_group(
+            tr('properties_group_media', '媒体信息'),
+            [(key, tr(label_key, label_default)) for key, label_key, label_default in self.MEDIA_ROWS],
+            columns=2,
+        ), 0, 1)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 2)
+
+        content.adjustSize()
         scroll.setWidget(content)
         layout.addWidget(scroll, 1)
 
         btn_row = QHBoxLayout()
+        self._btn_row = btn_row
         btn_row.addStretch()
         close_btn = QPushButton(tr('close', '关闭'))
         close_btn.clicked.connect(self.close)
         btn_row.addWidget(close_btn)
         layout.addLayout(btn_row)
 
-    def _add_group(self, parent_layout, title, rows):
+    def _build_group(self, title, rows, columns=1):
+        """按固定行高/列宽构建分组，columns>1 时按列优先填充。"""
         group = QGroupBox(title)
-        form = QFormLayout(group)
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        form.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        form.setHorizontalSpacing(12)
-        form.setVerticalSpacing(6)
-        form.setContentsMargins(8, 4, 8, 4)
+        grid = QGridLayout(group)
+        grid.setContentsMargins(8, 4, 8, 6)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(2)
 
-        c = AppStyles._get_colors()
-        label_color = c.get('mid')
-        value_color = c.get('window_text')
-        for key, label_text in rows:
+        fm = self._fm
+        label_w = max(fm.horizontalAdvance(text) for _, text in rows) + 10
+        row_h = fm.height() + 4
+        # 数值列宽按最长的常见值预留（如「硬解(mediacodec-copy)」），封顶避免极端字体把窗口撑宽；
+        # 真正超长的自由文本（流标题/电视台/运营商）在单元格内省略并保留完整 tooltip。
+        value_min = min(150, max(96, fm.horizontalAdvance('硬解(mediacodec-copy)') + 8))
+        per_col = math.ceil(len(rows) / max(1, columns))
+
+        for idx, (key, label_text) in enumerate(rows):
+            row, col = idx % per_col, idx // per_col
             label = QLabel(label_text)
-            label.setStyleSheet(f"color: {label_color};")
-            label.setMinimumWidth(72)
             label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            value = QLabel('--')
-            value.setStyleSheet(f"color: {value_color}; font-weight: 500;")
-            value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            value.setWordWrap(True)
-            value.setMinimumWidth(180)
-            value.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-            form.addRow(label, value)
+            label.setFixedSize(label_w, row_h)
+            value = _ElidedValueLabel('--')
+            value.setMinimumWidth(value_min)
+            value.setFixedHeight(row_h)
+            grid.addWidget(label, row, col * 2)
+            grid.addWidget(value, row, col * 2 + 1)
             self._labels[key + '__label'] = label
             self._labels[key] = value
 
-        parent_layout.addWidget(group)
+        for col in range(columns):
+            grid.setColumnStretch(col * 2 + 1, 1)
+        return group
+
+    def _apply_compact_size(self):
+        """窗口按内容自然尺寸一次定好，全部字段一屏显示；屏幕确实不够时滚动兜底。"""
+        try:
+            self.layout().activate()
+            self._content.ensurePolished()
+            self._content.adjustSize()
+            hint = self._content.sizeHint()
+            min_hint = self._content.minimumSizeHint()
+            content_w = max(hint.width(), min_hint.width())
+            content_h = max(hint.height(), min_hint.height())
+            margins = self.layout().contentsMargins()
+            spacing = self.layout().spacing()
+            btn_h = self._btn_row.sizeHint().height() if self._btn_row else 0
+            width = content_w + margins.left() + margins.right() + 4
+            height = content_h + margins.top() + margins.bottom() + btn_h + spacing + 4
+            screen = self.screen() or QApplication.primaryScreen()
+            if screen:
+                avail = screen.availableGeometry()
+                width = min(width, max(480, avail.width() - 24))
+                height = min(height, max(320, avail.height() - 64))
+            self.resize(width, height)
+        except Exception as e:
+            logger.debug(f"计算属性对话框尺寸失败: {e}")
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # 首次显示时布局才完成 polish，这里再按真实 sizeHint 定一次尺寸并重新居中
+        if not getattr(self, '_size_applied', False):
+            self._size_applied = True
+            self._apply_compact_size()
+            try:
+                screen = self.screen() or QApplication.primaryScreen()
+                if screen:
+                    sg = screen.availableGeometry()
+                    self.move(
+                        sg.x() + max(0, (sg.width() - self.width()) // 2),
+                        sg.y() + max(0, (sg.height() - self.height()) // 2),
+                    )
+            except Exception as e:
+                logger.debug(f"属性对话框居中失败: {e}")
 
     # ---------- 实时刷新 ----------
     def _refresh(self):
@@ -346,7 +440,10 @@ class MediaPropertiesDialog(FloatingDialog):
         lbl = self._labels.get(key)
         if lbl:
             try:
-                lbl.setText(value)
+                if isinstance(lbl, _ElidedValueLabel):
+                    lbl.set_full_text(value)
+                else:
+                    lbl.setText(value)
             except RuntimeError:
                 pass
 
@@ -357,7 +454,10 @@ class MediaPropertiesDialog(FloatingDialog):
             if key.endswith('__label'):
                 continue
             try:
-                lbl.setText(na)
+                if isinstance(lbl, _ElidedValueLabel):
+                    lbl.set_full_text(na)
+                else:
+                    lbl.setText(na)
             except RuntimeError:
                 pass
 
