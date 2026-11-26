@@ -5,6 +5,7 @@ import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.ListAlt
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.BlurOn
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CloudSync
@@ -26,8 +27,11 @@ import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PictureInPicture
 import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Replay
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.ScreenshotMonitor
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SyncAlt
@@ -139,6 +143,10 @@ enum class MenuActionId {
     REFRESH,
     ABOUT,
     CLEAR_CHANNEL_SETTINGS,
+    TOGGLE_AUTO_RESUME,
+    TOGGLE_BOOT_START,
+    TOGGLE_SCREEN_SAVER,
+    CYCLE_SCREEN_SAVER_TIMEOUT,
     PIP,
     EXIT
 }
@@ -190,7 +198,11 @@ data class MenuRuntimeState(
     val perChannelEnabled: Boolean = false,
     val hasChannelSettings: Boolean = false,
     val githubProxyEnabled: Boolean = false,
-    val githubProxySelected: String = ""
+    val githubProxySelected: String = "",
+    val autoResume: Boolean = false,
+    val bootStart: Boolean = false,
+    val screenSaverEnabled: Boolean = false,
+    val screenSaverTimeout: Int = 5
 )
 
 object MenuCatalog {
@@ -687,6 +699,43 @@ object MenuCatalog {
         id = "system",
         title = "系统",
         entries = listOf(
+            // 启动与屏保：此前只在手机端设置页可见，电视端补齐
+            MenuEntryModel(
+                id = "system:auto-resume",
+                title = "自动续播",
+                subtitle = "启动时恢复上次播放的频道",
+                icon = Icons.Default.Replay,
+                action = MenuAction(MenuActionId.TOGGLE_AUTO_RESUME),
+                isToggle = true,
+                toggleValue = state.autoResume
+            ),
+            MenuEntryModel(
+                id = "system:boot-start",
+                title = "开机自启动",
+                subtitle = "开机后自动进入应用",
+                icon = Icons.Default.PowerSettingsNew,
+                action = MenuAction(MenuActionId.TOGGLE_BOOT_START),
+                isToggle = true,
+                toggleValue = state.bootStart
+            ),
+            MenuEntryModel(
+                id = "system:screen-saver",
+                title = "屏保",
+                subtitle = "无操作时显示待机画面",
+                icon = Icons.Default.Bedtime,
+                action = MenuAction(MenuActionId.TOGGLE_SCREEN_SAVER),
+                isToggle = true,
+                toggleValue = state.screenSaverEnabled
+            ),
+            MenuEntryModel(
+                id = "system:screen-saver-timeout",
+                title = "屏保等待",
+                subtitle = if (state.screenSaverEnabled) "${state.screenSaverTimeout} 分钟 · 点击切换" else "先开启屏保",
+                icon = Icons.Default.Schedule,
+                action = MenuAction(MenuActionId.CYCLE_SCREEN_SAVER_TIMEOUT),
+                enabled = state.screenSaverEnabled,
+                disabledReason = if (state.screenSaverEnabled) "" else "先开启屏保"
+            ),
             MenuEntryModel(
                 id = "system:refresh",
                 title = "刷新",
@@ -862,6 +911,20 @@ fun AppViewModel.dispatchMenuAction(action: MenuAction, host: MenuHost) {
         MenuActionId.CLEAR_CHANNEL_SETTINGS -> {
             val idx = currentIdx.value
             if (idx >= 0) clearChannelSettings(idx)
+        }
+        // 启动与屏保：就地切换，不关面板
+        MenuActionId.TOGGLE_AUTO_RESUME -> setAutoResume(!autoResume.value)
+        MenuActionId.TOGGLE_BOOT_START -> setBootStart(!bootStart.value)
+        MenuActionId.TOGGLE_SCREEN_SAVER -> setScreenSaverEnabled(!screenSaverEnabled.value)
+        MenuActionId.CYCLE_SCREEN_SAVER_TIMEOUT -> {
+            val next = when (screenSaverTimeoutMinutes.value) {
+                1 -> 5
+                5 -> 10
+                10 -> 30
+                30 -> 60
+                else -> 1
+            }
+            setScreenSaverTimeoutMinutes(next)
         }
         MenuActionId.PIP -> {
             host.closeHost()

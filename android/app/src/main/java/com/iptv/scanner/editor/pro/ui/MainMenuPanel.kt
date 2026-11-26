@@ -122,7 +122,7 @@ import com.iptv.scanner.editor.pro.ui.theme.GlassPanel
  * - 网络：网络增强 / GitHub 加速代理
  * - 工具设置：工具 / 截图 / A/V 同步 / 切片导出 / 音频可视化 / 歌词
  * - 文件：打开本地文件 / 最近打开 / 另存为 M3U
- * - 系统：刷新 / 关于 / 画中画 / 退出
+ * - 系统：自动续播 / 开机自启动 / 屏保 / 屏保等待 / 刷新 / 关于 / 画中画 / 退出
  *
  * 布局自适应：
  * - 竖屏：单列列表（图标 + 标题 + 副标题）
@@ -160,6 +160,11 @@ fun MainMenuPanel(viewModel: AppViewModel) {
     // GitHub 加速代理：与设置页同一份配置，全屏菜单「网络」组提供直达入口
     val githubProxyEnabled by viewModel.githubProxyEnabled.collectAsState()
     val githubProxySelected by viewModel.githubProxySelected.collectAsState()
+    // 启动与屏保：与手机端设置页共用同一份配置，电视端此前只能在手机端改
+    val autoResume by viewModel.autoResume.collectAsState()
+    val bootStart by viewModel.bootStart.collectAsState()
+    val screenSaverEnabled by viewModel.screenSaverEnabled.collectAsState()
+    val screenSaverTimeout by viewModel.screenSaverTimeoutMinutes.collectAsState()
     // 当前渲染路径：直写 Surface 时 mpv 字幕/滤镜/截图入口置灰（仍可见）
     val actualVo by viewModel.actualVo.collectAsState()
     val surfaceDirect = actualVo == "mediacodec_embed"
@@ -279,7 +284,11 @@ fun MainMenuPanel(viewModel: AppViewModel) {
         perChannelEnabled = perChannelEnabled,
         hasChannelSettings = hasChannelSettings,
         githubProxyEnabled = githubProxyEnabled,
-        githubProxySelected = githubProxySelected
+        githubProxySelected = githubProxySelected,
+        autoResume = autoResume,
+        bootStart = bootStart,
+        screenSaverEnabled = screenSaverEnabled,
+        screenSaverTimeout = screenSaverTimeout
     )
     val sections = MenuCatalog.sections(menuState, MenuSurface.RIGHT_ONLY)
 

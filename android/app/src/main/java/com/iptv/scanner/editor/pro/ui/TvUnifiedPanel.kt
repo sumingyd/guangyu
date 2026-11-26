@@ -1087,6 +1087,10 @@ private fun MenuColumn(
     val selectedSource by viewModel.selectedSource.collectAsState()
     val githubProxyEnabled by viewModel.githubProxyEnabled.collectAsState()
     val githubProxySelected by viewModel.githubProxySelected.collectAsState()
+    val autoResume by viewModel.autoResume.collectAsState()
+    val bootStart by viewModel.bootStart.collectAsState()
+    val screenSaverEnabled by viewModel.screenSaverEnabled.collectAsState()
+    val screenSaverTimeout by viewModel.screenSaverTimeoutMinutes.collectAsState()
 
     // 与右侧菜单共用同一份条目定义，只保留侧边栏渲染面可见的条目
     val state = MenuRuntimeState(
@@ -1112,7 +1116,11 @@ private fun MenuColumn(
         perChannelEnabled = perChannelEnabled,
         hasChannelSettings = hasChannelSettings,
         githubProxyEnabled = githubProxyEnabled,
-        githubProxySelected = githubProxySelected
+        githubProxySelected = githubProxySelected,
+        autoResume = autoResume,
+        bootStart = bootStart,
+        screenSaverEnabled = screenSaverEnabled,
+        screenSaverTimeout = screenSaverTimeout
     )
     val entries = MenuCatalog.sections(state, MenuSurface.SIDEBAR_ONLY).flatMap { it.entries }
 
