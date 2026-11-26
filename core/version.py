@@ -1,5 +1,5 @@
 APP_NAME = "GuangYu"
-CURRENT_VERSION = "50.0.7.8"
+CURRENT_VERSION = "50.0.7.9"
 # 发版时同步更新时间；CI 会校验 release tag 与本版本号一致
 BUILD_DATE = "2026-11-26"
 
