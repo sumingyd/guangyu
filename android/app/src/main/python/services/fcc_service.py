@@ -50,12 +50,21 @@ class FccResolution:
     endpoint:   FCC 代理地址 (ip, port)，解析失败为 None
     multicast:  组播源地址 (ip, port)，无法确定时为 None
     error:      仅在 is_fcc=True 时有意义，描述地址解析失败原因
+    proxy_owned: 播放走 http(s)://代理/rtp/...?fcc= 形态。此时组播加入与 FCC 快速换台
+                都由代理（如 rtp2httpd）自己完成，FCC 单播流也只会送到代理，
+                客户端再发 leave/join 不可能加速，还可能扰动代理侧的 FCC 会话。
     """
 
     is_fcc: bool
     endpoint: Optional[Tuple[str, int]] = None
     multicast: Optional[Tuple[str, int]] = None
     error: Optional[str] = None
+    proxy_owned: bool = False
+
+    @property
+    def can_notify(self) -> bool:
+        """代理地址与组播源都解析成功、且由客户端自己接收组播，才发送 leave/join。"""
+        return not self.proxy_owned and self.endpoint is not None and self.multicast is not None
 
 
 # 解析失败日志去重：同一 URL + 原因只告警一次，避免大播放列表刷屏
@@ -196,6 +205,8 @@ def resolve_fcc(url: str, log_errors: bool = True) -> FccResolution:
 
     multicast, multicast_error = _resolve_multicast(parsed)
     endpoint, endpoint_error = _parse_fcc_endpoint(fcc_value or '')
+    # 组播地址只出现在代理路径里（http(s)://代理/rtp/...）：FCC 与组播都由代理接管
+    proxy_owned = multicast is not None and (parsed.scheme or '').lower() in ('http', 'https')
 
     error = endpoint_error
     if error is None and multicast is None:
@@ -209,6 +220,7 @@ def resolve_fcc(url: str, log_errors: bool = True) -> FccResolution:
         endpoint=endpoint,
         multicast=multicast,
         error=error,
+        proxy_owned=proxy_owned,
     )
 
 
@@ -352,8 +364,11 @@ class FCCService:
             force: True 时即使地址未变化也重发 JOIN（用于重连/重试）
         """
         resolution = resolve_fcc(new_url)
-        new_fcc = resolution.endpoint if resolution.is_fcc else None
-        new_multicast = resolution.multicast if resolution.is_fcc else None
+        notify = resolution.is_fcc and resolution.can_notify
+        new_fcc = resolution.endpoint if notify else None
+        new_multicast = resolution.multicast if notify else None
+        if resolution.is_fcc and resolution.proxy_owned:
+            logger.info(f"FCC 由播放代理接管(proxy_owned)，跳过客户端 leave/join: {new_url}")
 
         old_fcc = self._current_fcc
         old_multicast = self._current_multicast
@@ -367,10 +382,9 @@ class FCCService:
         if new_fcc and new_multicast and (changed or force):
             self._notify(new_fcc, join_addr=new_multicast)
 
-        if resolution.is_fcc and (new_fcc is None or new_multicast is None):
+        if resolution.is_fcc and (new_fcc is None or new_multicast is None) and not resolution.proxy_owned:
             logger.info(
-                "FCC 流已识别但通知无法发送（endpoint=%s, multicast=%s）: %s",
-                new_fcc, new_multicast, resolution.error,
+                f"FCC 流已识别但通知无法发送（endpoint={new_fcc}, multicast={new_multicast}）: {resolution.error}"
             )
 
         self._current_fcc = new_fcc

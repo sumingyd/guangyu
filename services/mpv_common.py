@@ -584,13 +584,34 @@ def terminate_destroy_mpv(handle):
                 logger.debug(f"terminate_destroy_mpv: {e}")
 
 
+# 属性写入失败只提示一次（按 属性名+返回码 去重），避免每次播放刷屏。
+# 目的：mpv 升级后某个属性名失效时能在日志里看到，而不是静默不生效。
+_property_failures_logged = set()
+_property_failures_lock = threading.Lock()
+
+
+def _log_property_failure(name, value, rc):
+    key = (name, rc)
+    with _property_failures_lock:
+        if key in _property_failures_logged:
+            return
+        _property_failures_logged.add(key)
+    logger.warning(
+        f"mpv 属性写入失败: {name}={value!r} rc={rc}（属性不存在或此版本不可写；同项后续不再提示）"
+    )
+
+
 def set_property_string(handle, name, value):
     if not handle or not libmpv:
         return -1
     try:
-        return libmpv.mpv_set_property_string(handle, name.encode('utf-8'), str(value).encode('utf-8'))
-    except Exception:
+        rc = libmpv.mpv_set_property_string(handle, name.encode('utf-8'), str(value).encode('utf-8'))
+    except Exception as e:
+        _log_property_failure(name, value, f'exception: {e}')
         return -1
+    if rc < 0:
+        _log_property_failure(name, value, rc)
+    return rc
 
 
 def set_property_int64(handle, name, value):
@@ -598,9 +619,13 @@ def set_property_int64(handle, name, value):
         return -1
     try:
         v = ctypes.c_int64(int(value))
-        return libmpv.mpv_set_property(handle, name.encode('utf-8'), MPV_FORMAT_INT64, ctypes.byref(v))
-    except Exception:
+        rc = libmpv.mpv_set_property(handle, name.encode('utf-8'), MPV_FORMAT_INT64, ctypes.byref(v))
+    except Exception as e:
+        _log_property_failure(name, value, f'exception: {e}')
         return -1
+    if rc < 0:
+        _log_property_failure(name, value, rc)
+    return rc
 
 
 def set_option_string(handle, name, value):

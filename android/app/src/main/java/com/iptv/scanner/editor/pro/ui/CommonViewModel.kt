@@ -222,8 +222,19 @@ internal fun AppViewModel.setHdrMode(mode: HdrMode) {
         HdrMode.TONEMAP -> "HDR→SDR 色调映射"
         HdrMode.PASSTHROUGH -> "HDR 直通（系统自动切换 HDR 显示）"
     }
-    showOsd("HDR 模式：$modeName")
-    Log.i(AppViewModel.TAG, "HDR 模式切换：$mode")
+    // 硬件直写 Surface 的 vo 没有色调映射属性，applyHdrOnFileLoaded 会直接跳过，
+    // 这里不能再弹“已切换”的提示，否则用户以为生效了
+    val voUnsupported = try {
+        mpv.getPropertyString("vo") == "mediacodec_embed"
+    } catch (_: Throwable) {
+        false
+    }
+    if (voUnsupported) {
+        showOsd("HDR 模式：当前渲染方式不支持，仅 gpu / gpu-next 生效")
+    } else {
+        showOsd("HDR 模式：$modeName")
+    }
+    Log.i(AppViewModel.TAG, "HDR 模式切换：$mode, voUnsupported=$voUnsupported")
 }
 
 internal fun AppViewModel.setColorCompatMode(enabled: Boolean) {

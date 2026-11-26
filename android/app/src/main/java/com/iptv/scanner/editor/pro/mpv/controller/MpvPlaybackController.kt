@@ -3,6 +3,8 @@ package com.iptv.scanner.editor.pro.mpv.controller
 import android.util.Log
 import `is`.xyz.mpv.MPVLib
 import com.iptv.scanner.editor.pro.data.UserPrefs
+import com.iptv.scanner.editor.pro.data.store.formatHttpHeaderFields
+import com.iptv.scanner.editor.pro.data.store.isValidHttpProxy
 import com.iptv.scanner.editor.pro.mpv.MpvProtocolConstants
 import com.iptv.scanner.editor.pro.mpv.SwitchPerf
 import com.iptv.scanner.editor.pro.player.FccHelper
@@ -370,17 +372,24 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
             if (!u.startsWith("rtsp://")) {
                 MPVLib.setPropertyString("user-agent", MpvProtocolConstants.USER_AGENT)
             }
-            if (isFcc) {
-                MPVLib.setPropertyString("stream-lavf-o", "verify=1,rw_timeout=${MpvProtocolConstants.RW_TIMEOUT_US}")
-                MPVLib.setPropertyString("demuxer-read-timeout", "0")
-                MPVLib.setPropertyString("source-timeout", "0")
-                MPVLib.setPropertyString("network-timeout", "0")
-                Log.i(TAG, "FCC stream: stream-lavf-o rw_timeout=30s, demuxer-read-timeout=0, source-timeout=0")
+            // 慢源放弃：这版 libmpv 没有 source-timeout / stream-open-timeout /
+            // demuxer-read-timeout（实测启动 rc=-5），只能用 network-timeout
+            // 加 lavf 的 rw_timeout（微秒，读不到数据即放弃）。
+            // FCC 流给 30s：代理要先向 FCC 服务器取关键帧再回填；
+            // 其余网络流 8s，和 network-timeout 同口径。
+            val rwTimeoutUs = if (isFcc) {
+                MpvProtocolConstants.FCC_RW_TIMEOUT_US
             } else {
-                MPVLib.setPropertyString("stream-lavf-o", "verify=1")
-                MPVLib.setPropertyString("demuxer-read-timeout", "5")
-                MPVLib.setPropertyString("source-timeout", "8")
-                MPVLib.setPropertyString("network-timeout", "8")
+                MpvProtocolConstants.NETWORK_RW_TIMEOUT_US
+            }
+            MPVLib.setPropertyString("stream-lavf-o", "verify=1,rw_timeout=$rwTimeoutUs")
+            MPVLib.setPropertyString(
+                "network-timeout",
+                MpvProtocolConstants.NETWORK_TIMEOUT_SEC.toString()
+            )
+            applyHttpSettings()
+            if (isFcc) {
+                Log.i(TAG, "FCC stream: rw_timeout=${rwTimeoutUs}us, network-timeout=${MpvProtocolConstants.NETWORK_TIMEOUT_SEC}s")
             }
             when {
                 ".m3u8" in u || "format=hls" in u -> {
@@ -466,15 +475,33 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
      */
     private fun resetProtocolOptions() {
         try {
-            MPVLib.setPropertyString("stream-lavf-o", "verify=1")
-            MPVLib.setPropertyString("demuxer-read-timeout", "5")
-            MPVLib.setPropertyString("source-timeout", "8")
-            MPVLib.setPropertyString("network-timeout", "8")
+            MPVLib.setPropertyString(
+                "stream-lavf-o",
+                "verify=1,rw_timeout=${MpvProtocolConstants.NETWORK_RW_TIMEOUT_US}"
+            )
+            MPVLib.setPropertyString(
+                "network-timeout",
+                MpvProtocolConstants.NETWORK_TIMEOUT_SEC.toString()
+            )
             MPVLib.setPropertyString("demuxer", "auto")
             MPVLib.setPropertyString("demuxer-lavf-format", "")
         } catch (e: Throwable) {
             Log.w(TAG, "resetProtocolOptions failed: ${e.message}")
         }
+    }
+
+    /**
+     * 每次加载前把偏好里的 Referer / HTTP 代理 / 自定义请求头写回 mpv。
+     *
+     * 设置面板点「应用」时也会写一次，但 mpv 实例是进程级的：如果不在这里
+     * 重新下发，冷启动后这些设置就静默丢失（PC 端是每次播放都下发）。
+     */
+    private fun applyHttpSettings() {
+        val prefs = UserPrefs.getInstance()
+        MPVLib.setPropertyString("referrer", prefs.getHttpReferer().trim())
+        val proxy = prefs.getHttpProxy().trim()
+        MPVLib.setPropertyString("http-proxy", if (isValidHttpProxy(proxy)) proxy else "")
+        MPVLib.setPropertyString("http-header-fields", formatHttpHeaderFields(prefs.getHttpHeaders()))
     }
 
     companion object {

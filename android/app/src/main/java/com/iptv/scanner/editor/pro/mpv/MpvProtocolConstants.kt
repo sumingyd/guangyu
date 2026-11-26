@@ -11,10 +11,19 @@ object MpvProtocolConstants {
     const val FCC_USER_AGENT = "VLC/3.0.18Libmpv"
 
     /**
-     * ffmpeg `rw_timeout` 选项的单位是**微秒**，30000000 µs = 30 s。
+     * ffmpeg `rw_timeout` 选项的单位是**微秒**。
      * 该值经 `stream-lavf-o` 传给 libavformat，不是 mpv 的秒级超时。
+     *
+     * 注意：这版 libmpv 的 `--source-timeout` / `--stream-open-timeout` /
+     * `--demuxer-read-timeout` 三个选项都不存在（启动日志 rc=-5），
+     * 所以“慢源按时放弃”只能靠 `network-timeout` + 这里的 `rw_timeout`，
+     * “卡死的 demuxer 被释放”靠 startTimeoutSwitchSource 的 stop。
      */
-    const val RW_TIMEOUT_US = 30_000_000
+    const val NETWORK_RW_TIMEOUT_US = 8_000_000
+    const val FCC_RW_TIMEOUT_US = 30_000_000
+
+    /** 网络无响应超时（秒），这版 mpv 真实支持的超时属性 */
+    const val NETWORK_TIMEOUT_SEC = 8
 
     /**
      * demuxer 预算：直播场景 16MiB 前向足够，且低内存设备（1-2GB）不会 OOM；

@@ -230,6 +230,41 @@ def test_on_stop_without_fcc_is_noop(sent):
 
 
 # ---------------------------------------------------------------------------
+# 代理形态（http(s)://代理/rtp/...?fcc=）：FCC 由代理接管，客户端不发通知
+# ---------------------------------------------------------------------------
+CH_PROXY = 'http://proxy:8080/rtp/239.1.1.1:5002?fcc=10.0.0.1:8027'
+
+
+def test_proxy_owned_resolution_disables_client_notify():
+    proxy = fcc_service.resolve_fcc(CH_PROXY)
+    assert proxy.is_fcc and proxy.proxy_owned
+    assert not proxy.can_notify
+
+    direct = fcc_service.resolve_fcc(CH_A)
+    assert direct.is_fcc and not direct.proxy_owned
+    assert direct.can_notify
+
+
+def test_proxy_url_does_not_send_any_notification(sent):
+    service = FCCService()
+    service.on_channel_change(CH_PROXY)
+    assert sent == []
+
+
+def test_switch_from_direct_to_proxy_only_leaves_old(sent):
+    service = FCCService()
+    service.on_channel_change(CH_A)
+    sent.clear()
+
+    service.on_channel_change(CH_PROXY)
+
+    # 只向旧端点补 LEAVE，不能把新组播的 JOIN 发给 FCC 服务器
+    assert sent == [
+        {'fcc': ('10.0.0.1', 8027), 'leave': ('239.1.1.1', 5002), 'join': None},
+    ]
+
+
+# ---------------------------------------------------------------------------
 # 纯逻辑：不触碰真实 socket
 # ---------------------------------------------------------------------------
 def test_ipv6_endpoint_is_passed_through_without_brackets(monkeypatch):

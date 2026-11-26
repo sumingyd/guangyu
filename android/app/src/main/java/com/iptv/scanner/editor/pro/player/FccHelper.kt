@@ -47,15 +47,22 @@ object FccHelper {
     /**
      * FCC 判定结果。[isFcc] 为 true 表示 URL 带 fcc 参数（是 FCC 流）；
      * [endpoint] / [multicast] 任一为 null 时无法发送通知，原因写入 [error]。
+     *
+     * [proxyOwned] 表示播放走的是 `http(s)://代理/rtp/...?fcc=` 形态：组播加入与 FCC
+     * 快速换台都由代理（如 rtp2httpd）自己完成，播放器的 FCC 单播流也只会送到代理。
+     * 这种情况下客户端再向 FCC 服务器发 LEAVE/JOIN 不可能加速（本机不接收该单播），
+     * 只会多一次无意义的外发，甚至扰动代理与 FCC 服务器之间的会话，因此不发。
      */
     data class FccPlan(
         val isFcc: Boolean,
         val endpoint: Pair<String, Int>?,
         val multicast: Pair<String, Int>?,
-        val error: String? = null
+        val error: String? = null,
+        val proxyOwned: Boolean = false
     ) {
-        /** 代理地址与组播源都解析成功，可以发送 LEAVE/JOIN */
-        val canNotify: Boolean get() = endpoint != null && multicast != null
+        /** 代理地址与组播源都解析成功，且由客户端自己接收组播，才发送 LEAVE/JOIN */
+        val canNotify: Boolean
+            get() = !proxyOwned && endpoint != null && multicast != null
     }
 
     // 持久化 UDP socket —— 避免每次通知都创建/关闭 socket
@@ -95,11 +102,20 @@ object FccHelper {
         val fccValue = findParam(query, "fcc") ?: return FccPlan(false, null, null)
 
         val multicast = parseMulticastFromUrl(url)
-        if (fccValue.isBlank()) return FccPlan(true, null, multicast, "fcc 参数为空")
+        // 组播地址只出现在代理路径里（http(s)://代理/rtp/...）：FCC 与组播都由代理接管
+        val proxyOwned = multicast != null && isHttpScheme(url)
+        if (fccValue.isBlank()) return FccPlan(true, null, multicast, "fcc 参数为空", proxyOwned)
         val endpoint = parseEndpoint(fccValue)
-            ?: return FccPlan(true, null, multicast, "fcc 代理地址非法: $fccValue")
-        if (multicast == null) return FccPlan(true, endpoint, null, "无法解析组播源地址")
-        return FccPlan(true, endpoint, multicast)
+            ?: return FccPlan(true, null, multicast, "fcc 代理地址非法: $fccValue", proxyOwned)
+        if (multicast == null) return FccPlan(true, endpoint, null, "无法解析组播源地址", proxyOwned)
+        return FccPlan(true, endpoint, multicast, null, proxyOwned)
+    }
+
+    /** 播放地址是否经由 HTTP(S) 代理（此时本机不直接接收组播） */
+    private fun isHttpScheme(url: String): Boolean {
+        val s = stripHeaderSuffix(url).trim()
+        return s.startsWith("http://", ignoreCase = true) ||
+            s.startsWith("https://", ignoreCase = true)
     }
 
     /**
@@ -371,16 +387,21 @@ class FccService {
         Log.i(
             TAG,
             "onChannelChange: isFcc=${plan.isFcc} endpoint=${plan.endpoint} " +
-                "multicast=${plan.multicast} error=${plan.error} url=$url"
+                "multicast=${plan.multicast} proxyOwned=${plan.proxyOwned} error=${plan.error} url=$url"
         )
-        if (plan.isFcc && !plan.canNotify) {
+        if (plan.isFcc && !plan.canNotify && !plan.proxyOwned) {
             Log.w(TAG, "FCC 流但无法通知代理(${plan.error})，本次仅清理旧会话: $url")
+        }
+        if (plan.proxyOwned) {
+            // 代理形态：rtp2httpd 会自己向 FCC 服务器请求单播快连再平滑切回组播，
+            // 客户端发出去的通知帮不上忙（本机并不接收那条单播），因此只清旧会话。
+            Log.i(TAG, "FCC 由播放代理接管(proxyOwned)，跳过客户端 LEAVE/JOIN: $url")
         }
 
         val oldFcc = currentFcc
         val oldMulticast = currentMulticast
-        val newFcc = plan.endpoint
-        val newMulticast = plan.multicast
+        val newFcc = if (plan.canNotify) plan.endpoint else null
+        val newMulticast = if (plan.canNotify) plan.multicast else null
 
         val needLeave = oldFcc != null && oldMulticast != null &&
             (oldFcc != newFcc || oldMulticast != newMulticast)
@@ -418,6 +439,13 @@ class FccService {
 
     private suspend fun resendJoinLocked(url: String) {
         val plan = FccHelper.resolve(url)
+        if (plan.proxyOwned) {
+            // 代理形态下 FCC 会话归代理所有，客户端没有可重发的 JOIN
+            currentFcc = null
+            currentMulticast = null
+            Log.i(TAG, "resendJoin: FCC 由播放代理接管(proxyOwned)，跳过: $url")
+            return
+        }
         val endpoint = plan.endpoint
         val multicast = plan.multicast
         if (endpoint == null || multicast == null) {

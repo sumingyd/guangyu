@@ -118,10 +118,14 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
             try {
                 // 运行时更新 hwdec（vo 由 surfaceCreated 设置，此时 surface 还没创建）
                 MPVLib.setPropertyString("hwdec", effectiveHwdec)
-                // 会话内从硬解切到软解时，补开跳过类优化（init 阶段未设置）
+                // 会话内从硬解切到软解时，补开跳过类优化（init 阶段未设置）。
+                // 这两项是 --vd-lavc-* **选项**，不是属性：init 之后只能用
+                // options/<name> 的形式写入，直接写裸名在这版 libmpv 上会报
+                // property not found（与 demuxer-read-timeout 同一类问题）。
                 if (effectiveHwdec == "no") {
-                    MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
-                    MPVLib.setPropertyString("vd-lavc-skipframe", "nonref")
+                    MPVLib.setPropertyString("options/vd-lavc-skiploopfilter", "all")
+                    MPVLib.setPropertyString("options/vd-lavc-skipframe", "nonref")
+                    Log.i(TAG, "initialize: runtime soft-decode skip options applied via options/ prefix")
                 }
                 // 更新日志等级（运行时可切换）
                 updateLogLevel()
@@ -226,19 +230,18 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
         // 不等待缓存填满就开始播放，实现秒开（与 PC 端 cache-pause-initial=no 配合）
         setOptionChecked("demuxer-cache-wait", "no")
 
-        // 网络超时：缩短到 8 秒（原来 30 秒太长）。
-        // 坏流场景：mpv demuxer 线程会卡在网络读取上，30s 超时期间所有
-        // 后续 loadfile 命令都无法执行，导致切到坏频道后所有频道都无法播放。
-        // 8s 足够覆盖合法流的连接时间，同时配合 startTimeoutSwitchSource
-        // 中的 stop 命令（5s 超时换源时先 stop 强制中断 demuxer）双重保障。
-        setOptionChecked("network-timeout", "8")
-        setOptionChecked("source-timeout", "8")
-        setOptionChecked("stream-open-timeout", "8")
-        // demuxer 读取超时：lavf 读取数据超时后触发 end-file 事件，
-        // 防止坏流时 demuxer 无限重试消耗内存。
-        setOptionChecked("demuxer-read-timeout", "5")
-
-        setOptionChecked("stream-lavf-o", "verify=1")
+        // 网络无响应超时：8 秒。坏流时 mpv 的 demuxer 线程会卡在网络读取上，
+        // 期间后续 loadfile 都无法执行，所以还要靠 startTimeoutSwitchSource（5s）
+        // 先 stop 强制中断。
+        // 注意：这版 libmpv 不认识 source-timeout / stream-open-timeout /
+        // demuxer-read-timeout（实测启动日志 rc=-5，选项不存在），不要指望它们；
+        // 真正生效的两项是这里的 network-timeout 和 loadfile 前的
+        // stream-lavf-o=rw_timeout（见 MpvPlaybackController.setupProtocolOptions）。
+        setOptionChecked("network-timeout", MpvProtocolConstants.NETWORK_TIMEOUT_SEC.toString())
+        setOptionChecked(
+            "stream-lavf-o",
+            "verify=1,rw_timeout=${MpvProtocolConstants.NETWORK_RW_TIMEOUT_US}"
+        )
         setOptionChecked("tls-verify", "yes")
 
         // 不再覆盖 vd-lavc-threads：交回 mpv 按 CPU 核数自动决定，
@@ -784,7 +787,7 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
      * 导致 init() 在已终止的句柄上执行 → native 崩溃。
      *
      * 配合 idle=yes，mpv 核心永不自动关闭，forceRecreate 只需重置状态而非重建核心。
-     * demuxer-read-timeout=5 确保卡死的 demuxer 最终会超时释放。
+     * 卡死的 demuxer 由 stop 强制中断（mpv 这版没有 demuxer-read-timeout 可依赖）。
      */
     override fun forceRecreate() = delegate.forceRecreate()
 }

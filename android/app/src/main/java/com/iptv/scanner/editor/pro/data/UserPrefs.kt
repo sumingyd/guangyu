@@ -479,24 +479,6 @@ class UserPrefs private constructor() {
     }
 
     // -----------------------------------------------------------------
-    // TV 开机直接播放
-    // -----------------------------------------------------------------
-
-    fun isDirectPlayOnBoot(): Boolean = prefs.getBoolean(KEY_DIRECT_PLAY_ON_BOOT, DEFAULT_DIRECT_PLAY_ON_BOOT)
-    fun setDirectPlayOnBoot(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_DIRECT_PLAY_ON_BOOT, enabled).apply()
-    }
-
-    // -----------------------------------------------------------------
-    // TV 屏保超时（分钟，0=关闭）
-    // -----------------------------------------------------------------
-
-    fun getScreensaverTimeout(): Int = prefs.getInt(KEY_SCREENSAVER_TIMEOUT, DEFAULT_SCREENSAVER_TIMEOUT)
-    fun setScreensaverTimeout(minutes: Int) {
-        prefs.edit().putInt(KEY_SCREENSAVER_TIMEOUT, minutes.coerceAtLeast(0)).apply()
-    }
-
-    // -----------------------------------------------------------------
     // 竖屏全屏模式
     // -----------------------------------------------------------------
 
@@ -584,12 +566,6 @@ class UserPrefs private constructor() {
         private const val DEFAULT_ADMIN_AUTO_STOP = true
 
         private const val KEY_REMINDERS = "epg_reminders"
-
-        private const val KEY_DIRECT_PLAY_ON_BOOT = "direct_play_on_boot"
-        private const val DEFAULT_DIRECT_PLAY_ON_BOOT = false
-
-        private const val KEY_SCREENSAVER_TIMEOUT = "screensaver_timeout"
-        private const val DEFAULT_SCREENSAVER_TIMEOUT = 5
 
         private const val KEY_PORTRAIT_FULLSCREEN = "portrait_fullscreen"
         private const val DEFAULT_PORTRAIT_FULLSCREEN = false

@@ -610,10 +610,10 @@ internal fun AppViewModel.playChannel(
     uiUpdateJob?.cancel()
     uiUpdateJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
         // FCC 通知必须在 loadfile 之前发送：
-        // rtp2httpd 代理收到 JOIN 后预加入组播组并缓冲流数据，
-        // mpv 连接代理时流已就绪，实现秒开换台。
-        // 如果在 loadfile 之后发送（旧实现），代理不知道新频道，
-        // mpv 连接后代理才开始加入组播，导致数秒延迟。
+        // 直连组播（rtp://、udp://）时 mpv 自己建组播会话，先发 JOIN 让代理预加入组播，
+        // mpv 连接时流已就绪，实现秒开换台。
+        // 代理形态（http(s)://代理/rtp/...?fcc=）不在这里发通知：组播与 FCC 都由代理完成，
+        // 本机再发 LEAVE/JOIN 帮不上忙（见 FccHelper.FccPlan.proxyOwned）。
         fccService.onChannelChange(channel.url)
         com.iptv.scanner.editor.pro.mpv.SwitchPerf.markFccJoined()
         // 先应用频道专属设置（vo/hwdec），避免 loadfile 后再重建 VO 触发二次 loadfile。
@@ -982,9 +982,9 @@ internal fun AppViewModel.savePlaybackSettingsToStore(idx: Int) {
     if (sid.isNotEmpty()) settings["sid"] = sid
     // 音量
     settings["volume"] = mpv.volume.value.toInt().toString()
-    // 画面比例
-    val aspect = mpv.getPropertyString("video-aspect") ?: ""
-    if (aspect.isNotEmpty()) settings["video-aspect"] = aspect
+    // 画面比例：UI 写的是 video-aspect-override（video-aspect 在新版 mpv 已废弃）
+    val aspect = mpv.getPropertyString("video-aspect-override") ?: ""
+    if (aspect.isNotEmpty()) settings["video-aspect-override"] = aspect
     // 翻转
     val flip = mpv.getPropertyString("vf") ?: ""
     if (flip.isNotEmpty()) settings["vf"] = flip
@@ -1030,8 +1030,8 @@ internal fun AppViewModel.loadPlaybackSettingsFromStore(url: String) {
             settings["volume"]?.toIntOrNull()?.let { vol ->
                 mpv.setVolume(vol)
             }
-            settings["video-aspect"]?.let { aspect ->
-                if (aspect.isNotEmpty()) mpv.setPropertyString("video-aspect", aspect)
+            settings["video-aspect-override"]?.let { aspect ->
+                if (aspect.isNotEmpty()) mpv.setPropertyString("video-aspect-override", aspect)
             }
             settings["video-rotate"]?.toIntOrNull()?.let { rotate ->
                 if (rotate != 0) mpv.setPropertyString("video-rotate", rotate.toString())

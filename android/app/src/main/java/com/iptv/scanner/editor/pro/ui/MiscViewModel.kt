@@ -12,6 +12,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import com.iptv.scanner.editor.pro.data.store.formatHttpHeaderFields
+import com.iptv.scanner.editor.pro.data.store.isValidHttpProxy
 import android.util.Log
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
@@ -972,24 +974,10 @@ internal fun AppViewModel.loadNetworkSettings(): Triple<String, String, String> 
 }
 
 /**
- * http-header-fields 是 mpv 的字符串列表：条目之间用真实换行分隔，值内的逗号要转义。
- * 必须一次性整体写入；逐条 `set` 会相互覆盖，只剩最后一条。
+ * 网络增强设置两处下发：设置面板点「应用」当场生效（这里），
+ * 以及每次 loadfile 前重新写入（MpvPlaybackController.applyHttpSettings），
+ * 后者保证重启 App 后仍然生效。
  */
-private fun buildHttpHeaderFields(headers: String): String =
-    headers.lines()
-        .map { it.trim() }
-        .filter { it.contains(":") }
-        .joinToString("\n") { it.replace(",", "\\,") }
-
-/** 代理只接受 http:// / https://；mpv 会忽略 socks5:// 等协议。 */
-private fun isValidHttpProxy(value: String): Boolean {
-    val v = value.trim()
-    if (v.isEmpty()) return true
-    val lower = v.lowercase()
-    if (!lower.startsWith("http://") && !lower.startsWith("https://")) return false
-    return v.substringAfter("://").isNotBlank()
-}
-
 internal fun AppViewModel.applyNetworkSettings(referer: String, proxy: String, headers: String): Boolean {
     if (!isValidHttpProxy(proxy)) {
         showOsd("网络增强", "代理只支持 http:// 或 https://，未应用")
@@ -1001,7 +989,7 @@ internal fun AppViewModel.applyNetworkSettings(referer: String, proxy: String, h
     // HTTP Proxy
     mpv.setPropertyString("http-proxy", proxy.trim())
     // HTTP Headers：整体一次写入（逐条 set 会覆盖，只剩最后一条）
-    mpv.setPropertyString("http-header-fields", buildHttpHeaderFields(headers))
+    mpv.setPropertyString("http-header-fields", formatHttpHeaderFields(headers))
     showOsd("网络增强", "已应用（下次加载生效）")
     return true
 }
