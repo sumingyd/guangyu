@@ -60,6 +60,30 @@ jobs:
             exit 1
           fi
 
+      - name: Check Android version copy matches core/version.py
+        # Android 侧的 version.py 是独立跟踪的副本：两边版本必须一致，
+        # 否则 APK 内 Python 运行时报告的版本会与实际包版本脱节
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          pattern = r"CURRENT_VERSION\s*(?::\s*str\s*)?=\s*[\"']([^\"']+)[\"']"
+          def read_version(path):
+              match = re.search(pattern, pathlib.Path(path).read_text(encoding="utf-8"))
+              if not match:
+                  sys.exit(f"无法从 {path} 解析 CURRENT_VERSION")
+              return match.group(1)
+
+          core_version = read_version("core/version.py")
+          android_version = read_version("android/app/src/main/python/core/version.py")
+          echo_versions = f"core/version.py={core_version} android 副本={android_version}"
+          print(echo_versions)
+          if core_version != android_version:
+              sys.exit(f"::error::Android 侧版本副本未同步：{echo_versions}")
+          PY
+
       - name: Check release notes exist
         # 发布说明是发版的硬性前置条件：缺文件或只有空壳就在这里失败，
         # 避免像 50.0.6.6 那样发出没有正文的 release。
