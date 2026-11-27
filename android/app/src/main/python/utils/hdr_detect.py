@@ -17,12 +17,17 @@ logger = logging.getLogger(__name__)
 _hdr_cache = None
 _hdr_cache_time = 0
 _HDR_CACHE_TTL = 30
+# Windows 按显示器查询的结果：{友好名小写: {'gdi':..., 'enabled': bool, 'supported': bool}}
+_win_hdr_map = None
+_win_hdr_map_time = 0
 
 
 def clear_hdr_cache():
-    global _hdr_cache, _hdr_cache_time
+    global _hdr_cache, _hdr_cache_time, _win_hdr_map, _win_hdr_map_time
     _hdr_cache = None
     _hdr_cache_time = 0
+    _win_hdr_map = None
+    _win_hdr_map_time = 0
 
 
 def is_android_hdr_enabled():
@@ -235,6 +240,136 @@ def _check_windows_hdr_registry():
     return False
 
 
+def _query_windows_display_hdr():
+    """通过 DISPLAYCONFIG 查询每台显示器的 HDR 开关状态。
+
+    返回 {显示器友好名小写: {'gdi': GDI设备名小写, 'enabled': bool, 'supported': bool}}；
+    非 Windows 或调用失败返回 None。
+    """
+    if sys.platform != 'win32':
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _LUID(ctypes.Structure):
+            _fields_ = [('LowPart', ctypes.c_uint32), ('HighPart', ctypes.c_int32)]
+
+        class _PATH_SOURCE(ctypes.Structure):
+            _fields_ = [('adapterId', _LUID), ('id', ctypes.c_uint32),
+                        ('modeInfoIdx', ctypes.c_uint32), ('statusFlags', ctypes.c_uint32)]
+
+        class _RATIONAL(ctypes.Structure):
+            _fields_ = [('Numerator', ctypes.c_uint32), ('Denominator', ctypes.c_uint32)]
+
+        class _PATH_TARGET(ctypes.Structure):
+            _fields_ = [('adapterId', _LUID), ('id', ctypes.c_uint32),
+                        ('modeInfoIdx', ctypes.c_uint32), ('outputTechnology', ctypes.c_uint32),
+                        ('rotation', ctypes.c_uint32), ('scaling', ctypes.c_uint32),
+                        ('refreshRate', _RATIONAL), ('scanLineOrdering', ctypes.c_uint32),
+                        ('targetAvailable', ctypes.c_uint32), ('statusFlags', ctypes.c_uint32)]
+
+        class _PATH_INFO(ctypes.Structure):
+            _fields_ = [('sourceInfo', _PATH_SOURCE), ('targetInfo', _PATH_TARGET),
+                        ('flags', ctypes.c_uint32)]
+
+        class _MODE_UNION(ctypes.Union):
+            _fields_ = [('buffer', ctypes.c_byte * 48)]
+
+        class _MODE_INFO(ctypes.Structure):
+            _fields_ = [('infoType', ctypes.c_uint32), ('id', ctypes.c_uint32),
+                        ('adapterId', _LUID), ('modeInfo', _MODE_UNION)]
+
+        class _DEVICE_INFO_HEADER(ctypes.Structure):
+            _fields_ = [('type', ctypes.c_uint32), ('size', ctypes.c_uint32),
+                        ('adapterId', _LUID), ('id', ctypes.c_uint32)]
+
+        class _SOURCE_DEVICE_NAME(ctypes.Structure):
+            _fields_ = [('header', _DEVICE_INFO_HEADER),
+                        ('viewGdiDeviceName', ctypes.c_wchar * 32)]
+
+        class _TARGET_DEVICE_NAME(ctypes.Structure):
+            _fields_ = [('header', _DEVICE_INFO_HEADER), ('flags', ctypes.c_uint32),
+                        ('outputTechnology', ctypes.c_uint32),
+                        ('edidManufactureId', ctypes.c_uint16),
+                        ('edidProductCodeId', ctypes.c_uint16),
+                        ('connectorInstance', ctypes.c_uint32),
+                        ('monitorFriendlyDeviceName', ctypes.c_wchar * 64),
+                        ('monitorDevicePath', ctypes.c_wchar * 128)]
+
+        class _ADVANCED_COLOR_INFO(ctypes.Structure):
+            _fields_ = [('header', _DEVICE_INFO_HEADER), ('value', ctypes.c_uint32),
+                        ('colorEncoding', ctypes.c_uint32),
+                        ('bitsPerColorChannel', ctypes.c_uint32)]
+
+        user32 = ctypes.WinDLL('user32', use_last_error=True)
+        qdc_only_active_paths = 0x00000002
+        get_source_name = 1
+        get_target_name = 2
+        get_advanced_color_info = 9
+
+        num_paths = wintypes.UINT(0)
+        num_modes = wintypes.UINT(0)
+        if user32.GetDisplayConfigBufferSizes(
+                qdc_only_active_paths, ctypes.byref(num_paths), ctypes.byref(num_modes)) != 0:
+            return None
+        if num_paths.value == 0:
+            return None
+
+        paths = (_PATH_INFO * num_paths.value)()
+        modes = (_MODE_INFO * max(num_modes.value, 1))()
+        count_paths = wintypes.UINT(num_paths.value)
+        count_modes = wintypes.UINT(num_modes.value)
+        if user32.QueryDisplayConfig(
+                qdc_only_active_paths, ctypes.byref(count_paths), paths,
+                ctypes.byref(count_modes), modes, None) != 0:
+            return None
+
+        result = {}
+        for i in range(count_paths.value):
+            path = paths[i]
+            src = path.sourceInfo
+            tgt = path.targetInfo
+
+            src_name = _SOURCE_DEVICE_NAME()
+            src_name.header.type = get_source_name
+            src_name.header.size = ctypes.sizeof(_SOURCE_DEVICE_NAME)
+            src_name.header.adapterId = src.adapterId
+            src_name.header.id = src.id
+
+            tgt_name = _TARGET_DEVICE_NAME()
+            tgt_name.header.type = get_target_name
+            tgt_name.header.size = ctypes.sizeof(_TARGET_DEVICE_NAME)
+            tgt_name.header.adapterId = tgt.adapterId
+            tgt_name.header.id = tgt.id
+
+            color_info = _ADVANCED_COLOR_INFO()
+            color_info.header.type = get_advanced_color_info
+            color_info.header.size = ctypes.sizeof(_ADVANCED_COLOR_INFO)
+            color_info.header.adapterId = tgt.adapterId
+            color_info.header.id = tgt.id
+
+            if user32.DisplayConfigGetDeviceInfo(ctypes.byref(src_name)) != 0:
+                continue
+            if user32.DisplayConfigGetDeviceInfo(ctypes.byref(tgt_name)) != 0:
+                continue
+            color_ok = user32.DisplayConfigGetDeviceInfo(ctypes.byref(color_info)) == 0
+            value = int(color_info.value) if color_ok else 0
+            supported = bool(value & 0x1)
+            enabled = bool((value >> 1) & 0x1)
+
+            friendly = (tgt_name.monitorFriendlyDeviceName or '').strip()
+            gdi = (src_name.viewGdiDeviceName or '').strip()
+            key = (friendly or gdi or f'display{i}').lower()
+            result[key] = {'gdi': gdi.lower(), 'enabled': enabled, 'supported': supported}
+            logger.debug(
+                f"显示器 {friendly or gdi}: HDR支持={supported}, HDR开启={enabled}")
+        return result or None
+    except Exception as e:
+        logger.debug(f"DISPLAYCONFIG HDR检测失败: {e}")
+        return None
+
+
 def _check_windows_hdr_qt():
     """通过 Qt 检测 Windows HDR 状态（作为注册表检测的补充）。
 
@@ -268,23 +403,36 @@ def _check_windows_hdr_qt():
         return None
 
 
-def is_windows_hdr_enabled():
-    global _hdr_cache, _hdr_cache_time
+def is_windows_hdr_enabled(screen_name=None):
+    """检测 Windows HDR 是否开启。
+
+    screen_name 传入播放窗口所在显示器的名称（Qt 的 QScreen.name()，通常是显示器
+    友好名）时，按该显示器的 DISPLAYCONFIG 高级颜色状态判断；不传或匹配失败时
+    回退到旧的注册表检测（任意显示器开启即视为开启）。
+    """
     import time
+    global _win_hdr_map, _win_hdr_map_time
     now = time.monotonic()
-    if _hdr_cache is not None and (now - _hdr_cache_time) < _HDR_CACHE_TTL:
-        return _hdr_cache
+    if _win_hdr_map is None or (now - _win_hdr_map_time) >= _HDR_CACHE_TTL:
+        _win_hdr_map = _query_windows_display_hdr()
+        _win_hdr_map_time = now
 
-    reg_result = _check_windows_hdr_registry()
-    qt_result = _check_windows_hdr_qt()
+    if screen_name and _win_hdr_map:
+        key = str(screen_name).strip().lower()
+        for name, info in _win_hdr_map.items():
+            gdi = str(info.get('gdi') or '').lower()
+            if key == name or key == gdi or key in name or name in key:
+                enabled = bool(info.get('enabled'))
+                logger.info(
+                    f"Windows HDR检测({screen_name}): {'已启用' if enabled else '未启用'}")
+                return enabled
+        logger.debug(f"未匹配到显示器 {screen_name} 的高级颜色信息，回退注册表检测")
 
-    if qt_result is not None:
-        result = reg_result or qt_result
-        logger.info(f"Windows HDR检测: 注册表={reg_result}, Qt={qt_result}, 最终={'已启用' if result else '未启用'}")
-    else:
-        result = reg_result
-        logger.info(f"Windows HDR检测(注册表): {'已启用' if result else '未启用'}")
+    if _win_hdr_map:
+        if any(bool(v.get('enabled')) for v in _win_hdr_map.values()):
+            logger.info("Windows HDR检测(显示器列表): 至少一台显示器已启用HDR")
+            return True
 
-    _hdr_cache = result
-    _hdr_cache_time = now
+    result = _check_windows_hdr_registry()
+    logger.info(f"Windows HDR检测(注册表): {'已启用' if result else '未启用'}")
     return result
