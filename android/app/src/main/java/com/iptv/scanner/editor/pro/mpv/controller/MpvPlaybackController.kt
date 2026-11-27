@@ -483,7 +483,10 @@ class MpvPlaybackController(private val host: MpvControllerHost) {
                 "network-timeout",
                 MpvProtocolConstants.NETWORK_TIMEOUT_SEC.toString()
             )
-            MPVLib.setPropertyString("demuxer", "auto")
+            // demuxer 是纯字符串选项，空串表示恢复默认的自动探测。
+            // 不能写 "auto"：这版 libmpv 只认具体解复用器名，会被判定为不存在，
+            // 导致本地文件报 "Demuxer auto does not exist" 而无法播放。
+            MPVLib.setPropertyString("demuxer", "")
             MPVLib.setPropertyString("demuxer-lavf-format", "")
         } catch (e: Throwable) {
             Log.w(TAG, "resetProtocolOptions failed: ${e.message}")
