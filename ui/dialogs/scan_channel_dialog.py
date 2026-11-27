@@ -163,6 +163,9 @@ class ScanChannelDialog(FloatingDialog):
     """扫描频道窗口类"""
     _bg_color_key = 'window'
     _border_color_key = 'mid'
+    # 扫描整理是独立工作窗口：需要在任务栏/Alt+Tab 里有自己的入口，
+    # 否则被主窗口或其它程序盖住后无法找回（基类默认隐藏任务栏图标）。
+    _allow_taskbar = True
 
     def __init__(self, parent=None):
         # 不把 parent 传给 QDialog：Windows 上 owned window 会被系统强制
@@ -247,6 +250,12 @@ class ScanChannelDialog(FloatingDialog):
         get_theme_manager().unregister_window(self)
         super().done(result)
 
+    def show(self):
+        # 先于原生窗口显示设置任务栏样式，避免首次显示时任务栏按钮不注册；
+        # 显示后 showEvent 还会再落一次（setWindowFlags 重建窗口会丢扩展样式）。
+        self._apply_taskbar_visibility()
+        super().show()
+
     def showEvent(self, event):
         # 基类 FloatingDialog.showEvent 首次显示会调用 adjustSize()，
         # 按内容 sizeHint 重新撑大窗口，覆盖 __init__ 里的 resize 目标尺寸，
@@ -265,6 +274,59 @@ class ScanChannelDialog(FloatingDialog):
             except Exception as e:
                 logger.debug(f"showEvent: {e}")
         super().showEvent(event)
+        # setWindowFlags 会重建原生窗口并丢掉扩展样式，显示后再落一次任务栏入口；
+        # 同时跟随主窗口置顶状态，避免被置顶/最大化的主窗口压在下面。
+        self._apply_taskbar_visibility()
+        self._sync_topmost_from_main()
+        self._install_activation_restore()
+
+    def _sync_topmost_from_main(self):
+        """跟随主窗口置顶状态：主窗口置顶时本窗口也置顶，否则保持普通层级。"""
+        try:
+            main_win = getattr(self, 'application', None)
+            want = bool(
+                main_win is not None
+                and (main_win.windowFlags() & QtCore.Qt.WindowType.WindowStaysOnTopHint)
+            )
+            from ui.floating_dialog import _set_native_topmost
+            if _set_native_topmost(self, want):
+                return
+            flags = self.windowFlags()
+            has = bool(flags & QtCore.Qt.WindowType.WindowStaysOnTopHint)
+            if has == want:
+                return
+            geo = self.geometry()
+            visible = self.isVisible()
+            if want:
+                flags |= QtCore.Qt.WindowType.WindowStaysOnTopHint
+            else:
+                flags &= ~QtCore.Qt.WindowType.WindowStaysOnTopHint
+            self.setWindowFlags(flags)
+            if visible:
+                self.show()
+                self.setGeometry(geo)
+            self._apply_taskbar_visibility()
+        except Exception as e:
+            logger.debug(f"_sync_topmost_from_main: {e}")
+
+    def _install_activation_restore(self):
+        """从其它程序切回本程序时，把扫描窗口带回前台（不抢键盘焦点）。"""
+        if getattr(self, '_activation_restore_installed', False):
+            return
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return
+        app.applicationStateChanged.connect(self._on_app_state_changed)
+        self._activation_restore_installed = True
+
+    def _on_app_state_changed(self, state):
+        try:
+            if state != QtCore.Qt.ApplicationState.ApplicationActive:
+                return
+            if self.isVisible() and not self.isMinimized():
+                self.raise_()
+        except RuntimeError:
+            pass
 
     def mousePressEvent(self, event):
         if event.button() == QtCore.Qt.MouseButton.LeftButton:

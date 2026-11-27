@@ -35,11 +35,76 @@ def _hide_from_taskbar(window):
             WS_EX_TOOLWINDOW = 0x00000080
             WS_EX_APPWINDOW = 0x00040000
             hwnd = int(window.winId())
-            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            user32 = ctypes.windll.user32
+            user32.GetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            user32.SetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_long]
+            style = user32.GetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE)
             style = (style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW
-            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+            user32.SetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE, style)
         except Exception:
             pass
+
+
+def _show_in_taskbar(window):
+    """让窗口重新出现在任务栏与 Alt+Tab 切换器里（清除工具窗口样式）。"""
+    if is_windows():
+        try:
+            import ctypes
+            GWL_EXSTYLE = -20
+            WS_EX_TOOLWINDOW = 0x00000080
+            WS_EX_APPWINDOW = 0x00040000
+            hwnd = int(window.winId())
+            user32 = ctypes.windll.user32
+            user32.GetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            user32.SetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_long]
+            user32.SetWindowPos.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+                ctypes.c_int, ctypes.c_int, ctypes.c_uint,
+            ]
+            style = user32.GetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE)
+            style = (style | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW
+            user32.SetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE, style)
+            # 修改扩展样式后通知 shell 重新评估任务栏按钮
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+            SWP_NOZORDER = 0x0004
+            SWP_NOACTIVATE = 0x0010
+            SWP_FRAMECHANGED = 0x0020
+            user32.SetWindowPos(
+                ctypes.c_void_p(hwnd), None, 0, 0, 0, 0,
+                SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            )
+        except Exception:
+            pass
+
+
+def _set_native_topmost(window, enabled: bool) -> bool:
+    """Windows 原生切换置顶，不重建窗口，避免丢失位置与任务栏样式。
+
+    返回 False 表示当前平台/调用不可用，调用方应回退到 Qt 的窗口 flags。
+    """
+    if not is_windows():
+        return False
+    try:
+        import ctypes
+        hwnd = int(window.winId())
+        user32 = ctypes.windll.user32
+        user32.SetWindowPos.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+            ctypes.c_int, ctypes.c_int, ctypes.c_uint,
+        ]
+        user32.SetWindowPos.restype = ctypes.c_int
+        SWP_NOSIZE = 0x0001
+        SWP_NOMOVE = 0x0002
+        SWP_NOACTIVATE = 0x0010
+        insert_after = ctypes.c_void_p(-1 if enabled else -2)
+        ok = user32.SetWindowPos(
+            ctypes.c_void_p(hwnd), insert_after, 0, 0, 0, 0,
+            SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE,
+        )
+        return bool(ok)
+    except Exception:
+        return False
 
 
 def _parse_hex_color(hex_str, default=(0, 0, 0)):
@@ -810,11 +875,18 @@ class FloatingDialog(_GlassSurfaceMixin, QDialog):
             return
         if not is_windows():
             return
-        # Windows: 隐藏任务栏图标（与 FloatingDockWidget.show 行为一致）
-        # 通过设置 WS_EX_TOOLWINDOW 让窗口不出现在任务栏
-        # 这对所有 FloatingDialog 子类生效，无论 parent 是否为 None、无论 exec 还是 show
+        # Windows: 默认隐藏任务栏图标（与 FloatingDockWidget.show 行为一致）；
+        # 需要独立任务栏入口的窗口（如扫描整理）通过 _allow_taskbar 显式放开。
+        self._apply_taskbar_visibility()
+
+    def _apply_taskbar_visibility(self):
+        if not is_windows():
+            return
         try:
-            _hide_from_taskbar(self)
+            if getattr(self, '_allow_taskbar', False):
+                _show_in_taskbar(self)
+            else:
+                _hide_from_taskbar(self)
         except Exception:
             pass
 
