@@ -352,7 +352,9 @@ fun MainPlayerScreen(viewModel: AppViewModel) {
 
     // 文件加载完成时触发续播位置恢复（与 PC 端 _on_file_loaded 对齐）
     // 同时应用 HDR 配置（与 PC 端 _apply_hdr_on_file_loaded 对齐）
-    LaunchedEffect(fileLoaded) {
+    // fileLoaded 在换台时可能被状态合并成“一直是 true”，因此额外用 fileLoadSeq 保证每次换台都重新应用
+    val fileLoadSeq by viewModel.fileLoadSeq.collectAsState()
+    LaunchedEffect(fileLoaded, fileLoadSeq) {
         if (fileLoaded) {
             val url = viewModel.getCurrentPlaybackUrl()
             if (url.isNotEmpty()) {

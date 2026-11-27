@@ -217,10 +217,9 @@ internal fun AppViewModel.setHdrMode(mode: HdrMode) {
         applyHdrOnFileLoaded()
     }
     val modeName = when (mode) {
-        HdrMode.DISABLE -> "禁用 HDR（强制 SDR）"
-        HdrMode.AUTO -> "自动（按设备能力选择直通或色调映射）"
-        HdrMode.TONEMAP -> "HDR→SDR 色调映射"
-        HdrMode.PASSTHROUGH -> "HDR 直通（系统自动切换 HDR 显示）"
+        HdrMode.DISABLE -> "强制 SDR（不压缩高光）"
+        HdrMode.TONEMAP -> "色调映射到 SDR"
+        HdrMode.PASSTHROUGH -> "直通（需系统 HDR 开启）"
     }
     // 硬件直写 Surface 的 vo 没有色调映射属性，applyHdrOnFileLoaded 会直接跳过，
     // 这里不能再弹“已切换”的提示，否则用户以为生效了
@@ -230,7 +229,9 @@ internal fun AppViewModel.setHdrMode(mode: HdrMode) {
         false
     }
     if (voUnsupported) {
-        showOsd("HDR 模式：当前渲染方式不支持，仅 gpu / gpu-next 生效")
+        showOsd("HDR 模式：硬解直写表面不支持，请把视频输出切到 GPU")
+    } else if (mode == HdrMode.PASSTHROUGH && !isDeviceHdrSupported()) {
+        showOsd("设备不支持 HDR，直通将回退为色调映射")
     } else {
         showOsd("HDR 模式：$modeName")
     }
@@ -249,10 +250,34 @@ internal fun AppViewModel.setColorCompatMode(enabled: Boolean) {
     Log.i(AppViewModel.TAG, "色彩兼容模式切换：$enabled")
 }
 
-internal fun AppViewModel.applyHdrOnFileLoaded() {
+/** 片源参数复查节奏（与 PC 端 MpvHdr._RECHECK_DELAYS_MS 保持一致） */
+private val HDR_RECHECK_DELAYS_MS = longArrayOf(700, 1600, 3200)
+
+/**
+ * 参数未就绪时安排下一次复查；返回 false 表示次数已用尽，调用方按非 HDR 处理。
+ */
+internal fun AppViewModel.scheduleHdrRecheck(): Boolean {
+    if (hdrRecheckAttempts >= HDR_RECHECK_DELAYS_MS.size) return false
+    val waitMs = HDR_RECHECK_DELAYS_MS[hdrRecheckAttempts]
+    hdrRecheckAttempts++
+    hdrRecheckJob?.cancel()
+    hdrRecheckJob = viewModelScope.launch {
+        delay(waitMs)
+        applyHdrOnFileLoaded(recheck = true)
+    }
+    Log.i(AppViewModel.TAG, "HDR 检测：片源参数未就绪，${waitMs}ms 后复查")
+    return true
+}
+
+internal fun AppViewModel.applyHdrOnFileLoaded(recheck: Boolean = false) {
     val mode = _hdrMode.value
     val mpv = this.mpv
     if (!mpv.fileLoaded.value) return
+    // 新一次加载（或用户切换模式）重新开始计数，避免上一次的复查预算残留
+    if (!recheck) {
+        hdrRecheckJob?.cancel()
+        hdrRecheckAttempts = 0
+    }
 
     val currentVo = try { mpv.getPropertyString("vo") ?: "" } catch (_: Throwable) { "" }
     if (currentVo == "mediacodec_embed") {
@@ -273,6 +298,12 @@ internal fun AppViewModel.applyHdrOnFileLoaded() {
         val prim = (mpv.getPropertyString("video-params/primaries") ?: "").lowercase()
         val cm = (mpv.getPropertyString("video-params/colormatrix") ?: "").lowercase()
         val peak = mpv.getPropertyDouble("video-params/sig-peak") ?: 0.0
+
+        // FILE_LOADED 时 video-params 可能尚未就绪（gamma/primaries 都为空）。
+        // 空值直接判“非 HDR”会把 HDR 片源按 SDR 输出，与菜单选中的模式不一致；
+        // 按 PC 端同样的节奏延时复查，次数用尽仍为空才按非 HDR 处理。
+        if (gamma.isEmpty() && prim.isEmpty() && scheduleHdrRecheck()) return
+        hdrRecheckAttempts = HDR_RECHECK_DELAYS_MS.size
 
         val isPq = gamma.contains("pq") || gamma.contains("smpte2084")
         val isHlg = gamma.contains("hlg") || gamma.contains("arib-std-b67")
@@ -302,30 +333,27 @@ internal fun AppViewModel.applyHdrOnFileLoaded() {
             return
         }
 
-        // hdr10-opt 设置
-        safeSetProperty(mpv, "hdr10-opt", if (isPq) "yes" else "no")
-
-        // disable 模式：HDR 视频仍需 tonemap 到 SDR（保持 bt.2020 色域）
-        if (mode == HdrMode.DISABLE) {
-            applyTonemapConfig(mpv, isPq, isHlg)
-            Log.i(AppViewModel.TAG, "HDR 配置：disable → HDR 视频 tonemap 到 SDR (bt.2020)")
-            return
-        }
-
+        // disable 模式：强制 SDR 输出（与 tonemap 的区别是不压缩高光）
         when (mode) {
-            HdrMode.TONEMAP -> applyTonemapConfig(mpv, isPq, isHlg)
-            HdrMode.PASSTHROUGH -> applyPassthroughConfig(mpv, isPq)
-            HdrMode.AUTO -> {
-                // AUTO 模式：检测设备 HDR 能力
+            HdrMode.DISABLE -> {
+                applyDisableConfig(mpv)
+                Log.i(AppViewModel.TAG, "HDR 配置：disable → 强制 SDR 输出 (bt.709, clip)")
+            }
+            HdrMode.TONEMAP -> {
+                applyTonemapConfig(mpv, isPq, isHlg)
+                Log.i(AppViewModel.TAG, "HDR 配置：tonemap → HDR 色调映射到 SDR (bt.709)")
+            }
+            HdrMode.PASSTHROUGH -> {
                 if (isDeviceHdrSupported()) {
                     applyPassthroughConfig(mpv, isPq)
-                    Log.i(AppViewModel.TAG, "HDR 配置：AUTO → 设备支持 HDR，使用直通")
+                    Log.i(AppViewModel.TAG, "HDR 配置：passthrough → 直通")
                 } else {
                     applyTonemapConfig(mpv, isPq, isHlg)
-                    Log.i(AppViewModel.TAG, "HDR 配置：AUTO → 设备不支持 HDR，使用色调映射")
+                    // 与 PC 端一致：回退必须让用户看得见，否则选项与实际输出不一致
+                    showOsd("设备不支持 HDR 或系统已关闭 HDR，直通已回退为色调映射")
+                    Log.i(AppViewModel.TAG, "HDR 配置：passthrough → 设备不支持 HDR，回退色调映射")
                 }
             }
-            else -> resetHdrParams(mpv)
         }
         Log.i(AppViewModel.TAG, "HDR 配置：mode=$mode 应用完成")
     } catch (e: Exception) {
@@ -374,9 +402,10 @@ internal fun AppViewModel.isDeviceHdrSupported(): Boolean {
             ?.defaultDisplay
         if (display == null) return false
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-            val caps = display.hdrCapabilities
-            val types = caps?.supportedHdrTypes ?: IntArray(0)
+            val caps = display.hdrCapabilities ?: return false
+            val types = caps.supportedHdrTypes ?: IntArray(0)
             // HDR_TYPE_DOLBY_VISION=1, HDR_TYPE_HDR10=2, HDR_TYPE_HLG=3, HDR_TYPE_HDR10_PLUS=4
+            // 用户把 HDR 全关掉的清单（userDisabledHdrTypes）不是公开 API，这里只能按屏幕能力判断
             types.isNotEmpty()
         } else {
             false
@@ -396,11 +425,9 @@ internal fun AppViewModel.safeSetProperty(mpv: Player, name: String, value: Stri
 }
 
 internal fun AppViewModel.resetHdrParams(mpv: Player) {
-    safeSetProperty(mpv, "tone-mapping", "")
-    safeSetProperty(mpv, "tone-mapping-mode", "")
-    safeSetProperty(mpv, "tone-mapping-desat", "")
-    safeSetProperty(mpv, "hdr-compute-peak", "")
-    safeSetProperty(mpv, "hdr10-opt", "no")
+    // 全部使用合法值（空字符串会让 mpv 报格式错误，实际没有重置）
+    safeSetProperty(mpv, "tone-mapping", "auto")
+    safeSetProperty(mpv, "hdr-compute-peak", "auto")
     safeSetProperty(mpv, "target-prim", "bt.709")
     safeSetProperty(mpv, "target-trc", "bt.1886")
     // 一并重置 target-peak，避免从直通（10000/1000）切回 SDR 后残留高亮度基准
@@ -418,10 +445,19 @@ internal fun AppViewModel.resetHdrParams(mpv: Player) {
  */
 internal fun AppViewModel.applyColorCompatConfig(mpv: Player) {
     safeSetProperty(mpv, "tone-mapping", "clip")
-    safeSetProperty(mpv, "tone-mapping-mode", "auto")
     safeSetProperty(mpv, "hdr-compute-peak", "no")
-    safeSetProperty(mpv, "hdr10-opt", "no")
     safeSetProperty(mpv, "video-output-levels", "auto")
+    safeSetProperty(mpv, "target-prim", "bt.709")
+    safeSetProperty(mpv, "target-trc", "bt.1886")
+    safeSetProperty(mpv, "target-peak", "100")
+    safeSetProperty(mpv, "target-colorspace-hint", "no")
+    safeSetProperty(mpv, "gamut-mapping-mode", "clip")
+}
+
+/** 强制 SDR：关闭 colorspace hint，bt.709/SDR 输出，clip 曲线不压缩高光。 */
+internal fun AppViewModel.applyDisableConfig(mpv: Player) {
+    safeSetProperty(mpv, "tone-mapping", "clip")
+    safeSetProperty(mpv, "hdr-compute-peak", "no")
     safeSetProperty(mpv, "target-prim", "bt.709")
     safeSetProperty(mpv, "target-trc", "bt.1886")
     safeSetProperty(mpv, "target-peak", "100")
@@ -432,11 +468,8 @@ internal fun AppViewModel.applyColorCompatConfig(mpv: Player) {
 internal fun AppViewModel.applyWcgConfig(mpv: Player) {
     // WCG 视频（宽色域 SDR）：保持 bt.2020 色域，SDR 亮度（与 PC 端 _apply_wcg_config 对齐）
     // 显式设置所有参数（不用空字符串重置，避免残留 HDR 参数）
-    safeSetProperty(mpv, "tone-mapping", "auto")  // 与 SDR/HLG 统一, 避免 clip 触发不同渲染路径
-    safeSetProperty(mpv, "tone-mapping-mode", "auto")
-    safeSetProperty(mpv, "tone-mapping-desat", "0")
+    safeSetProperty(mpv, "tone-mapping", "auto")
     safeSetProperty(mpv, "hdr-compute-peak", "no")
-    safeSetProperty(mpv, "hdr10-opt", "no")
     safeSetProperty(mpv, "target-prim", "bt.2020")
     safeSetProperty(mpv, "target-trc", "bt.1886")
     safeSetProperty(mpv, "target-colorspace-hint", "no")
@@ -445,13 +478,11 @@ internal fun AppViewModel.applyWcgConfig(mpv: Player) {
 }
 
 internal fun AppViewModel.applyTonemapConfig(mpv: Player, isPq: Boolean, isHlg: Boolean = false) {
-    // HDR→SDR 色调映射（与 PC 端 _apply_tonemap_config 统一）
-    // target-prim=bt.2020 保留广色域（WCG），在支持广色域的设备上显示更丰富色彩
+    // HDR→SDR 色调映射（与 PC 端 _apply_tonemap_config 对齐）
+    // target-prim=bt.709：目标是真正的 SDR，广色域内容在此做色域压缩
     // target-trc=bt.1886 SDR 伽马，确保 SDR 显示正确
-    // hdr10-opt=yes(仅PQ) 传递 HDR10+ 动态元数据
     // gamut-mapping-mode=perceptual 感知映射，减少色域裁剪损失
-    // HLG 视频去饱和度降为 0，避免整体发灰
-    val desat = if (isHlg) "0" else "0.5"
+    // 注意：hint 必须关闭，否则 target-* 会被系统目标覆盖，等于没做色调映射
     if (isHlg) {
         // HLG tonemap: auto (gpu-next 选 spline, 感知均匀, 保留中间调亮度)
         // hdr-compute-peak=yes: HLG 无嵌入 maxCLL, 需动态计算场景峰值
@@ -462,10 +493,7 @@ internal fun AppViewModel.applyTonemapConfig(mpv: Player, isPq: Boolean, isHlg: 
         safeSetProperty(mpv, "tone-mapping", "auto")
         safeSetProperty(mpv, "hdr-compute-peak", "no")
     }
-    safeSetProperty(mpv, "tone-mapping-mode", "auto")
-    safeSetProperty(mpv, "tone-mapping-desat", desat)
-    safeSetProperty(mpv, "hdr10-opt", if (isPq) "yes" else "no")
-    safeSetProperty(mpv, "target-prim", "bt.2020")
+    safeSetProperty(mpv, "target-prim", "bt.709")
     safeSetProperty(mpv, "target-trc", "bt.1886")
     // 显式写 SDR 峰值基准，避免从直通残留 10000/1000 导致色调映射整体变暗
     safeSetProperty(mpv, "target-peak", "100")
@@ -475,20 +503,16 @@ internal fun AppViewModel.applyTonemapConfig(mpv: Player, isPq: Boolean, isHlg: 
 
 internal fun AppViewModel.applyPassthroughConfig(mpv: Player, isPq: Boolean) {
     safeSetProperty(mpv, "tone-mapping", if (isPq) "clip" else "auto")
-    safeSetProperty(mpv, "tone-mapping-mode", "")
-    safeSetProperty(mpv, "tone-mapping-desat", "0")
     safeSetProperty(mpv, "hdr-compute-peak", "no")  // PQ 用 maxCLL, HLG 用 sig_peak
-    safeSetProperty(mpv, "hdr10-opt", if (isPq) "yes" else "no")
-    // 清空 target 参数，让 mpv 直通视频原生色彩空间（PQ/HLG 不转换）
-    safeSetProperty(mpv, "target-prim", "")
-    safeSetProperty(mpv, "target-trc", "")
-    // 显式设置峰值基准（与 PC 端 _apply_passthrough_config 对齐）：
-    // PQ 按 10000nit 母版峰值直通，HLG 按 1000nit 参考峰值，避免沿用 tonemap 残留的 100
-    safeSetProperty(mpv, "target-peak", if (isPq) "10000" else "1000")
-    // 关键：启用 target-colorspace-hint 让 Android 系统自动切换 HDR 显示模式
-    // mpv 会通过 SurfaceView 传递 HDR 元数据给系统，系统自动切换到 HDR 显示
+    // 按片源元数据输出：PQ 用 source 模式透传，HLG 由 mpv 转成 PQ（Android 只有 PQ 容器）
+    safeSetProperty(mpv, "target-prim", "bt.2020")
+    safeSetProperty(mpv, "target-trc", "pq")
     safeSetProperty(mpv, "target-colorspace-hint", "yes")
-    safeSetProperty(mpv, "gamut-mapping-mode", "clip")
+    safeSetProperty(mpv, "target-colorspace-hint-mode", if (isPq) "source" else "target")
+    // 显式设置峰值基准（与 PC 端 _apply_passthrough_config 对齐）：
+    // PQ 按 10000nit 母版峰值直通，HLG 按 1000nit 参考峰值
+    safeSetProperty(mpv, "target-peak", if (isPq) "10000" else "1000")
+    safeSetProperty(mpv, "gamut-mapping-mode", "relative")
 }
 
 internal fun AppViewModel.isSafAvailable(): Boolean {

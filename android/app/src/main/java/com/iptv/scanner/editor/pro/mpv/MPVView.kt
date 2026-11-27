@@ -191,10 +191,13 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
         // 电视盒子如 Homatics、部分 Mali/Adreno）不支持 16-bit 浮点帧缓冲，
         // EGL 初始化成功但 FBO 创建失败 → 黑屏（无画面）。
         // 默认用 rgba8（8-bit，全设备兼容），仅在 HDR 模式非 disable 时使用 rgba16hf。
-        val hdrMode = UserPrefs.getInstance().getHdrMode()
+        val hdrMode = UserPrefs.getInstance().getHdrMode().lowercase().let {
+            if (it == "auto" || it == "scrgb") "passthrough" else it
+        }
+        val isPassthrough = hdrMode == "passthrough"
         // 色彩兼容模式：强制 8-bit FBO，避免 16F 帧缓冲在个别电视盒子上过曝/偏色
         val colorCompat = try { UserPrefs.getInstance().isColorCompatMode() } catch (_: Throwable) { false }
-        val fboFormat = if (hdrMode == "disable" || colorCompat) "rgba8" else "rgba16hf"
+        val fboFormat = if (isPassthrough && !colorCompat) "rgba16hf" else "rgba8"
         setOptionChecked("fbo-format", fboFormat)
         // 颜色管线保守默认（init 阶段只设安全值，SDR/HDR 分档在文件加载后按内容应用）：
         // - video-output-levels=auto：交给 VO 决定，不强行 limited/full
@@ -207,9 +210,10 @@ override var onSurfaceAboutToDestroy: (() -> Unit)? = null
         // - dither-depth：限制抖动深度为 8-bit，避免 4K 时 GPU 过载
         // - gpu-texture-resolution：限制 GPU 纹理分辨率（0=自动, 1=最高, 2=高, 3=中）
         setOptionChecked("dither-depth", "8")
-        // target-colorspace-hint：仅 HDR 模式启用。
+        // target-colorspace-hint：仅直通模式启用，由系统切换 HDR 显示；
+        // 色调映射/强制 SDR 必须关闭，否则 target-* 会被系统目标覆盖，无法真正输出 SDR。
         // 部分设备显示控制器无法处理 colorspace 切换信号，会导致黑屏。
-        if (hdrMode != "disable" && !colorCompat) {
+        if (isPassthrough && !colorCompat) {
             setOptionChecked("target-colorspace-hint", "yes")
         }
 

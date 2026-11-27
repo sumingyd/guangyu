@@ -147,7 +147,7 @@ sealed class SearchResult {
     ) : SearchResult()
 }
 
-enum class HdrMode { DISABLE, AUTO, TONEMAP, PASSTHROUGH }
+enum class HdrMode { DISABLE, TONEMAP, PASSTHROUGH }
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -1481,15 +1481,31 @@ internal var currentIsLocalFile: Boolean
 
     // HDR 输出模式（与 PC 端 hdr_output_mode 对齐）
     //
-    // 模式：auto / tonemap / passthrough / disable
+    // 模式：disable / tonemap / passthrough
     // Android 端不改变 vo（保持用户选择），只在文件加载时应用 HDR 配置。
 
-    /** HDR 输出模式 */
-
+    /** HDR 输出模式（历史 auto/scrgb 与 passthrough 等价，读取时归一） */
     internal val _hdrMode = MutableStateFlow(
-        runCatching { HdrMode.valueOf(userPrefs.getHdrMode().uppercase()) }.getOrDefault(HdrMode.DISABLE)
+        when (userPrefs.getHdrMode().lowercase()) {
+            "auto", "scrgb", "passthrough" -> HdrMode.PASSTHROUGH
+            "tonemap" -> HdrMode.TONEMAP
+            else -> HdrMode.DISABLE
+        }
     )
     val hdrMode: StateFlow<HdrMode> = _hdrMode.asStateFlow()
+
+    /**
+     * 片源参数延时复查（与 PC 端 _RECHECK_DELAYS_MS 对齐）。
+     *
+     * FILE_LOADED 时 video-params/gamma 可能还没就绪，空值直接判“非 HDR”会把
+     * HDR 片源当成 SDR 处理，菜单显示与实际输出不一致。这里按固定节奏重试，
+     * 次数用尽仍无参数才按非 HDR 处理。
+     */
+    internal var hdrRecheckJob: Job? = null
+    internal var hdrRecheckAttempts = 0
+
+    /** 每次 FILE_LOADED 递增：换台时 fileLoaded 可能不变，HDR 配置需要按它重新应用 */
+    internal val fileLoadSeq: StateFlow<Int> get() = mpvSingleton.fileLoadSeq
 
     /** 色彩兼容模式（默认关闭；开启后强制保守 SDR 参数，仅 gpu/gpu-next 生效） */
     internal val _colorCompatMode = MutableStateFlow(

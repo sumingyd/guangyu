@@ -85,6 +85,16 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     private val _fileLoaded = MutableStateFlow(false)
     override val fileLoaded: StateFlow<Boolean> = _fileLoaded.asStateFlow()
 
+    /**
+     * 每次 FILE_LOADED 自增。
+     *
+     * 换台走 loadfile 替换，fileLoaded 的 false→true 可能被 StateFlow 合并成一次
+     * 不产生变化的 true，只靠它做 key 的副作用会漏掉后续每一次换台；
+     * HDR 配置等“每个文件都要重新判定”的逻辑必须挂在这个序号上。
+     */
+    private val _fileLoadSeq = MutableStateFlow(0)
+    val fileLoadSeq: StateFlow<Int> = _fileLoadSeq.asStateFlow()
+
     /** mpv 实际生效的 hwdec（hwdec-current），用于设置页展示，避免用户不知道自己在软解 */
     private val _actualHwdec = MutableStateFlow("")
     val actualHwdec: StateFlow<String> = _actualHwdec.asStateFlow()
@@ -1553,6 +1563,7 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
         when (eventId) {
             MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> {
                 _fileLoaded.value = true
+                _fileLoadSeq.value = _fileLoadSeq.value + 1
                 consecutiveLoadFailures = 0
                 userStopped = false
                 val loadedUrl = try { MPVLib.getPropertyString("path") ?: "" } catch (_: Throwable) { "" }

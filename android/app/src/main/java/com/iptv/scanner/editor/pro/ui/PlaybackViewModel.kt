@@ -941,9 +941,15 @@ internal fun AppViewModel.applyChannelSettingsIfNeeded(idx: Int) {
     // 2. 应用 HDR 模式（只更新状态，由 applyHdrOnFileLoaded 在文件加载后应用）
     settings.hdrMode?.let { modeName ->
         try {
-            val mode = HdrMode.valueOf(modeName.uppercase())
+            // 历史值 auto/scrgb 与 passthrough 等价
+            val normalized = when (modeName.lowercase()) {
+                "auto", "scrgb", "passthrough" -> "passthrough"
+                "tonemap" -> "tonemap"
+                else -> "disable"
+            }
+            val mode = HdrMode.valueOf(normalized.uppercase())
             if (_hdrMode.value != mode) {
-                userPrefs.setHdrMode(modeName.lowercase())
+                userPrefs.setHdrMode(normalized)
                 _hdrMode.value = mode
             }
         } catch (e: Exception) {
