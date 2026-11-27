@@ -1291,6 +1291,24 @@ def get_scan_results_json():
         return _err(str(e))
 
 
+def get_dv_profile(url):
+    """返回扫描阶段为该地址登记的杜比视界 profile；没有登记返回 0。
+
+    Android 的播放器是 Kotlin 侧的 libmpv，读不到杜比 profile，也没有 ffprobe；
+    扫描阶段若由 Python 验证器读出 profile 会登记在 utils.hdr_detect 里，
+    这里给 Kotlin 一个稳定入口，拿不到时返回 0 由播放侧按未知处理。
+    """
+    try:
+        if not url:
+            return 0
+        from utils.hdr_detect import get_dv_profile as _get_profile
+        profile = _get_profile(url)
+        return int(profile) if profile is not None else 0
+    except Exception as e:
+        _ab_logger.debug(f'get_dv_profile failed: {e}')
+        return 0
+
+
 def start_validate(timeout=10, threads=4, engine='auto'):
     """开始验证所有频道的 URL 可达性（异步）。
 

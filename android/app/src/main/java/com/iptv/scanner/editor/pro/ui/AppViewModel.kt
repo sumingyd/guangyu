@@ -1507,6 +1507,12 @@ internal var currentIsLocalFile: Boolean
     /** 每次 FILE_LOADED 递增：换台时 fileLoaded 可能不变，HDR 配置需要按它重新应用 */
     internal val fileLoadSeq: StateFlow<Int> get() = mpvSingleton.fileLoadSeq
 
+    /** 开发者自检入口：强制杜比面板能力 / 片源 profile，用来验证三态各分支 */
+    internal var dvPanelOverride: String? = null
+    internal var dvProfileOverride: Int? = null
+    /** 最近一次杜比视界判定：探测原始值 + 实际路径，供诊断面板展示 */
+    internal var lastDvDecision: String = ""
+
     /** 色彩兼容模式（默认关闭；开启后强制保守 SDR 参数，仅 gpu/gpu-next 生效） */
     internal val _colorCompatMode = MutableStateFlow(
         runCatching { userPrefs.isColorCompatMode() }.getOrDefault(false)

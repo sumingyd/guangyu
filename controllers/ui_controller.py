@@ -194,6 +194,13 @@ class UIController:
         if vline:
             lines.append(sep.join(vline))
 
+        # 杜比视界诊断：直接展示探测原始值（面板/转换能力）与最终走的路径，
+        # 其他用户反馈偏色/黑屏时能判断是探测错还是转换错。
+        if hdr_type == 'DV':
+            dv_decision = getattr(self.window.player_controller, '_last_dv_decision', '')
+            if dv_decision:
+                lines.append(f'{tr("osd_dolby", "Dolby")}: {dv_decision}')
+
         pix_line = []
         pix_fmt = info.get('pixel_format', '') or ''
         if pix_fmt:

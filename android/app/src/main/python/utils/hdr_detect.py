@@ -1,4 +1,8 @@
-from PySide6.QtGui import QGuiApplication, QWindow
+try:
+    from PySide6.QtGui import QGuiApplication, QWindow
+except Exception:  # 安卓（Chaquopy）没有 PySide6，HDR 探测走 pyjnius 分支
+    QGuiApplication = None
+    QWindow = None
 import subprocess
 import sys
 import logging
@@ -436,3 +440,125 @@ def is_windows_hdr_enabled(screen_name=None):
     result = _check_windows_hdr_registry()
     logger.info(f"Windows HDR检测(注册表): {'已启用' if result else '未启用'}")
     return result
+
+
+# ==================== 杜比视界能力（三态） ====================
+#
+# 能力判断必须按设备真实探测，不能按平台/品牌写死：别的用户可能是显示器支持杜比、
+# 电视不支持。这里用三态而不是布尔，“不知道”不能当成“支持”，也不能当成“不支持”
+# 后就放心输出 DV——两者都走同一条安全路径（按片源基础层输出）。
+
+DV_STATE_SUPPORTED = 'supported'
+DV_STATE_UNSUPPORTED = 'unsupported'
+DV_STATE_UNKNOWN = 'unknown'
+
+_DV_STATES = (DV_STATE_SUPPORTED, DV_STATE_UNSUPPORTED, DV_STATE_UNKNOWN)
+
+
+def get_dolby_vision_output_capability(screen_name=None) -> str:
+    """屏幕链路能否把杜比视界原样送出去（面板 + 输出通路）。
+
+    Windows 的 DISPLAYCONFIG / DXGI 没有杜比标志位，应用也没有提交 DV 元数据的
+    接口，所以真实探测结果只能是 unknown。unknown 与 unsupported 走同一条安全
+    路径（按 HDR10/HLG 基础层输出），区别只在诊断面板的措辞。
+
+    开发者自检：环境变量 GUANGYU_DV_PANEL=supported|unsupported|unknown
+    可强制三态，用来验证各分支行为。
+    """
+    override = (os.environ.get('GUANGYU_DV_PANEL') or '').strip().lower()
+    if override in _DV_STATES:
+        logger.info(f"杜比视界面板能力(开发者覆盖): {override}")
+        return override
+    logger.info(f"杜比视界面板能力({screen_name or '当前屏'}): unknown（系统未提供杜比能力接口）")
+    return DV_STATE_UNKNOWN
+
+
+def get_renderer_dv_convert_capability(vo: str) -> str:
+    """渲染器能否把杜比视界正确转换成 PQ/SDR（与面板能力无关）。
+
+    gpu-next / libmpv 走 libplacebo，具备 DOVI 解析与 ICtCp 转换能力；
+    老的 gpu / direct3d 管线没有可靠支持，按 unknown 处理（不尝试猜测）。
+    """
+    v = (vo or '').strip().lower()
+    if v in ('gpu-next', 'libmpv'):
+        return DV_STATE_SUPPORTED
+    return DV_STATE_UNKNOWN
+
+
+# ==================== 杜比视界 profile 传递 ====================
+#
+# mpv 不暴露 DV profile，直写路径连 DV 标记都读不到，所以 profile 只能在
+# ffprobe 扫描阶段解析，再按播放地址带到播放会话。本地文件没有扫描结果时，
+# 播放前补一次带缓存的探测（只探测真实存在的本地路径）。
+
+_dv_profile_cache = {}
+_DV_PROBE_TIMEOUT = 4
+
+
+def register_dv_profile(url: str, profile) -> None:
+    """扫描阶段登记某个地址的杜比 profile（None 表示探测过但没有）。"""
+    if not url:
+        return
+    try:
+        _dv_profile_cache[str(url)] = int(profile) if profile is not None else None
+    except (TypeError, ValueError):
+        _dv_profile_cache[str(url)] = None
+
+
+def get_dv_profile(url: str):
+    """取扫描阶段登记的 profile；未登记返回 None（未知，按基础层安全处理）。"""
+    if not url:
+        return None
+    return _dv_profile_cache.get(str(url))
+
+
+def extract_dv_info_from_stream(video_stream: dict):
+    """从 ffprobe 视频流信息里解析 (dv_profile, bl_signal_compatibility_id)。"""
+    try:
+        for sd in (video_stream.get('side_data_list') or []):
+            if sd.get('dv_profile') is not None:
+                profile = int(sd.get('dv_profile'))
+                bl = sd.get('dv_bl_signal_compatibility_id')
+                return profile, (int(bl) if bl is not None else None)
+    except (TypeError, ValueError):
+        pass
+    return None, None
+
+
+def probe_dv_profile(path: str):
+    """本地文件兜底探测杜比 profile（结果按路径缓存，含“不是杜比”）。
+
+    只对真实存在的本地路径执行，网络地址直接返回 None，避免播放时卡顿。
+    """
+    if not path:
+        return None
+    key = str(path)
+    if key in _dv_profile_cache:
+        return _dv_profile_cache[key]
+    profile = None
+    try:
+        if os.path.exists(key):
+            from utils.platform_utils import get_ffprobe_path
+            exe = get_ffprobe_path()
+            if exe:
+                import json
+                kwargs = {}
+                try:
+                    from utils.platform_utils import get_subprocess_creation_flags
+                    kwargs['creationflags'] = get_subprocess_creation_flags()
+                except Exception:
+                    pass
+                proc = subprocess.run(
+                    [exe, '-v', 'error', '-select_streams', 'v:0',
+                     '-show_streams', '-of', 'json', key],
+                    capture_output=True, timeout=_DV_PROBE_TIMEOUT, **kwargs)
+                data = json.loads((proc.stdout or b'').decode('utf-8', 'replace') or '{}')
+                streams = data.get('streams') or []
+                if streams:
+                    profile, _bl = extract_dv_info_from_stream(streams[0])
+    except Exception as _e:
+        logger.debug(f"杜比 profile 探测失败: {_e}")
+    _dv_profile_cache[key] = profile
+    return profile
+
+

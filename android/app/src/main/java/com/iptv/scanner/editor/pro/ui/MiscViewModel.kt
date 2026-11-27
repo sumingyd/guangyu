@@ -554,7 +554,9 @@ internal suspend fun AppViewModel.reportPlayerStatus() {
     val hdrVf = (mpv.getPropertyString("video-format") ?: "").lowercase()
     val hdrPeak = mpv.getPropertyDouble("video-params/sig-peak") ?: 0.0
     val hasDovi = hdrVf.contains("dovi") || hdrVf.contains("dolbyvision") ||
-        hdrVf.contains("dvhe") || hdrVf.contains("dvh1") || hdrVf.contains("dav1")
+        hdrVf.contains("dvhe") || hdrVf.contains("dvh1") || hdrVf.contains("dav1") ||
+        // mpv 实际把 DV 片源的 colormatrix 报成 dolbyvision，video-format 仍是解码器名（hevc）
+        hdrCm.contains("dolbyvision") || hdrCm.contains("dovi")
     val isPq = hdrGamma.contains("pq") || hdrGamma.contains("smpte2084")
     val isHlg = hdrGamma.contains("hlg") || hdrGamma.contains("arib-std-b67")
     val isBt2020 = hdrCm.contains("bt.2020") || hdrCm.contains("bt2020") || hdrCm.contains("bt.2100") ||
@@ -596,6 +598,8 @@ internal suspend fun AppViewModel.reportPlayerStatus() {
         put("fps", JsonPrimitive(fps))
         put("bitrate", JsonPrimitive(mediaInfo["bitrate"] ?: ""))
         put("hdr", JsonPrimitive(hdrInfo))
+        // 杜比视界诊断：探测到的面板/转换能力与最终路径，便于其他用户反馈偏色问题时定位
+        put("dolby", JsonPrimitive(if (hasDovi) lastDvDecision else ""))
     }
     withContext(Dispatchers.IO) { repository.setPlayerStatus(statusJson.toString()) }
 }

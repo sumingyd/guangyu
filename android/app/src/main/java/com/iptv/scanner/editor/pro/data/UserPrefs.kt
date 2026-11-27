@@ -193,6 +193,9 @@ class UserPrefs private constructor() {
     fun resetPlayerSettings() = playerSettingsStore.resetPlayerSettings()
     fun getPlayerType(): String = playerSettingsStore.getPlayerType()
     fun setPlayerType(type: String) = playerSettingsStore.setPlayerType(type)
+
+    /** 开发者自检：强制杜比视界 profile（没有 p5 样本时用于验证转换/告警分支） */
+    fun getDvProfileOverride(): Int? = playerSettingsStore.getDvProfileOverride()
     fun getTimeoutSwitchSource(): Int = playerSettingsStore.getTimeoutSwitchSource()
     fun setTimeoutSwitchSource(value: Int) = playerSettingsStore.setTimeoutSwitchSource(value)
     fun getTimeoutMs(): Long = playerSettingsStore.getTimeoutMs()

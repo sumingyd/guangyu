@@ -31,6 +31,7 @@ import com.iptv.scanner.editor.pro.data.RecentEntry
 import com.iptv.scanner.editor.pro.data.ResumeItem
 import com.iptv.scanner.editor.pro.data.BookmarkItem
 import com.iptv.scanner.editor.pro.data.ChannelPlayerSettings
+import com.iptv.scanner.editor.pro.data.store.DvProfileRegistry
 import com.iptv.scanner.editor.pro.data.ScanResult
 import com.iptv.scanner.editor.pro.data.ScanStatus
 import com.iptv.scanner.editor.pro.data.SubtitleItem
@@ -253,6 +254,58 @@ internal fun AppViewModel.setColorCompatMode(enabled: Boolean) {
 /** 片源参数复查节奏（与 PC 端 MpvHdr._RECHECK_DELAYS_MS 保持一致） */
 private val HDR_RECHECK_DELAYS_MS = longArrayOf(700, 1600, 3200)
 
+// 杜比视界能力三态：探测不到时是 UNKNOWN，不能当成“支持”，也不能当成“不支持”后
+// 放心输出 DV；未知与不支持走同一条基础层安全路径。
+internal const val DV_SUPPORTED = "supported"
+internal const val DV_UNSUPPORTED = "unsupported"
+internal const val DV_UNKNOWN = "unknown"
+
+/**
+ * 屏幕链路能否把杜比视界原样送出去。
+ * 只有面板声明支持 DV 才继续看输出通路是否直写，二者缺一都按不支持处理。
+ */
+internal fun AppViewModel.dolbyVisionPanelState(): String {
+    dvPanelOverride?.let { if (it in listOf(DV_SUPPORTED, DV_UNSUPPORTED, DV_UNKNOWN)) return it }
+    return try {
+        val display = (getApplication() as android.app.Application)
+            .getSystemService(android.content.Context.WINDOW_SERVICE)
+            .let { it as? android.view.WindowManager }
+            ?.defaultDisplay
+        val types = display?.hdrCapabilities?.supportedHdrTypes ?: IntArray(0)
+        // HDR_TYPE_DOLBY_VISION = 1
+        if (types.contains(1)) DV_SUPPORTED else DV_UNSUPPORTED
+    } catch (_: Throwable) {
+        DV_UNKNOWN
+    }
+}
+
+/** 渲染器能否把杜比视界正确转换成 PQ/SDR（与面板能力无关）。 */
+internal fun dolbyVisionConvertState(vo: String): String =
+    if (vo == "gpu-next") DV_SUPPORTED else DV_UNKNOWN
+
+/**
+ * 片源杜比视界 profile：开发者强制值 → 设置项 → 扫描阶段按播放地址登记的 profile。
+ *
+ * 内核不暴露 profile（直写路径连 DV 标记都读不到），p5 与 p8/p7 的处理差异只能靠
+ * 扫描阶段的结果带进来；拿不到时返回 null，按“未知”走基础层安全路径。
+ */
+internal fun AppViewModel.resolveDvProfile(url: String): Int? {
+    dvProfileOverride?.let { return it }
+    runCatching { userPrefs.getDvProfileOverride() }.getOrNull()?.let { return it }
+    DvProfileRegistry.get(url)?.let { return it }
+    // 扫描阶段由 Python 验证器读出的 profile 登记在 utils.hdr_detect 里（同一进程），
+    // 通过桥接取回并缓存，避免每次判定都跨语言调用
+    if (url.isEmpty()) return null
+    return runCatching {
+        val value = com.chaquo.python.Python.getInstance()
+            .getModule("android_bridge").callAttr("get_dv_profile", url).toInt()
+        if (value > 0) {
+            DvProfileRegistry.put(url, value)
+            value
+        } else null
+    }.getOrNull()
+}
+
 /**
  * 参数未就绪时安排下一次复查；返回 false 表示次数已用尽，调用方按非 HDR 处理。
  */
@@ -281,6 +334,36 @@ internal fun AppViewModel.applyHdrOnFileLoaded(recheck: Boolean = false) {
 
     val currentVo = try { mpv.getPropertyString("vo") ?: "" } catch (_: Throwable) { "" }
     if (currentVo == "mediacodec_embed") {
+        // 直写表面是唯一可能把杜比视界原样送屏的通路，这里只做能力判定与留痕。
+        // FILE_LOADED 时 video-params 可能尚未就绪，和 GPU 路径一样先延时复查。
+        val cmEmbed = try {
+            (mpv.getPropertyString("video-params/colormatrix") ?: "").lowercase()
+        } catch (_: Throwable) { "" }
+        // 直写路径读不到杜比标记（硬件解码只报容器矩阵），profile 只能来自扫描阶段，
+        // 否则 p5 永远进不了“必须单独处理”的分支。
+        val dvUrlEmbed = try { mpv.getPropertyString("path") ?: "" } catch (_: Throwable) { "" }
+        val profile = resolveDvProfile(dvUrlEmbed)
+        val isDvEmbed = cmEmbed.contains("dolbyvision") || cmEmbed.contains("dovi") || profile != null
+        // 直写路径不应用任何 HDR 参数，但杜比判定要拿到稳定后的 colormatrix。
+        // 文件刚加载时色彩参数可能还是上一段的值/尚未就绪，按与 GPU 路径相同的节奏复查。
+        if (!isDvEmbed && scheduleHdrRecheck()) {
+            Log.i(AppViewModel.TAG, "杜比视界：直写路径色彩参数未就绪，延时复查")
+            return
+        }
+        if (isDvEmbed) {
+            val panel = dolbyVisionPanelState()
+            val path = when {
+                panel == DV_SUPPORTED -> "dv-passthrough"
+                // 直写通路没有渲染器转换能力，p5 没有 HDR10 兼容基础层，只能如实告警
+                profile == 5 -> "base-warn"
+                else -> "base"
+            }
+            lastDvDecision = "profile=${profile ?: "未知"}, 面板=$panel, 转换=不适用(直写), 路径=$path"
+            Log.i(AppViewModel.TAG, "杜比视界: $lastDvDecision")
+            if (path == "base-warn") {
+                showOsd("杜比视界 profile 5：当前设备无法正确转换，颜色可能异常")
+            }
+        }
         Log.i(AppViewModel.TAG, "HDR 配置：跳过，vo=mediacodec_embed 不支持 GPU 色调映射属性")
         return
     }
@@ -298,25 +381,48 @@ internal fun AppViewModel.applyHdrOnFileLoaded(recheck: Boolean = false) {
         val prim = (mpv.getPropertyString("video-params/primaries") ?: "").lowercase()
         val cm = (mpv.getPropertyString("video-params/colormatrix") ?: "").lowercase()
         val peak = mpv.getPropertyDouble("video-params/sig-peak") ?: 0.0
+        val dvUrl = try { mpv.getPropertyString("path") ?: "" } catch (_: Throwable) { "" }
 
-        // FILE_LOADED 时 video-params 可能尚未就绪（gamma/primaries 都为空）。
-        // 空值直接判“非 HDR”会把 HDR 片源按 SDR 输出，与菜单选中的模式不一致；
-        // 按 PC 端同样的节奏延时复查，次数用尽仍为空才按非 HDR 处理。
-        if (gamma.isEmpty() && prim.isEmpty() && scheduleHdrRecheck()) return
+        // FILE_LOADED 时 video-params 可能尚未就绪（gamma 为空但 primaries 已有值时
+        // 极易被误判成 WCG/SDR）。空值直接下结论会把 HDR/杜比片源按 SDR 输出，
+        // 与菜单选中的模式不一致；按 PC 端同样的节奏延时复查，次数用尽才按非 HDR 处理。
+        if (gamma.isEmpty() && scheduleHdrRecheck()) return
         hdrRecheckAttempts = HDR_RECHECK_DELAYS_MS.size
 
         val isPq = gamma.contains("pq") || gamma.contains("smpte2084")
         val isHlg = gamma.contains("hlg") || gamma.contains("arib-std-b67")
-        // 播放期不再做 DV 判定：video-format 是解码格式名，拿不到可靠 DV 标记，
-        // DV 片源统一按 HDR10 基础层处理（DV 判定只在 ffprobe 扫描阶段完成）
         val isBt2020 = cm.contains("bt.2020") || cm.contains("bt2020") ||
             cm.contains("bt.2100") || prim.contains("bt.2020") ||
             prim.contains("bt2020") || prim.contains("bt.2100")
         val isHdr = isPq || isHlg
         val isWcg = !isHdr && isBt2020
+        // 杜比视界：mpv 把 DV 片源的 colormatrix 报成 dolbyvision；有些通路读不到这个
+        // 标记，此时以扫描阶段登记的 profile 为准（仅在确认是 HDR 基础层时采信，
+        // 避免同一地址内容变化后旧 profile 把 SDR 误判成杜比）
+        val profile = resolveDvProfile(dvUrl)
+        val isDv = cm.contains("dolbyvision") || cm.contains("dovi") ||
+            (profile != null && isHdr)
 
         Log.i(AppViewModel.TAG, "HDR 检测：gamma=$gamma, primaries=$prim, sig_peak=$peak, " +
-            "isHdr=$isHdr, isWcg=$isWcg, isPq=$isPq, isHlg=$isHlg")
+            "isHdr=$isHdr, isWcg=$isWcg, isPq=$isPq, isHlg=$isHlg, isDv=$isDv")
+
+        if (isDv) {
+            // 双维度判定：面板能否原样送屏、渲染器能否正确转换；unknown 与 unsupported
+            // 走同一条基础层安全路径，绝不“猜一把”去输出 DV
+            val panel = dolbyVisionPanelState()
+            val convert = dolbyVisionConvertState(currentVo)
+            val path = when {
+                panel == DV_SUPPORTED && (currentVo == "mediacodec_embed") -> "dv-passthrough"
+                profile == 5 && convert != DV_SUPPORTED -> "base-warn"
+                else -> "base"
+            }
+            lastDvDecision = "profile=${profile ?: "未知"}, 面板=$panel, 转换=$convert, 路径=$path"
+            Log.i(AppViewModel.TAG, "杜比视界: $lastDvDecision")
+            if (path == "base-warn") {
+                // 无法正确转换时仍按基础层输出（避免黑屏），但必须如实告知颜色可能异常
+                showOsd("杜比视界 profile 5：当前设备无法正确转换，颜色可能异常")
+            }
+        }
 
         // WCG 视频无论 hdr_mode 如何都必须保持 bt.2020 色域
         if (isWcg) {

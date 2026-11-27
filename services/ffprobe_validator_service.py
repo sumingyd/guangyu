@@ -76,6 +76,8 @@ class FfprobeStreamValidator:
             'codec': None,
             'bitrate': None,
             'hdr_type': None,
+            'dv_profile': None,
+            'dv_bl_compat': None,
             'skipped': False,
         }
 
@@ -213,6 +215,18 @@ class FfprobeStreamValidator:
                         result['hdr_type'] = self._extract_hdr_type(
                             video_stream, probe_data.get('frames', [])
                         )
+                        # 杜比视界 profile：mpv 不暴露，只能在扫描阶段读出来并按 URL 登记，
+                        # 播放时据此判断 p5（必须转换）还是 p8/p7（基础层即正确）
+                        try:
+                            from utils.hdr_detect import (
+                                extract_dv_info_from_stream, register_dv_profile)
+                            dv_profile, dv_bl = extract_dv_info_from_stream(video_stream)
+                            if dv_profile is not None:
+                                result['dv_profile'] = dv_profile
+                                result['dv_bl_compat'] = dv_bl
+                                register_dv_profile(url, dv_profile)
+                        except Exception as _dv_e:
+                            self.logger.debug(f"杜比 profile 解析失败: {_dv_e}")
 
                     format_info = probe_data.get('format', {})
                     bitrate = format_info.get('bit_rate')

@@ -215,6 +215,14 @@ class PlayerSettingsStore(
 
     fun getHwdecCrashCombo(): String? = prefs.getString(KEY_HWDEC_CRASH_COMBO, null)
 
+    /**
+     * 开发者自检：强制杜比视界 profile（字符串型偏好 dv_profile_override）。
+     * 没有 p5 样本时用它验证「转换 / 基础层告警」分支，正式使用不设值。
+     */
+    fun getDvProfileOverride(): Int? =
+        prefs.getString("dv_profile_override", null)?.trim()?.toIntOrNull()
+
+
     /** 是否已确认该设备需要 vo fallback（黑屏检测曾触发过） */
     fun isVoFallbackConfirmed(): Boolean = prefs.getBoolean(KEY_VO_FALLBACK, false)
 
@@ -710,4 +718,21 @@ class PlayerSettingsStore(
         if (board.contains("mtk")) return true
         return Regex("mt\\d{3,5}").containsMatchIn(board)
     }
+}
+
+/**
+ * 扫描/媒体库阶段拿到的杜比视界 profile，按播放地址登记。
+ *
+ * Android 端没有 ffprobe，内核（直写路径）也读不到 DV 标记，profile 只能来自
+ * 扫描结果；拿不到时返回 null，播放侧按未知走基础层安全路径。
+ */
+object DvProfileRegistry {
+    private val profiles = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+    fun put(url: String, profile: Int?) {
+        if (url.isEmpty()) return
+        if (profile == null) profiles.remove(url) else profiles[url] = profile
+    }
+
+    fun get(url: String): Int? = if (url.isEmpty()) null else profiles[url]
 }

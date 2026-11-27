@@ -13,6 +13,8 @@ HDR 输出模式（与界面、右键菜单保持一致，只有三个）：
 
 from PySide6.QtCore import QTimer
 
+import os
+
 from core.log_manager import global_logger as logger
 from utils.platform_utils import is_windows, is_macos, is_android, is_linux
 
@@ -68,8 +70,9 @@ class MpvHdr:
 
             hdr_type = self.detect_hdr_type(vp_cm, vp_gamma, vp_peak, vp_format, vp_prim)
             self._facade.logger.info(f"HDR类型判定: {hdr_type}")
-            is_pq = hdr_type == 'HDR10'
-            is_hlg = hdr_type == 'HLG'
+            # 基础层传输特性单独判断：杜比视界片源也要按基础层（PQ / HLG）输出
+            is_pq = 'pq' in vp_gamma or 'smpte2084' in vp_gamma
+            is_hlg = 'hlg' in vp_gamma or 'arib-std-b67' in vp_gamma
 
             if hdr_type == 'WCG':
                 self._facade.logger.info("WCG视频（宽色域SDR），保持bt.2020色域")
@@ -80,6 +83,22 @@ class MpvHdr:
                 self._facade.logger.info("非HDR视频，重置HDR参数为默认值")
                 self._facade._reset_hdr_params()
                 return
+
+            if hdr_type == 'DV':
+                # 面板支持 DV 才尝试原样送屏；否则一律按基础层输出，绝不猜测
+                dv_profile, dv_panel, dv_convert, dv_path = self._resolve_dv_path()
+                self._facade.logger.info(
+                    f"杜比视界: profile={dv_profile or '未知'} 面板直通={dv_panel} "
+                    f"渲染转换={dv_convert} 路径={dv_path}")
+                if dv_path == 'dv-passthrough':
+                    self._facade._apply_passthrough_config(is_pq)
+                    return
+                if dv_path == 'base-warn':
+                    # profile 5 且渲染器不能正确转换：按基础层输出避免黑屏，
+                    # 但必须如实告知颜色可能异常，不能假装正常
+                    self._show_osd("杜比视界 profile 5：当前设备无法正确转换，颜色可能异常")
+                    self._facade.logger.warning(
+                        "杜比视界 profile 5 且渲染器无转换能力，按基础层输出，颜色可能异常")
 
             system_hdr = self._check_system_hdr()
 
@@ -143,6 +162,62 @@ class MpvHdr:
         except Exception as _e:
             logger.debug(f"系统HDR检测失败: {_e}")
         return False
+
+    def _dv_source_profile(self):
+        """片源杜比视界 profile。
+
+        优先级：开发者强制值 → 播放会话设置 → 扫描阶段按 URL 登记的 profile →
+        本地文件的兜底探测。mpv 本身不暴露 profile，直写路径也读不到 DV 标记，
+        所以必须靠这条链路，不能依赖内核报告。
+        """
+        env = (os.environ.get('GUANGYU_DV_PROFILE') or '').strip()
+        if env.isdigit():
+            return int(env)
+        try:
+            raw = self._facade._playback_settings.get('dv_profile')
+            if raw not in (None, ''):
+                return int(raw)
+        except (TypeError, ValueError):
+            pass
+        try:
+            from utils.hdr_detect import get_dv_profile, probe_dv_profile
+            path = self._facade._get_mpv_property_string('path') or ''
+            profile = get_dv_profile(path)
+            if profile is None:
+                profile = probe_dv_profile(path)
+            return profile
+        except Exception:
+            return None
+
+    def _resolve_dv_path(self):
+        """按“片源 profile × 面板能力 × 渲染器转换能力”决定杜比视界路径。
+
+        只有面板明确支持且走解码器直写通路时才尝试 DV 原样输出；
+        未知与不支持走同一条基础层安全路径，绝不猜测。
+        """
+        from utils.hdr_detect import (
+            get_dolby_vision_output_capability,
+            get_renderer_dv_convert_capability,
+            DV_STATE_SUPPORTED,
+        )
+        profile = self._dv_source_profile()
+        panel = get_dolby_vision_output_capability(self._hdr_screen_name())
+        try:
+            vo = (self._facade._get_mpv_property_string('current-vo') or '').lower()
+        except Exception:
+            vo = ''
+        convert = get_renderer_dv_convert_capability(vo)
+
+        if panel == DV_STATE_SUPPORTED and vo == 'mediacodec_embed':
+            path = 'dv-passthrough'
+        elif profile == 5 and convert != DV_STATE_SUPPORTED:
+            path = 'base-warn'
+        else:
+            path = 'base'
+        # 诊断面板要能看到探测原始值与最终路径
+        self._facade._last_dv_decision = (
+            f"profile={profile or '未知'}, 面板={panel}, 转换={convert}, 路径={path}")
+        return profile, panel, convert, path
 
     def _sdr_hint_value(self) -> str:
         """SDR 内容/色调映射时的 colorspace hint。
@@ -299,13 +374,13 @@ class MpvHdr:
                         video_format: str = '', primaries: str = '') -> str:
         """统一 HDR 类型检测逻辑（PC/Android/Web 三端共用此算法）。
 
-        检测优先级：PQ(HDR10) → HLG → WCG → SDR
+        检测优先级：杜比视界 → PQ(HDR10) → HLG → WCG → SDR
 
         注意：
+        - 杜比视界：mpv 会把 DV 片源的 colormatrix 报成 dolbyvision（p5 与 p8 都是），
+          这里据此返回 'DV'；但 mpv 不暴露 DV profile，profile 需要扫描阶段提供。
         - mpv 运行时无法区分 HDR10 与 HDR10+（ST.2094-40 动态元数据不暴露为属性），
           统一返回 'HDR10'。HDR10+ 的检测仅在 ffprobe 扫描阶段通过 side_data 完成。
-        - 播放期拿不到可靠的 DV 标记（video-format 是解码格式名），因此不再返回 'DV'；
-          DV 片源按 HDR10 基础层显示。DV 判定只在 ffprobe 扫描阶段用 codec_tag/side_data 完成。
         - WCG（宽色域 SDR）：BT.2020 色域 + SDR 亮度，需要保持广色域避免压缩偏色。
         - sig_peak 用于辅助判断（mpv 中 1.0≈SDR 白电平，HDR 内容通常 >1.0），
           但不作为 HDR10/HDR10+ 的区分依据。
@@ -314,11 +389,14 @@ class MpvHdr:
         cm = (colormatrix or '').lower()
         prim = (primaries or '').lower()
 
+        is_dv = 'dolbyvision' in cm or 'dovi' in cm
         is_pq = 'pq' in g or 'smpte2084' in g
         is_hlg = 'hlg' in g or 'arib-std-b67' in g
         is_bt2020 = ('bt.2020' in cm or 'bt2020' in cm or 'bt.2100' in cm or
                      'bt.2020' in prim or 'bt2020' in prim or 'bt.2100' in prim)
 
+        if is_dv:
+            return 'DV'
         if is_pq:
             return 'HDR10'
         if is_hlg:
