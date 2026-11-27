@@ -120,6 +120,11 @@ def _load_playback_settings():
         _logging.getLogger('services.mpv_player_service').warning(
             f"加载播放设置失败，使用默认值: {e}"
         )
+    # HDR 选项已收敛为三种：passthrough / tonemap / disable。
+    # 历史配置里的 auto、scrgb 语义与 passthrough 相同，读取时统一归一。
+    from services.mpv_hdr import normalize_hdr_mode
+    settings['hdr_output_mode'] = normalize_hdr_mode(
+        settings.get('hdr_output_mode', 'disable'))
     return settings
 
 
@@ -232,14 +237,14 @@ class MpvPlayerController(QObject):
     def _get_sdr_target_trc(self):
         return self._hdr._get_sdr_target_trc()
 
-    def _apply_tonemap_config(self, is_hlg=False):
-        return self._hdr._apply_tonemap_config(is_hlg)
+    def _apply_tonemap_config(self, is_hlg=False, system_hdr=None, force_sdr=True):
+        return self._hdr._apply_tonemap_config(is_hlg, system_hdr, force_sdr)
 
     def _apply_passthrough_config(self, is_pq=True):
         return self._hdr._apply_passthrough_config(is_pq)
 
-    def _apply_scrgb_config(self, is_pq=True):
-        return self._hdr._apply_scrgb_config(is_pq)
+    def _apply_disable_config(self, system_hdr=None):
+        return self._hdr._apply_disable_config(system_hdr)
 
     def _apply_wcg_config(self):
         return self._hdr._apply_wcg_config()

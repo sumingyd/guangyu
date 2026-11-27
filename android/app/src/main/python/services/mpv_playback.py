@@ -277,7 +277,10 @@ class MpvPlayback:
                 except Exception as e:
                     self._facade.logger.error(f"设置窗口ID失败: {str(e)}")
 
-            hdr_mode = self._facade._playback_settings.get('hdr_output_mode', 'disable')
+            from services.mpv_hdr import normalize_hdr_mode
+            hdr_mode = normalize_hdr_mode(
+                self._facade._playback_settings.get('hdr_output_mode', 'disable'))
+            self._facade._playback_settings['hdr_output_mode'] = hdr_mode
 
             try:
                 if is_windows():
@@ -320,9 +323,9 @@ class MpvPlayback:
                 vo = 'gpu-next'
             else:
                 vo = user_vo
-                if hdr_mode in ('passthrough', 'scrgb', 'auto') and vo != 'gpu-next':
+                if hdr_mode == 'passthrough' and vo != 'gpu-next':
                     self._facade.logger.warning(
-                        f"HDR模式({hdr_mode})建议使用gpu-next，但用户选了vo={vo}，HDR信号可能异常"
+                        f"HDR直通建议使用gpu-next，但用户选了vo={vo}，HDR信号可能异常"
                     )
 
             # gpu-api和gpu-context必须在vo之前设置
@@ -366,21 +369,20 @@ class MpvPlayback:
                     # 会让 mpv 调用 SetColorSpace1 尝试切换到 PQ，但 R8G8B8A8_UNORM 格式不支持 PQ，
                     # 切换失败，PQ 信号在 sRGB swapchain 上显示为极暗画面（用户反馈的"HDR直通画面暗"）。
                     #
-                    # 修复：对于 HDR 模式（passthrough/scrgb/auto），设置 d3d11-output-csp=pq，
-                    # 让 mpv 创建 R10G10B10A2_UNORM 格式的 swapchain，运行时可通过 SetColorSpace1
-                    # 在 PQ 和 sRGB 之间动态切换。reinit_for_hdr_change() 切换 HDR 模式时会重新
-                    # 初始化 mpv，所以根据新的 hdr_mode 设置正确的 d3d11-output-csp。
-                    # 对于 tonemap/disable 模式，使用 srgb 即可。
-                    #
-                    # 注意：Windows 显示合成器总是支持 HDR 交换链（即使显示器是 SDR），
-                    # 所以 d3d11-output-csp=pq 能成功创建 swapchain。当系统 HDR 未启用时，
-                    # _apply_hdr_on_file_loaded() 会回退到 tonemap（target-trc=srgb），
-                    # target-colorspace-hint=yes 会让 mpv 将 swapchain 切换回 sRGB。
-                    if hdr_mode in ('passthrough', 'scrgb', 'auto'):
+                    # 修复：直通模式设置 d3d11-output-csp=pq，让 mpv 创建
+                    # R10G10B10A2_UNORM 格式的 swapchain，运行时可通过 SetColorSpace1
+                    # 在 PQ 和 sRGB 之间动态切换。reinit_for_hdr_change() 切换 HDR 模式时会
+                    # 重新初始化 mpv，所以根据新的 hdr_mode 设置正确的 d3d11-output-csp。
+                    # 色调映射/强制SDR 模式使用 srgb，保证输出容器本身就是 SDR。
+                    if hdr_mode == 'passthrough':
                         _mpv_set_option_string(self._facade.mpv_handle, 'd3d11-output-csp', 'pq')
                     else:
                         _mpv_set_option_string(self._facade.mpv_handle, 'd3d11-output-csp', 'srgb')
-                _mpv_set_option_string(self._facade.mpv_handle, 'target-colorspace-hint', 'yes')
+                # 直通模式开 hint，让系统 HDR 状态决定输出；色调映射/强制SDR 关 hint，
+                # 否则 target-prim/trc/peak 会被系统覆盖，"切到 SDR"不会真正生效。
+                _mpv_set_option_string(
+                    self._facade.mpv_handle, 'target-colorspace-hint',
+                    'yes' if hdr_mode == 'passthrough' else 'no')
                 # 预设 SDR 默认值，避免 mpv auto 检测到 bt.1886（gamma≈2.4）
                 # 而 _apply_wcg_config/_reset_hdr_params 设置 srgb（gamma≈2.2）时
                 # 产生 gamma 跳变（首次播放 WCG 色彩偏暗）
@@ -419,7 +421,7 @@ class MpvPlayback:
                     effective_api = 'opengl'
                 else:
                     effective_api = 'opengl' if gpu_api == 'auto' else gpu_api
-                if hdr_mode in ('passthrough', 'scrgb'):
+                if hdr_mode == 'passthrough':
                     self._facade.logger.warning(
                         f"Linux/X11 下无法输出 HDR 直通信号（hdr_output_mode={hdr_mode}），将按 SDR 渲染"
                     )
@@ -860,6 +862,9 @@ class MpvPlayback:
                     self._facade._pos_log_count = 0
                     self._facade._schedule_media_info_start()
                     self._facade._adjust_buffer_for_content()
+                    # 新文件：重置 HDR 延时复查计数
+                    self._facade._hdr_recheck_attempts = 0
+                    self._facade._hdr_recheck_pending = False
                     self._facade._apply_hdr_on_file_loaded()
                     if self._facade.audio_visual:
                         self._facade.audio_visual.auto_enable_if_audio()
@@ -2056,7 +2061,8 @@ class MpvPlayback:
                 terminate_destroy_mpv(handle)
         self._facade._mpv_initialized = False
         self._facade._terminated = False
-        self._facade._playback_settings['hdr_output_mode'] = new_hdr_mode
+        from services.mpv_hdr import normalize_hdr_mode
+        self._facade._playback_settings['hdr_output_mode'] = normalize_hdr_mode(new_hdr_mode)
         if not self._facade._ensure_mpv_initialized():
             self._facade.logger.error("HDR模式切换后重新初始化mpv失败")
             return

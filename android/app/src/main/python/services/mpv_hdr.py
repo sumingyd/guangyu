@@ -1,20 +1,51 @@
-"""MpvHdr — 从 MpvPlayerController 提取的子控制器。"""
+"""MpvHdr — 从 MpvPlayerController 提取的子控制器。
+
+HDR 输出模式（与界面、右键菜单保持一致，只有三个）：
+- passthrough: 直通。按片源元数据输出 HDR，需要系统 HDR 开启；
+  PQ 片源用 target-colorspace-hint-mode=source 真正透传元数据。
+- tonemap: 色调映射到 SDR。关闭 colorspace hint，让 target-prim/trc/peak
+  真正决定输出（bt.709 + 系统对应的 SDR gamma + 100nit），高光做压缩。
+- disable: 强制 SDR。同样关闭 colorspace hint，但用 clip 曲线不压缩高光，
+  画面更亮、超过 SDR 的高光会被硬切。
+
+旧配置里的 auto / scrgb 会在读取时归一到 passthrough（历史上三者实现相同）。
+"""
+
+from PySide6.QtCore import QTimer
 
 from core.log_manager import global_logger as logger
 from utils.platform_utils import is_windows, is_macos, is_android, is_linux
+
+HDR_MODE_PASSTHROUGH = 'passthrough'
+HDR_MODE_TONEMAP = 'tonemap'
+HDR_MODE_DISABLE = 'disable'
+HDR_MODES = (HDR_MODE_PASSTHROUGH, HDR_MODE_TONEMAP, HDR_MODE_DISABLE)
+_LEGACY_HDR_MODE_MAP = {'auto': HDR_MODE_PASSTHROUGH, 'scrgb': HDR_MODE_PASSTHROUGH}
+
+
+def normalize_hdr_mode(mode) -> str:
+    """把历史配置值归一到当前三种模式，未知值回退到 disable。"""
+    value = str(mode or '').strip().lower()
+    value = _LEGACY_HDR_MODE_MAP.get(value, value)
+    return value if value in HDR_MODES else HDR_MODE_DISABLE
 
 
 class MpvHdr:
     """MpvHdr — 通过 facade 访问 mpv 实例和播放器。"""
 
+    # 网络流在 FILE_LOADED 时 video-params 可能还是空的，延时复查三次
+    _RECHECK_DELAYS_MS = (700, 1600, 3200)
+
     def __init__(self, facade):
         self._facade = facade
+
+    # ==================== 对外入口 ====================
 
     def _apply_hdr_on_file_loaded(self):
         try:
             if not self._facade.mpv_handle or self._facade._terminated:
                 return
-            hdr_mode = self._facade._playback_settings.get('hdr_output_mode', 'disable')
+            mode = self._current_mode()
 
             vp_prim = (self._facade._get_mpv_property_string('video-params/primaries') or '').lower()
             vp_gamma = (self._facade._get_mpv_property_string('video-params/gamma') or '').lower()
@@ -22,270 +53,248 @@ class MpvHdr:
             vp_format = (self._facade._get_mpv_property_string('video-format') or '').lower()
             vp_cm = (self._facade._get_mpv_property_string('video-params/colormatrix') or '').lower()
 
-            # 说明：播放期不再做 DV 判定。mpv 的 video-format 是解码格式名（如 hevc），
-            # 拿不到可靠的 DV 标记，继续判断只会漏判/误报。DV 片源按 HDR10 基础层处理。
-            # 统一 HDR 检测（与 detect_hdr_type 对齐）
-            is_pq = 'pq' in vp_gamma or 'smpte2084' in vp_gamma
-            is_hlg = 'hlg' in vp_gamma or 'arib-std-b67' in vp_gamma
-            is_bt2020 = ('bt.2020' in vp_prim or 'bt2020' in vp_prim or
-                         'bt.2020' in vp_cm or 'bt2020' in vp_cm)
-
             self._facade.logger.info(
                 f"视频HDR参数: primaries={vp_prim}, gamma={vp_gamma}, "
-                f"sig_peak={vp_peak}, format={vp_format}"
+                f"sig_peak={vp_peak}, format={vp_format}, colormatrix={vp_cm}"
             )
 
-            is_hdr_video = is_pq or is_hlg
+            # gamma 是 HDR 判定的主依据。网络/直播流在 FILE_LOADED 时常常还没探测完，
+            # 直接按 SDR 重置会让 HDR 片源整段显示错误，这里延时复查而不是立刻下结论。
+            if not vp_gamma:
+                if self._schedule_hdr_recheck():
+                    self._facade.logger.info("视频色彩参数尚未就绪，延时复查HDR")
+                    return
+                self._facade.logger.warning("多次复查后仍无色彩参数，按SDR处理")
 
-            # WCG 视频（宽色域 SDR）：BT.2020 色域但 SDR 亮度（gamma=srgb/bt.1886）
-            # 这类视频需要保持 bt.2020 色域，避免被压缩到 bt.709 导致偏色
-            # 无论 hdr_mode 是什么，WCG 都必须保持 bt.2020 色域
-            is_wcg_video = (not is_hdr_video and is_bt2020)
+            hdr_type = self.detect_hdr_type(vp_cm, vp_gamma, vp_peak, vp_format, vp_prim)
+            self._facade.logger.info(f"HDR类型判定: {hdr_type}")
+            is_pq = hdr_type == 'HDR10'
+            is_hlg = hdr_type == 'HLG'
 
-            if is_wcg_video:
+            if hdr_type == 'WCG':
                 self._facade.logger.info("WCG视频（宽色域SDR），保持bt.2020色域")
                 self._facade._apply_wcg_config()
                 return
 
-            if not is_hdr_video:
+            if not (is_pq or is_hlg):
                 self._facade.logger.info("非HDR视频，重置HDR参数为默认值")
                 self._facade._reset_hdr_params()
                 return
 
-            # 根据 HDR 视频类型动态设置 hdr10-opt（HDR10+ 动态元数据传递）：
-            # - PQ 视频（HDR10/HDR10+）：启用 hdr10-opt=yes
-            # - HLG 视频：禁用 hdr10-opt=no
-            if is_pq:
-                self._facade._set_mpv_string('hdr10-opt', 'yes')
-                self._facade.logger.info("PQ视频，启用hdr10-opt传递HDR10+动态元数据")
-            else:
-                self._facade._set_mpv_string('hdr10-opt', 'no')
-                self._facade.logger.info("非PQ视频（HLG），禁用hdr10-opt")
+            system_hdr = self._check_system_hdr()
 
-            def _check_system_hdr():
-                """运行时检测系统 HDR 状态（比初始化时更准确，Qt 应用已完全就绪）。"""
-                try:
-                    if is_windows():
-                        from utils.hdr_detect import is_windows_hdr_enabled
-                        enabled = is_windows_hdr_enabled()
-                        logger.info(f"系统HDR状态: {'已启用' if enabled else '未启用'}")
-                        return enabled
-                    elif is_macos():
-                        from utils.hdr_detect import is_macos_hdr_enabled
-                        return is_macos_hdr_enabled()
-                    elif is_android():
-                        from utils.hdr_detect import is_android_hdr_enabled
-                        return is_android_hdr_enabled()
-                    elif is_linux():
-                        from utils.hdr_detect import is_linux_hdr_enabled
-                        return is_linux_hdr_enabled()
-                except Exception as _e:
-                    logger.debug(f"unexpected error: {_e}")
-                return False
-
-            # hdr_mode == 'disable' 时，HDR 视频仍需 tonemap 到 SDR
-            # 但要保持 bt.2020 色域（而非压到 bt.709）
-            if hdr_mode == 'disable':
-                self._facade._apply_tonemap_config(is_hlg=is_hlg)
-                return
-
-            if hdr_mode == 'tonemap':
-                self._facade._apply_tonemap_config(is_hlg=is_hlg)
-                return
-
-            if hdr_mode == 'passthrough':
-                # 直通只有系统 HDR 真正开启时才生效，否则一律回退色调映射
-                system_hdr = _check_system_hdr()
+            if mode == HDR_MODE_PASSTHROUGH:
                 if not system_hdr:
-                    self._facade.logger.warning("运行时检测系统未启用HDR，passthrough模式回退到tonemap")
-                    self._facade._apply_tonemap_config(is_hlg=is_hlg)
+                    self._facade.logger.warning("系统未启用HDR，直通回退到色调映射")
+                    self._show_osd("系统 HDR 未开启，已回退色调映射")
+                    self._facade._apply_tonemap_config(
+                        is_hlg=is_hlg, system_hdr=False, force_sdr=False)
                 else:
                     self._facade._apply_passthrough_config(is_pq)
                 return
 
-            if hdr_mode == 'scrgb':
-                # scrgb 实际就是 PQ 直通（与 passthrough 等价），系统未开 HDR 时同样回退
-                system_hdr = _check_system_hdr()
-                if not system_hdr:
-                    self._facade.logger.warning("运行时检测系统未启用HDR，scrgb模式回退到tonemap")
-                    self._facade._apply_tonemap_config(is_hlg=is_hlg)
-                else:
-                    self._facade._apply_scrgb_config(is_pq)
+            if mode == HDR_MODE_DISABLE:
+                self._facade._apply_disable_config(system_hdr=system_hdr)
                 return
 
-            if hdr_mode == 'auto':
-                system_hdr_enabled = _check_system_hdr()
-                if system_hdr_enabled:
-                    self._facade._apply_scrgb_config(is_pq)
-                else:
-                    self._facade._apply_tonemap_config(is_hlg=is_hlg)
-                return
+            self._facade._apply_tonemap_config(
+                is_hlg=is_hlg, system_hdr=system_hdr, force_sdr=True)
 
         except Exception as e:
             self._facade.logger.error(f"应用HDR设置失败: {e}")
 
+    # ==================== 内部工具 ====================
+
+    def _current_mode(self) -> str:
+        return normalize_hdr_mode(
+            self._facade._playback_settings.get('hdr_output_mode', HDR_MODE_DISABLE))
+
+    def _hdr_screen_name(self):
+        """播放窗口所在显示器名；Qt 在 Windows 上返回显示器友好名。"""
+        try:
+            widget = getattr(self._facade, 'video_widget', None)
+            screen = widget.screen() if widget is not None and hasattr(widget, 'screen') else None
+            if screen is None:
+                from PySide6.QtWidgets import QApplication
+                app = QApplication.instance()
+                screen = app.primaryScreen() if app is not None else None
+            return screen.name() if screen is not None else None
+        except Exception as _e:
+            logger.debug(f"获取播放窗口显示器失败: {_e}")
+            return None
+
+    def _check_system_hdr(self) -> bool:
+        """运行时检测系统 HDR 状态；Windows 按播放窗口所在显示器判断。"""
+        try:
+            if is_windows():
+                from utils.hdr_detect import is_windows_hdr_enabled
+                enabled = is_windows_hdr_enabled(self._hdr_screen_name())
+                logger.info(f"系统HDR状态: {'已启用' if enabled else '未启用'}")
+                return enabled
+            elif is_macos():
+                from utils.hdr_detect import is_macos_hdr_enabled
+                return is_macos_hdr_enabled()
+            elif is_android():
+                from utils.hdr_detect import is_android_hdr_enabled
+                return is_android_hdr_enabled()
+            elif is_linux():
+                from utils.hdr_detect import is_linux_hdr_enabled
+                return is_linux_hdr_enabled()
+        except Exception as _e:
+            logger.debug(f"系统HDR检测失败: {_e}")
+        return False
+
+    def _sdr_hint_value(self) -> str:
+        """SDR 内容/色调映射时的 colorspace hint。
+
+        只有 tonemap/disable 两种模式需要“真正切到 SDR 输出”，此时 hint 必须关闭，
+        否则 Windows 会按显示器 HDR 能力把输出重新拉回 PQ，target-* 全部失效。
+        passthrough 模式下 SDR 内容沿用系统目标，避免 PQ swapchain 上的 SDR 发暗。
+        """
+        return 'no' if self._current_mode() in (HDR_MODE_TONEMAP, HDR_MODE_DISABLE) else 'yes'
+
+    def _show_osd(self, text: str):
+        try:
+            show = getattr(self._facade, 'show_osd', None)
+            if callable(show):
+                show(text, 3000)
+        except Exception as _e:
+            logger.debug(f"显示HDR提示失败: {_e}")
+
+    def _schedule_hdr_recheck(self) -> bool:
+        """video-params 未就绪时延时复查；返回 True 表示已排队（本次不处理）。"""
+        facade = self._facade
+        attempts = int(getattr(facade, '_hdr_recheck_attempts', 0))
+        if attempts >= len(self._RECHECK_DELAYS_MS):
+            return False
+        if getattr(facade, '_hdr_recheck_pending', False):
+            return True
+        url = facade.current_url
+        facade._hdr_recheck_attempts = attempts + 1
+        facade._hdr_recheck_pending = True
+        delay = self._RECHECK_DELAYS_MS[attempts]
+
+        def _retry():
+            facade._hdr_recheck_pending = False
+            try:
+                if getattr(facade, '_terminated', False) or not facade.mpv_handle:
+                    return
+                if facade.current_url != url:
+                    return
+                self._apply_hdr_on_file_loaded()
+            except Exception as _e:
+                facade.logger.debug(f"HDR延时复查失败: {_e}")
+
+        QTimer.singleShot(delay, _retry)
+        return True
+
+    # ==================== 三种输出模式 ====================
+
     def _apply_passthrough_config(self, is_pq=True):
-        # d3d11-output-csp=pq + target-colorspace-hint=yes 已在初始化时设置
-        #
-        # PQ 视频（HDR10/HDR10+）：
-        #   target-peak=10000 是 HDR 直通的关键：告诉 mpv 显示器能处理 10000 nits，
-        #   mpv 不会做 tone mapping（target-peak=10000 同 hdr-compute-peak 矛盾，自动关闭），
-        #   而是直接输出 PQ 信号让显示器/Windows 合成器处理。
-        #   参考：mpv 官方 issue #7357、chiphell 论坛 mpv HDR 教程。
-        #   tone-mapping=clip：不做 tone mapping，直接输出 PQ 信号。
-        #
-        # HLG 视频：
-        #   HLG 是相对编码，亮度根据显示器自动缩放（参考：forasoft HLG 文档）。
-        #   若设置 target-peak=10000，mpv 会将 HLG 的 1.0（参考白 1000 nits）映射到
-        #   10000 nits，导致高光过度拉伸过曝，tone-mapping=clip 截断高光，形成阴阳脸
-        #   （用户反馈的"HLG人脸阴阳脸"）。
-        #
-        #   target-peak=1000（HLG 参考白电平）：
-        #   必须设置非零 target-peak 才能触发 target-colorspace-hint 将 swapchain
-        #   切换到 PQ 色彩空间。target-peak='' （auto/0）时 mpv 无法确定输出为 HDR，
-        #   不切换 swapchain，HLG→PQ 输出在 sRGB swapchain 上显示为极暗画面
-        #   （用户反馈的"HLG黑乎乎"）。1000 是 HLG 标准参考白电平（1000 nits），
-        #   不会导致 target-peak=10000 的过曝/阴阳脸问题。
-        #   hdr-compute-peak=no：使用 HLG 信号嵌入峰值（sig_peak），
-        #   不动态计算场景峰值。HLG 广播中高光元素（天空/反光）会将 compute-peak
-        #   推高到 2000+ nits，导致 mpv 对 2000→1000 做 2:1 压缩，画面变暗。
-        #   使用 sig_peak（通常 400-500 nits）避免不必要的 tonemapping，
-        #   PQ 输出峰值更低，Windows DWM 压缩比也更小。
-        #   tone-mapping=auto（gpu-next 中选 spline）让 mpv 平滑处理 HLG→PQ 转换。
-        #
-        # gamut-mapping-mode=relative：相对色域映射，保持色彩准确性，
-        # 让显示器/Windows 合成器处理最终的色域压缩。
-        # 注意：hdr10-opt 由 _apply_hdr_on_file_loaded 根据视频类型统一设置，这里不再设置。
+        """按片源元数据直出 HDR。
+
+        PQ（HDR10/HDR10+）：target-colorspace-hint=yes + hint-mode=source，
+        由 Windows 合成器直接按片源元数据输出，不做 tone mapping。
+        HLG：Windows 只有 PQ 容器，mpv 负责 HLG→PQ 转换，参考白 1000nit。
+        """
+        self._facade._set_mpv_string('target-colorspace-hint', 'yes')
+        self._facade._set_mpv_string('gamut-mapping-mode', 'relative')
         self._facade._set_mpv_string('target-prim', 'bt.2020')
         self._facade._set_mpv_string('target-trc', 'pq')
-        self._facade._set_mpv_string('gamut-mapping-mode', 'relative')
-        # 显式设置 tone-mapping 参数，避免从 WCG/SDR 切换时残留
-        # tone-mapping-desat=0：不做去饱和度（mpv 默认 0.5 会对高光做 50% 去饱和度，
-        #   导致 HLG 画面偏灰；从 SDR 切换时 desat='' → mpv 默认 0.5，从 WCG 切换时
-        #   desat='0'，同一切换路径效果不一致）
-        self._facade._set_mpv_string('tone-mapping-mode', 'auto')
-        self._facade._set_mpv_string('tone-mapping-desat', '0')
         if is_pq:
+            self._facade._set_mpv_string('target-colorspace-hint-mode', 'source')
             self._facade._set_mpv_string('tone-mapping', 'clip')
             self._facade._set_mpv_string('hdr-compute-peak', 'no')
             self._facade._set_mpv_string('target-peak', '10000')
-            self._facade.logger.info("HDR配置: passthrough → PQ直通 (bt.2020/pq, target-peak=10000, gamut=relative)")
+            self._facade.logger.info(
+                "HDR配置: 直通 → PQ按片源元数据输出 (hint=source, bt.2020/pq)")
         else:
-            # HLG 视频：让 mpv 自动处理 HLG→PQ 转换
-            # target-peak=1000：HLG 参考白电平，触发 PQ swapchain 切换（修复首次播放黑屏）
+            self._facade._set_mpv_string('target-colorspace-hint-mode', 'target')
             self._facade._set_mpv_string('tone-mapping', 'auto')
             self._facade._set_mpv_string('hdr-compute-peak', 'no')
             self._facade._set_mpv_string('target-peak', '1000')
             self._facade.logger.info(
-                "HDR配置: passthrough → HLG自动转换 "
-                "(bt.2020/pq, target-peak=1000, compute-peak=no, gamut=relative)"
-            )
+                "HDR配置: 直通 → HLG转PQ (bt.2020/pq, target-peak=1000, compute-peak=no)")
 
-    def _apply_scrgb_config(self, is_pq=True):
-        # 说明：该选项历史名为 scrgb，实际行为与 passthrough 完全相同，
-        # 都是把 HDR 内容以 PQ 信号输出到 swapchain（d3d11-output-csp=pq +
-        # target-colorspace-hint=yes 已在初始化时设置），由 Windows DWM 合成。
-        # 界面文案已改为“PQ 直通（与直通等价）”，不再宣称 scRGB。
-        self._facade._apply_passthrough_config(is_pq)
-        self._facade.logger.info(f"HDR配置: PQ直通（scrgb 同 passthrough）→ {'PQ直通' if is_pq else 'HLG自动转换'}")
+    def _apply_tonemap_config(self, is_hlg=False, system_hdr=None, force_sdr=True):
+        """HDR→SDR 色调映射。
 
-    def _apply_tonemap_config(self, is_hlg=False):
-        # HDR→SDR 色调映射（与 Android 端 applyTonemapConfig 统一策略）：
-        # 显式指定目标色域和 gamma，避免 mpv 自动推断失败
-        # 统一策略：target-prim=bt.2020 保留广色域（WCG），在支持广色域的显示器上显示更丰富色彩
-        # gamut-mapping-mode=perceptual 感知映射，减少色域裁剪损失
-        # 注意：d3d11-output-csp 和 target-colorspace-hint 已在初始化时设置（option），
-        # 运行时修改不会重建 swapchain，所以这里不再设置。
-        # 重置 target-peak：passthrough/scrgb 模式设置了 10000，切换到 tonemap 时必须重置，
-        # 否则 mpv 认为显示器能显示 10000 nits，不会做 HDR→SDR tone mapping，画面会过曝。
-        # 注意：hdr10-opt 由 _apply_hdr_on_file_loaded 根据视频类型统一设置，这里不再设置。
-        sdr_trc = self._facade._get_sdr_target_trc()
-        # HLG 视频去饱和度降为 0，避免整体发灰
-        # PQ 视频保留 0.5 的去饱和度，防止高光过饱和
-        desat = '0' if is_hlg else '0.5'
-        if is_hlg:
-            # HLG tonemap 到 SDR：使用 auto（gpu-next 选 spline，感知均匀，保留中间调亮度）
-            # hdr-compute-peak=yes：HLG 无嵌入 maxCLL 元数据，需动态计算场景峰值
-            # 避免用 bt.2390（线性扩展段压缩中间调，比 spline 更暗）
-            self._facade._set_mpv_string('tone-mapping', 'auto')
-            self._facade._set_mpv_string('hdr-compute-peak', 'yes')
-        else:
-            self._facade._set_mpv_string('tone-mapping', 'auto')
-            self._facade._set_mpv_string('hdr-compute-peak', 'no')
-        self._facade._set_mpv_string('tone-mapping-mode', 'auto')
-        self._facade._set_mpv_string('tone-mapping-desat', desat)
-        self._facade._set_mpv_string('target-prim', 'bt.2020')
+        force_sdr=True 时关闭 colorspace hint，target-prim/trc/peak 才真正生效；
+        passthrough 模式下因系统 HDR 关闭而回退时 force_sdr=False，沿用系统 SDR 目标。
+        """
+        sdr_trc = self._sdr_target_trc(system_hdr)
+        self._facade._set_mpv_string(
+            'target-colorspace-hint', 'no' if force_sdr else 'yes')
+        self._facade._set_mpv_string('tone-mapping', 'auto')
+        self._facade._set_mpv_string(
+            'hdr-compute-peak', 'yes' if is_hlg else 'no')
+        self._facade._set_mpv_string('target-prim', 'bt.709')
         self._facade._set_mpv_string('target-trc', sdr_trc)
-        # target-peak=100：显式 SDR 电平，确保 swapchain 切换到 sRGB 色彩空间
         self._facade._set_mpv_string('target-peak', '100')
         self._facade._set_mpv_string('gamut-mapping-mode', 'perceptual')
         self._facade.logger.info(
-            f"HDR配置: tonemap → SDR (bt.2020/{sdr_trc}, target-peak=100, "
-            f"gamut=perceptual, desat={desat}{' [HLG]' if is_hlg else ''})"
-        )
+            f"HDR配置: 色调映射 → SDR (bt.709/{sdr_trc}, target-peak=100, "
+            f"gamut=perceptual, hint={'no' if force_sdr else 'yes'})")
+
+    def _apply_disable_config(self, system_hdr=None):
+        """强制 SDR：关闭 colorspace hint 并固定 bt.709/SDR 目标，用 clip 曲线。"""
+        sdr_trc = self._sdr_target_trc(system_hdr)
+        self._facade._set_mpv_string('target-colorspace-hint', 'no')
+        self._facade._set_mpv_string('tone-mapping', 'clip')
+        self._facade._set_mpv_string('hdr-compute-peak', 'no')
+        self._facade._set_mpv_string('target-prim', 'bt.709')
+        self._facade._set_mpv_string('target-trc', sdr_trc)
+        self._facade._set_mpv_string('target-peak', '100')
+        self._facade._set_mpv_string('gamut-mapping-mode', 'clip')
+        self._facade.logger.info(
+            f"HDR配置: 强制SDR (bt.709/{sdr_trc}, target-peak=100, clip, hint=no)")
 
     def _apply_wcg_config(self):
-        """WCG 视频（宽色域 SDR）配置：保持 bt.2020 色域，SDR 亮度。
-
-        WCG 视频是 BT.2020 色域但 SDR 亮度（gamma=srgb/bt.1886），
-        需要保持 bt.2020 色域，避免被压缩到 bt.709 导致偏色。
-        使用 gamut-mapping-mode=relative 让显示器/Windows 合成器处理色域映射。
-
-        关键：必须显式重置所有 tone-mapping 参数，避免从 HDR10 passthrough
-        切换时残留 target-peak=10000 / tone-mapping=clip 等参数导致画面发灰。
-        """
-        sdr_trc = self._facade._get_sdr_target_trc()
-        # 显式设置所有参数（不用空字符串重置，避免 mpv 默认值不确定性）
-        # tone-mapping=auto：与 SDR(_reset_hdr_params) 和 HLG passthrough 统一，
-        # 避免 clip 触发不同的渲染管线路径（SDR→WCG 切换时 clip 可能导致色彩异常）
+        """WCG 视频（宽色域 SDR）：保持 bt.2020 色域，SDR 亮度。"""
+        sdr_trc = self._sdr_target_trc(None)
+        self._facade._set_mpv_string('target-colorspace-hint', self._sdr_hint_value())
         self._facade._set_mpv_string('tone-mapping', 'auto')
-        self._facade._set_mpv_string('tone-mapping-mode', 'auto')
-        self._facade._set_mpv_string('tone-mapping-desat', '0')
         self._facade._set_mpv_string('hdr-compute-peak', 'no')
-        self._facade._set_mpv_string('hdr10-opt', 'no')
         self._facade._set_mpv_string('target-prim', 'bt.2020')
         self._facade._set_mpv_string('target-trc', sdr_trc)
-        # target-peak=100：显式 SDR 电平，确保 target-colorspace-hint 将 swapchain
-        # 切换到 sRGB 色彩空间。target-peak='' 时可能残留上次 HDR 视频的 PQ swapchain，
-        # 导致 SDR 内容在 PQ swapchain 上显示为极暗画面。
         self._facade._set_mpv_string('target-peak', '100')
         self._facade._set_mpv_string('gamut-mapping-mode', 'relative')
-        self._facade.logger.info(f"HDR配置: WCG → 保持bt.2020色域 (bt.2020/{sdr_trc}, target-peak=100, gamut=relative)")
+        self._facade.logger.info(
+            f"HDR配置: WCG → 保持bt.2020色域 (bt.2020/{sdr_trc}, target-peak=100)")
 
-    def _get_sdr_target_trc(self):
-        """获取当前系统下 SDR 输出的正确 target-trc。
+    def _sdr_target_trc(self, system_hdr=None) -> str:
+        """SDR 输出的 target-trc。
 
-        Windows HDR 模式下桌面运行在 sRGB 线性空间，
-        SDR 内容（包括 tonemap 后的 HDR 内容）需用 srgb gamma
-        才能正确显示，否则会偏灰偏暗。
+        Windows HDR 模式下桌面运行在 sRGB 线性空间，SDR 内容需用 srgb gamma；
+        SDR 桌面则用 bt.1886。
         """
         try:
             if is_windows():
-                from utils.hdr_detect import is_windows_hdr_enabled
-                if is_windows_hdr_enabled():
-                    return 'srgb'
+                if system_hdr is None:
+                    from utils.hdr_detect import is_windows_hdr_enabled
+                    system_hdr = is_windows_hdr_enabled(self._hdr_screen_name())
+                return 'srgb' if system_hdr else 'bt.1886'
         except Exception as _e:
-            logger.debug(f"unexpected error: {_e}")
+            logger.debug(f"获取SDR目标gamma失败: {_e}")
         return 'bt.1886'
 
+    def _get_sdr_target_trc(self):
+        return self._sdr_target_trc(None)
+
     def _reset_hdr_params(self):
-        # 非 HDR 视频：显式指定 SDR 目标，确保 bt.2020 色域（WCG）视频能正确映射到 bt.709
-        # d3d11-output-csp 和 target-colorspace-hint 已在初始化时设置
-        # 重置 target-peak：passthrough/scrgb 模式设置了 10000，切换到非 HDR 视频时必须重置。
-        # 重置 gamut-mapping-mode：passthrough/scrgb 设置了 relative，非 HDR 视频不需要。
-        sdr_trc = self._facade._get_sdr_target_trc()
-        self._facade._set_mpv_string('tone-mapping', '')
-        self._facade._set_mpv_string('tone-mapping-mode', '')
-        self._facade._set_mpv_string('tone-mapping-desat', '')
-        self._facade._set_mpv_string('hdr-compute-peak', '')
-        self._facade._set_mpv_string('hdr10-opt', 'no')
+        """非 HDR 视频：回到 SDR 默认值（全部使用合法值，不用空串）。"""
+        sdr_trc = self._sdr_target_trc(None)
+        self._facade._set_mpv_string('target-colorspace-hint', self._sdr_hint_value())
+        self._facade._set_mpv_string('tone-mapping', 'auto')
+        self._facade._set_mpv_string('hdr-compute-peak', 'auto')
         self._facade._set_mpv_string('target-prim', 'bt.709')
         self._facade._set_mpv_string('target-trc', sdr_trc)
-        # target-peak=100：显式 SDR 电平，确保 swapchain 切换到 sRGB 色彩空间
         self._facade._set_mpv_string('target-peak', '100')
-        self._facade._set_mpv_string('gamut-mapping-mode', '')
-        self._facade.logger.info(f"HDR配置: 已重置为SDR默认值 (bt.709/{sdr_trc}, target-peak=100)")
+        self._facade._set_mpv_string('gamut-mapping-mode', 'auto')
+        self._facade.logger.info(
+            f"HDR配置: 已重置为SDR默认值 (bt.709/{sdr_trc}, target-peak=100)")
 
+    @staticmethod
     def detect_hdr_type(colormatrix: str, gamma: str, sig_peak: float,
                         video_format: str = '', primaries: str = '') -> str:
         """统一 HDR 类型检测逻辑（PC/Android/Web 三端共用此算法）。
@@ -300,37 +309,22 @@ class MpvHdr:
         - WCG（宽色域 SDR）：BT.2020 色域 + SDR 亮度，需要保持广色域避免压缩偏色。
         - sig_peak 用于辅助判断（mpv 中 1.0≈SDR 白电平，HDR 内容通常 >1.0），
           但不作为 HDR10/HDR10+ 的区分依据。
-
-        Args:
-            colormatrix: 色彩矩阵（如 bt.709/bt.2020），来自 video-params/colormatrix
-            gamma: 传输特性（如 pq/smpte2084/hlg/arib-std-b67/srgb/bt.1886）
-            sig_peak: 信号峰值（mpv video-params/sig-peak，1.0≈SDR白）
-            video_format: 保留参数（播放期不再据此判定 DV）
-            primaries: 色彩原色（如 bt.709/bt.2020），来自 video-params/primaries
         """
         g = (gamma or '').lower()
         cm = (colormatrix or '').lower()
         prim = (primaries or '').lower()
 
-        # PQ 视频（HDR10 / HDR10+）：SMPTE ST 2084 (PQ) EOTF
         is_pq = 'pq' in g or 'smpte2084' in g
-        # HLG 视频：ARIB STD-B67 (HLG)
         is_hlg = 'hlg' in g or 'arib-std-b67' in g
-        # BT.2020 色域检测（从 colormatrix 或 primaries 判断）
         is_bt2020 = ('bt.2020' in cm or 'bt2020' in cm or 'bt.2100' in cm or
                      'bt.2020' in prim or 'bt2020' in prim or 'bt.2100' in prim)
 
-        # PQ → HDR10（运行时无法区分 HDR10+，hdr10-opt=yes 会自动传递动态元数据）
         if is_pq:
             return 'HDR10'
-        # HLG
         if is_hlg:
             return 'HLG'
-        # WCG：BT.2020 色域 + SDR 亮度（非 HDR），sig_peak 辅助排除极少数高亮度 SDR
         if is_bt2020 and sig_peak <= 1.0:
             return 'WCG'
-        # BT.2020 + 高 sig_peak 但 gamma 未标记 → 可能是未正确标记的 HLG
         if is_bt2020 and sig_peak > 1.0:
             return 'HLG'
         return 'SDR'
-

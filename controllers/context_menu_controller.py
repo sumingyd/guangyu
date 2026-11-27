@@ -1055,9 +1055,11 @@ class ContextMenuController:
         # 当前模式
         current_mode = 'disable'
         if pc and hasattr(pc, '_playback_settings'):
-            current_mode = pc._playback_settings.get('hdr_output_mode', 'disable')
+            from services.mpv_hdr import normalize_hdr_mode
+            current_mode = normalize_hdr_mode(
+                pc._playback_settings.get('hdr_output_mode', 'disable'))
 
-        # 5 个模式选项
+        # 3 个模式选项（直通 / 色调映射 / 强制 SDR）
         for mode, key in self._facade._HDR_MODES:
             label = tr(key, mode)
             act = hdr_menu.addAction(label, lambda checked=False, m=mode: self._facade._set_hdr_mode(m))

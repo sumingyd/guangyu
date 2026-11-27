@@ -26,10 +26,8 @@ class MediaController:
     # 右键菜单 HDR 输出模式 (mode, i18n_key)，与设置窗口 hdr_items 保持一致
     _HDR_MODES = [
         ('disable', 'hdr_disable'),
-        ('auto', 'hdr_auto'),
-        ('scrgb', 'hdr_scrgb'),
-        ('passthrough', 'hdr_passthrough'),
         ('tonemap', 'hdr_tonemap'),
+        ('passthrough', 'hdr_passthrough'),
     ]
 
     def __init__(self, main_window: PlaybackProtocol):

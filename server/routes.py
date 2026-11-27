@@ -2003,9 +2003,12 @@ async def handle_player_hdr(request):
     except (ValueError, TypeError):
         body = {}
     mode = (body or {}).get('mode', '').strip().lower()
+    # 兼容旧客户端传入的 auto/scrgb（历史实现与 passthrough 相同）
     valid_modes = {'disable', 'tonemap', 'passthrough', 'scrgb', 'auto'}
     if mode not in valid_modes:
-        return _json_error(f'无效的 HDR 模式: {mode}，支持: {", ".join(sorted(valid_modes))}')
+        return _json_error(f'无效的 HDR 模式: {mode}，支持: disable, tonemap, passthrough')
+    from services.mpv_hdr import normalize_hdr_mode
+    mode = normalize_hdr_mode(mode)
     pc = _get_player()
     if not pc:
         return _json_error('播放器未初始化', 503)

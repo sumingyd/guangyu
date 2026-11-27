@@ -926,13 +926,12 @@ class SettingsFileOperations:
         hdr_combo = QComboBox()
         hdr_combo.setObjectName("hdr_output_mode_combo")
         hdr_items = [
-            ('disable', tr("hdr_disable", "Disable (Force SDR Output)")),
-            ('auto', tr("hdr_auto", "Auto (passthrough when system HDR is on)")),
-            ('scrgb', tr("hdr_scrgb", "PQ Passthrough (same as passthrough)")),
-            ('passthrough', tr("hdr_passthrough", "PQ Passthrough (Windows HDR OFF)")),
+            ('disable', tr("hdr_disable", "Force SDR (no highlight compression)")),
             ('tonemap', tr("hdr_tonemap", "Tone Map to SDR")),
+            ('passthrough', tr("hdr_passthrough", "Passthrough (source metadata, requires system HDR)")),
         ]
-        current_hdr = playback_settings.get('hdr_output_mode', 'disable')
+        from services.mpv_hdr import normalize_hdr_mode
+        current_hdr = normalize_hdr_mode(playback_settings.get('hdr_output_mode', 'disable'))
         selected_hdr_idx = 0
         for i, (val, label) in enumerate(hdr_items):
             hdr_combo.addItem(label, val)
