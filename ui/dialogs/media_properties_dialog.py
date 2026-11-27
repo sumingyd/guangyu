@@ -208,7 +208,7 @@ class MediaPropertiesDialog(FloatingDialog):
         chip_border = self._rgba(accent, 0.42)
 
         self.setStyleSheet(AppStyles.popup_dialog_style() + f"""
-            QLabel[role="title"] {{ color: {text_color}; font-size: 15px; font-weight: 600; }}
+            QLabel[role="title"] {{ color: {text_color}; font-size: 17px; font-weight: 600; }}
             QLabel[role="hint"] {{ color: {label_color}; font-size: 11px; }}
             QLabel[role="label"] {{ color: {label_color}; font-size: 11px; }}
             QLabel[role="label"][zebra="true"] {{ background: {zebra}; border-radius: 3px; }}
@@ -247,6 +247,9 @@ class MediaPropertiesDialog(FloatingDialog):
     def _repolish_children(self):
         style = self.style()
         widgets = list(self._labels.values()) + list(self._chips.values())
+        title_label = getattr(self, '_title_label', None)
+        if title_label is not None:
+            widgets.append(title_label)
         content = getattr(self, '_content', None)
         if content is not None:
             widgets.append(content)
@@ -316,22 +319,39 @@ class MediaPropertiesDialog(FloatingDialog):
         footer.addWidget(close_btn)
         outer.addLayout(footer)
 
-    def _build_header(self, tr) -> QHBoxLayout:
-        header = QHBoxLayout()
-        header.setSpacing(6)
-        title = QLabel(tr('properties_title', '属性'))
-        title.setProperty('role', 'title')
+    def _build_header(self, tr) -> QVBoxLayout:
+        header = QVBoxLayout()
+        header.setSpacing(4)
+
+        # 媒体名放在最醒目的位置：这个窗口常被单独截图分享，标题必须能说明「哪个台/在放什么」
+        title = _ElidedValueLabel(tr('properties_header_fallback', '媒体属性'), role='title')
+        title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        title.setToolTip(tr('properties_header_fallback', '媒体属性'))
+        self._title_label = title
         header.addWidget(title)
 
-        chip_widths = {'mode': 56, 'resolution': 108, 'fps': 72, 'hwdec': 60, 'hdr': 66}
+        chips = QHBoxLayout()
+        chips.setSpacing(6)
+        # 模式胶囊按当前语言里最长的标签定宽（如英文 Catch-up/Timeshift），
+        # 不按当前值定宽，切换模式时不会带着整排胶囊左右跳。
+        mode_texts = (
+            tr('properties_live', '直播'),
+            tr('properties_catchup', '回看'),
+            tr('properties_timeshift', '时移'),
+            tr('properties_vod', '点播'),
+        )
+        mode_width = max(56, max(self._fm.horizontalAdvance(t) for t in mode_texts) + 26)
+        chip_widths = {'mode': mode_width, 'resolution': 108, 'fps': 72, 'hwdec': 60, 'hdr': 66}
         for key, default in (('mode', '直播'), ('resolution', '—'), ('fps', '—'),
                              ('hwdec', '—'), ('hdr', 'SDR')):
             chip = _ElidedValueLabel(default, width=chip_widths[key], role='chip')
             chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
             chip.setFixedHeight(self._fm.height() + 10)
             self._chips[key] = chip
-            header.addWidget(chip)
-        header.addStretch()
+            chips.addWidget(chip)
+        chips.addStretch()
+        header.addLayout(chips)
 
         self._progress = _ProgressLine()
         return header
@@ -448,8 +468,12 @@ class MediaPropertiesDialog(FloatingDialog):
 
         duration_ms = self._total_time(pc)
         position_ms = self._current_time(pc)
+        mode = self._play_mode(duration_ms)
+        live = (mode == 'live')
 
         # ---- 播放信息 ----
+        self._set_title(self._media_name(pc, na))
+
         w = info.get('width', 0) or 0
         h = info.get('height', 0) or 0
         resolution = f"{w}x{h}" if w > 0 and h > 0 else na
@@ -469,17 +493,20 @@ class MediaPropertiesDialog(FloatingDialog):
         rotate = info.get('video_rotate', 0) or 0
         self._set('rotation', f"{int(rotate)}°")
 
-        if duration_ms > 0:
-            self._set('duration', self._fmt_duration(duration_ms) or na)
-        else:
+        if live:
             self._set('duration', tr('properties_live', '直播'))
+        else:
+            self._set('duration', self._fmt_duration(duration_ms) or na)
         self._set('position', self._fmt_duration(position_ms) or na)
-        if duration_ms > 0 and position_ms >= 0:
+        if not live and duration_ms > 0 and position_ms >= 0:
             percent = max(0, min(100, round(position_ms / duration_ms * 100)))
             self._set('progress', f"{percent}%")
             self._set_progress(percent)
-        else:
+        elif live:
             self._set('progress', tr('properties_live', '直播'))
+            self._set_progress(0)
+        else:
+            self._set('progress', na)
             self._set_progress(0)
 
         # ---- 视频 ----
@@ -598,15 +625,20 @@ class MediaPropertiesDialog(FloatingDialog):
                             or self._read_string(pc, 'metadata/by-key/ServiceProvider'))
         self._set('service_provider', service_provider or na)
 
-        media_title = self._read_string(pc, 'media-title')
+        media_title = self._clean_title(self._read_string(pc, 'media-title'))
         self._set('media_title', media_title or na)
 
-        self._update_chips(tr, duration_ms, resolution, fps, hwdec, gamma)
+        self._update_chips(tr, mode, resolution, fps, hwdec, gamma)
 
     # ---------- 顶部状态徽章 ----------
-    def _update_chips(self, tr, duration_ms, resolution, fps, hwdec, gamma):
-        self._set_chip('mode', tr('properties_live', '直播') if duration_ms <= 0
-                       else tr('properties_vod', '点播'))
+    def _update_chips(self, tr, mode, resolution, fps, hwdec, gamma):
+        mode_labels = {
+            'live': tr('properties_live', '直播'),
+            'catchup': tr('properties_catchup', '回看'),
+            'timeshift': tr('properties_timeshift', '时移'),
+            'vod': tr('properties_vod', '点播'),
+        }
+        self._set_chip('mode', mode_labels.get(mode, '—'))
         self._set_chip('resolution', resolution)
         self._set_chip('fps', f"{fps:.2f} fps" if fps > 0 else '—')
         if not hwdec:
@@ -614,7 +646,8 @@ class MediaPropertiesDialog(FloatingDialog):
         elif hwdec == 'no':
             self._set_chip('hwdec', tr('properties_hwdec_sw', '软解'))
         else:
-            self._set_chip('hwdec', tr('properties_hwdec_sw', '硬解'))
+            # 胶囊只放短标签，具体解码器名放在下方「解码方式」行，两处同源（hwdec-current）
+            self._set_chip('hwdec', tr('properties_hwdec_hw_short', '硬解'))
         if gamma == 'pq':
             self._set_chip('hdr', 'HDR10')
         elif gamma == 'hlg':
@@ -710,6 +743,91 @@ class MediaPropertiesDialog(FloatingDialog):
         except (ValueError, TypeError):
             return 0.0
 
+    def _play_mode(self, duration_ms: int) -> str:
+        """直播/点播以播放状态为准，duration 只作兜底。
+
+        直播 TS/HLS 的 mpv duration 可能报出缓存窗口长度（如几分钟），
+        单看 duration > 0 会把直播误判成点播，所以不能拿 duration 当主依据。
+        """
+        play_state = getattr(self.window, 'play_state', None)
+        if play_state is not None:
+            try:
+                if getattr(play_state, 'is_catchup', False):
+                    return 'catchup'
+                if getattr(play_state, 'is_timeshift', False):
+                    return 'timeshift'
+            except Exception as e:
+                logger.debug(f"读取播放状态失败: {e}")
+
+        # 本地视频也走频道播放流程（play_state 会被置为直播），必须单独识别成点播；
+        # 这里先看协议，避免 http://host/live.ts 这类网络直播因 .ts 后缀被误当本地文件。
+        channel = getattr(self.window, 'current_channel', None)
+        if isinstance(channel, dict) and self._is_local_media_url(channel.get('url', '')):
+            return 'vod'
+
+        if play_state is not None:
+            try:
+                if getattr(play_state, 'is_live', False):
+                    return 'live'
+            except Exception as e:
+                logger.debug(f"读取播放状态失败: {e}")
+        return 'live' if duration_ms <= 0 else 'vod'
+
+    @staticmethod
+    def _is_local_media_url(url: str) -> bool:
+        """本地媒体文件判定：网络协议一律不算本地，即使路径以 .ts/.mp4 结尾。"""
+        value = (url or '').strip()
+        if not value:
+            return False
+        low = value.lower()
+        if low.startswith('file://'):
+            return True
+        if low.startswith(('http://', 'https://', 'rtmp://', 'rtsp://', 'rtp://',
+                           'udp://', 'srt://', 'rist://', 'hls://', 'dash://', 'mms://')):
+            return False
+        return bool(re.match(r'^[a-z]:[\\/]', low)) or low.startswith(('/', '\\\\'))
+
+    def _media_name(self, pc, na) -> str:
+        """当前媒体名：直播/回看用频道名，其次流内的 service_name，最后 mpv 标题/文件名。"""
+        channel = getattr(self.window, 'current_channel', None)
+        if isinstance(channel, dict):
+            name = (channel.get('name') or '').strip()
+            if name:
+                return name
+        service_name = (self._read_string(pc, 'metadata/by-key/service_name')
+                        or self._read_string(pc, 'metadata/by-key/ServiceName')).strip()
+        if service_name:
+            return service_name
+        title = self._clean_title(self._read_string(pc, 'media-title'))
+        if title and not self._is_generic_stream_name(title):
+            return title
+        return na
+
+    @staticmethod
+    def _is_generic_stream_name(name: str) -> bool:
+        """index.m3u8 / 1.ts 这类文件名对用户没有意义，不作为媒体名显示。"""
+        value = (name or '').strip().lower()
+        if not value:
+            return True
+        generic = {
+            'index.m3u8', 'playlist.m3u8', 'master.m3u8', 'live.m3u8', 'stream.m3u8',
+            'chunklist.m3u8', 'index.ts', 'live.ts', 'stream.ts', 'playlist.ts',
+        }
+        if value in generic:
+            return True
+        return re.fullmatch(r'\d+(\.\w+)?', value) is not None
+
+    @staticmethod
+    def _clean_title(title: str) -> str:
+        """mpv 对网络流的 media-title 可能就是 URL，只保留文件名部分，避免暴露完整地址。"""
+        value = (title or '').strip()
+        if not value:
+            return ''
+        if '://' in value:
+            path = value.split('?', 1)[0].split('#', 1)[0].rstrip('/')
+            value = path.rsplit('/', 1)[-1]
+        return value
+
     def _format_channels(self, info, tr, na) -> str:
         layout = (info.get('audio_layout', '') or '').lower()
         if layout == 'stereo':
@@ -748,6 +866,7 @@ class MediaPropertiesDialog(FloatingDialog):
         absent = tr('properties_value_absent', '—')
         self._absent_mark = absent
         self._set_hint(tr('properties_no_media', '当前没有播放中的媒体'))
+        self._set_title('')
         for key in list(self._labels):
             if not key.endswith('__label'):
                 self._set(key, absent)
@@ -761,6 +880,15 @@ class MediaPropertiesDialog(FloatingDialog):
     def _set_hint(self, text: str):
         try:
             self._hint.setText(text)
+        except RuntimeError:
+            pass
+
+    def _set_title(self, name: str):
+        tr = self.window.language_manager.tr
+        absent = getattr(self, '_absent_mark', '—')
+        title = name if name and name != absent else tr('properties_header_fallback', '媒体属性')
+        try:
+            self._title_label.set_full_text(title)
         except RuntimeError:
             pass
 
