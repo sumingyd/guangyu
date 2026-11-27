@@ -29,7 +29,7 @@ class ResumeListDialog(FloatingDialog):
     """
 
     def __init__(self, main_window, parent=None):
-        super().__init__(parent, frameless=False, stay_on_top=False)
+        super().__init__(parent or main_window, frameless=True, stay_on_top=False)
         self.window = main_window
         tr = main_window.language_manager.tr
         self.setWindowTitle(tr('resume_list_title', 'Resume Positions'))

@@ -872,12 +872,22 @@ class FloatingDialog(_GlassSurfaceMixin, QDialog):
             from ui.styles import AppStyles
             if AppStyles.is_glass_style() and not self._dwm_blur_enabled:
                 self._try_enable_macos_blur()
+            self._apply_desktop_window_hooks()
             return
         if not is_windows():
+            self._apply_desktop_window_hooks()
             return
         # Windows: 默认隐藏任务栏图标（与 FloatingDockWidget.show 行为一致）；
         # 需要独立任务栏入口的窗口（如扫描整理）通过 _allow_taskbar 显式放开。
         self._apply_taskbar_visibility()
+        self._apply_desktop_window_hooks()
+
+    def _apply_desktop_window_hooks(self):
+        """独立工作窗口的置顶跟随与激活回前台；普通浮层不做任何事。"""
+        if getattr(self, '_allow_taskbar', False):
+            self._sync_topmost_from_main()
+        if getattr(self, '_restore_on_app_activate', False):
+            self._install_activation_restore()
 
     def _apply_taskbar_visibility(self):
         if not is_windows():
@@ -888,6 +898,65 @@ class FloatingDialog(_GlassSurfaceMixin, QDialog):
             else:
                 _hide_from_taskbar(self)
         except Exception:
+            pass
+
+    # 子类显式打开：作为独立工作窗口出现在任务栏/Alt+Tab，并在切回程序时回到前台。
+    # 默认关闭，保持浮层依附主窗口，不往任务栏里塞入口。
+    _allow_taskbar = False
+    _restore_on_app_activate = False
+
+    def _main_window_ref(self):
+        for attr in ('application', 'window'):
+            candidate = getattr(self, attr, None)
+            if isinstance(candidate, QtWidgets.QWidget):
+                return candidate
+        return self.parentWidget()
+
+    def _sync_topmost_from_main(self):
+        """跟随主窗口置顶状态：主窗口置顶时本窗口也置顶，否则保持普通层级。"""
+        try:
+            main_win = self._main_window_ref()
+            want = bool(
+                main_win is not None
+                and (main_win.windowFlags() & QtCore.Qt.WindowType.WindowStaysOnTopHint)
+            )
+            if _set_native_topmost(self, want):
+                return
+            flags = self.windowFlags()
+            has = bool(flags & QtCore.Qt.WindowType.WindowStaysOnTopHint)
+            if has == want:
+                return
+            geo = self.geometry()
+            visible = self.isVisible()
+            if want:
+                flags |= QtCore.Qt.WindowType.WindowStaysOnTopHint
+            else:
+                flags &= ~QtCore.Qt.WindowType.WindowStaysOnTopHint
+            self.setWindowFlags(flags)
+            if visible:
+                self.show()
+                self.setGeometry(geo)
+            self._apply_taskbar_visibility()
+        except Exception as e:
+            logger.debug(f"_sync_topmost_from_main: {e}")
+
+    def _install_activation_restore(self):
+        """从其它程序切回本程序时，把本窗口带回前台（只抬层级，不抢键盘焦点）。"""
+        if getattr(self, '_activation_restore_installed', False):
+            return
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return
+        app.applicationStateChanged.connect(self._on_app_state_changed)
+        self._activation_restore_installed = True
+
+    def _on_app_state_changed(self, state):
+        try:
+            if state != QtCore.Qt.ApplicationState.ApplicationActive:
+                return
+            if getattr(self, '_restore_on_app_activate', False) and self.isVisible() and not self.isMinimized():
+                self.raise_()
+        except RuntimeError:
             pass
 
     def _fix_first_paint(self):

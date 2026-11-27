@@ -170,7 +170,7 @@ class SubtitleStyleDialog(FloatingDialog):
     style_saved = Signal(dict)
 
     def __init__(self, main_window, parent=None):
-        super().__init__(parent, frameless=False, stay_on_top=False)
+        super().__init__(parent or main_window, frameless=True, stay_on_top=False)
         self.window = main_window
         tr = main_window.language_manager.tr
         self.setWindowTitle(tr('subtitle_style_title', '字幕样式'))
@@ -634,7 +634,7 @@ class SubtitleDownloadDialog(FloatingDialog):
     subtitle_loaded = Signal(str)  # 下载完成的字幕路径
 
     def __init__(self, main_window, video_file_path: str = "", parent=None):
-        super().__init__(parent, frameless=False, stay_on_top=False)
+        super().__init__(parent or main_window, frameless=True, stay_on_top=False)
         self.window = main_window
         self._video_path = video_file_path
         tr = main_window.language_manager.tr

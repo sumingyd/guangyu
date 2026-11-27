@@ -235,13 +235,15 @@ class WindowController:
             if panel.isVisible():
                 panel.show()
                 self._reapply_macos_panel_blur(panel)
-        # 扫描整理是独立顶层窗口，同样跟随置顶状态，否则会被置顶的主窗口压住
-        scan_dialog = getattr(self.window, '_scan_dialog', None)
-        if scan_dialog is not None:
+        # 独立顶层窗口（扫描整理/属性）同样跟随置顶状态，否则会被置顶的主窗口压住
+        for attr in ('_scan_dialog', '_media_properties_dialog'):
+            dialog = getattr(self.window, attr, None)
+            if dialog is None:
+                continue
             try:
-                scan_dialog._sync_topmost_from_main()
+                dialog._sync_topmost_from_main()
             except Exception as e:
-                logger.debug(f"同步扫描窗口置顶状态失败: {e}")
+                logger.debug(f"同步独立窗口置顶状态失败({attr}): {e}")
 
     def _reapply_macos_panel_blur(self, panel):
         """面板 setWindowFlags 重建窗口后会丢掉挂载的 NSVisualEffectView，重新挂一次。"""

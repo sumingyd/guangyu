@@ -11,7 +11,7 @@ class ReminderManagerDialog(FloatingDialog):
     reminder_removed = Signal(str)
 
     def __init__(self, main_window, parent=None):
-        super().__init__(parent, frameless=True, stay_on_top=False)
+        super().__init__(parent or main_window, frameless=True, stay_on_top=False)
         self.window = main_window
         tr = main_window.language_manager.tr
         self._title_text = tr('reminder_manager', '提醒管理')

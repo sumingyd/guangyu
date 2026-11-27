@@ -75,7 +75,7 @@ class UnifiedSearchDialog(FloatingDialog):
     epg_program_selected = Signal(dict, dict)
 
     def __init__(self, main_window, parent=None, search_epg=True, search_channel=True):
-        super().__init__(parent, frameless=True, stay_on_top=False)
+        super().__init__(parent or main_window, frameless=True, stay_on_top=False)
         self.window = main_window
         tr = main_window.language_manager.tr
         self._title_text = tr('search', '搜索')

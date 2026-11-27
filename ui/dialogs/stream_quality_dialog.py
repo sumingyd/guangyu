@@ -28,7 +28,7 @@ class StreamQualityDialog(FloatingDialog):
     """流质量检测对话框（实时刷新，每秒一次）"""
 
     def __init__(self, main_window, parent=None):
-        super().__init__(parent, frameless=False, stay_on_top=False)
+        super().__init__(parent or main_window, frameless=True, stay_on_top=False)
         self.window = main_window
         tr = main_window.language_manager.tr
         self.setWindowTitle(tr('stream_quality_title', '流质量检测'))
