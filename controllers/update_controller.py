@@ -7,6 +7,7 @@ import asyncio
 import os
 import re
 import shutil
+import socket
 import sys
 import platform
 import subprocess
@@ -25,6 +26,65 @@ REPO_SLUG = "sumingyd/guangyu"
 GITHUB_LATEST_API = f"https://api.github.com/repos/{REPO_SLUG}/releases/latest"
 RELEASE_PAGE_URL = f"https://github.com/{REPO_SLUG}/releases/latest"
 BACKUP_SUFFIX = ".old"
+
+# 更新包下载超时（秒）。Windows 包约 240MB，旧的 total=600 隐含要求平均
+# ≥400KB/s：实测同一网络下 EPG（6MB）都要重试，600s 会把正常但偏慢的线路
+# 直接判成失败（日志里两次都恰好卡在 600s 后报「下载失败: 」）。
+# 因此不设整包总时长上限，只保留"连不上"和"连上后长时间没数据"两类超时，
+# 由用户取消或读停滞来终止，避免慢线路被误判。
+DOWNLOAD_CONNECT_TIMEOUT_S = 20
+DOWNLOAD_READ_STALL_TIMEOUT_S = 60
+
+# 下载异常类型 → 用户能看懂的原因（只做归类，不影响日志里的原始类型和文本）
+_DOWNLOAD_ERROR_KIND_BY_NAME = {
+    'ClientConnectorError': '连接服务器失败',
+    'ClientConnectorCertificateError': '证书校验失败',
+    'ClientConnectorSSLError': 'TLS 握手失败',
+    'ServerDisconnectedError': '服务器断开连接',
+    'ClientPayloadError': '响应数据不完整',
+    'ClientResponseError': 'HTTP 响应异常',
+    'ClientOSError': '网络读写失败',
+    'InvalidURL': '下载地址无效',
+    'TooManyRedirects': '重定向次数过多',
+}
+
+
+def build_download_timeout():
+    """构造更新包下载的超时配置。
+
+    total=None 表示不限整包时长；sock_connect/sock_read 负责在
+    连不上（默认 20s）或长时间收不到数据（默认 60s）时快速失败。
+    """
+    import aiohttp
+    return aiohttp.ClientTimeout(
+        total=None,
+        connect=DOWNLOAD_CONNECT_TIMEOUT_S,
+        sock_read=DOWNLOAD_READ_STALL_TIMEOUT_S,
+    )
+
+
+def describe_download_exception(exc, phase='download'):
+    """把下载异常整理成可区分原因的日志文本。
+
+    必须带上异常类名与 repr 兜底：asyncio.TimeoutError 等异常的 str()
+    是空串，旧写法只记录 str(e) 才会出现「下载失败: 」这种无信息日志。
+    """
+    name = type(exc).__name__
+    detail = str(exc).strip() or repr(exc)
+    os_error = getattr(exc, 'os_error', None)
+
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)) or isinstance(
+            os_error, (TimeoutError, asyncio.TimeoutError)):
+        kind = '下载超时'
+    elif isinstance(exc, ConnectionRefusedError) or isinstance(os_error, ConnectionRefusedError):
+        kind = '连接被拒绝'
+    elif isinstance(exc, socket.gaierror) or isinstance(os_error, socket.gaierror):
+        kind = '域名解析失败'
+    elif isinstance(exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+        kind = '连接被中断'
+    else:
+        kind = _DOWNLOAD_ERROR_KIND_BY_NAME.get(name, '下载失败')
+    return f"{kind}({name}) phase={phase}: {detail}"
 
 
 def _get_platform_asset_name(system=None, machine=None):
@@ -350,6 +410,8 @@ class UpdateDownloadThread(QThread):
         super().__init__(parent)
         self._url = url
         self._cancel = False
+        # 当前阶段（sha256/connect/body），异常日志里用于区分失败位置
+        self._phase = 'download'
 
     def run(self):
         from core.language_manager import LanguageManager
@@ -360,8 +422,9 @@ class UpdateDownloadThread(QThread):
             asyncio.set_event_loop(loop)
             loop.run_until_complete(self._download())
         except Exception as e:
-            logger.error(f"下载失败: {e}")
-            self.download_error.emit(tr('download_failed', '下载失败'))
+            detail = describe_download_exception(e, self._phase)
+            logger.error(f"下载失败: {detail}")
+            self.download_error.emit(f"{tr('download_failed', '下载失败')}（{detail}）")
         finally:
             try:
                 if loop:
@@ -387,6 +450,7 @@ class UpdateDownloadThread(QThread):
             # 优先从 Release 下载 SHA256 校验文件
             expected_sha256 = None
             try:
+                self._phase = 'sha256'
                 sha256_url = target_url + '.sha256'
                 async with session.get(
                     sha256_url,
@@ -402,13 +466,19 @@ class UpdateDownloadThread(QThread):
                         else:
                             expected_sha256 = None
             except Exception as e:
-                logger.warning(f"获取 SHA256 校验值失败，将跳过完整性校验: {e}")
+                logger.warning(
+                    f"获取 SHA256 校验值失败，将跳过完整性校验: "
+                    f"{describe_download_exception(e, 'sha256')}"
+                )
 
-            async with session.get(
+            self._phase = 'connect'
+            response = await session.get(
                 target_url,
                 headers={'User-Agent': APP_USER_AGENT},
-                timeout=aiohttp.ClientTimeout(total=600)
-            ) as response:
+                timeout=build_download_timeout()
+            )
+            async with response:
+                self._phase = 'body'
                 if response.status != 200:
                     logger.error(f"下载失败: HTTP {response.status}")
                     self.download_error.emit(tr('download_failed', '下载失败'))

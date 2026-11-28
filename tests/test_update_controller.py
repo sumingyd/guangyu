@@ -1,5 +1,6 @@
 """更新器纯逻辑单测：产物命名、安装目标推导、版本比较、替换回滚。"""
 
+import asyncio
 import os
 import sys
 from unittest.mock import MagicMock
@@ -157,3 +158,78 @@ def test_pending_download_without_asset_shows_message():
     assert controller._update_available is True
     assert controller._download_thread is None
     controller._show_no_package_message.assert_called_once()
+
+
+def test_download_timeout_allows_slow_lines():
+    """更新包约 240MB，600s 总超时隐含要求 ≥400KB/s，会误杀慢线路。"""
+    timeout = uc.build_download_timeout()
+
+    assert timeout.total is None  # 不再限制整包时长
+    assert timeout.connect == uc.DOWNLOAD_CONNECT_TIMEOUT_S
+    assert timeout.sock_read == uc.DOWNLOAD_READ_STALL_TIMEOUT_S
+    assert uc.DOWNLOAD_CONNECT_TIMEOUT_S > 0
+    assert uc.DOWNLOAD_READ_STALL_TIMEOUT_S >= 30  # 足以容忍短暂掉速
+
+
+def test_describe_download_exception_distinguishes_timeout_and_refused():
+    timeout_detail = uc.describe_download_exception(asyncio.TimeoutError(), 'body')
+    assert '下载超时' in timeout_detail
+    assert 'TimeoutError' in timeout_detail
+    assert 'phase=body' in timeout_detail
+
+    refused = ConnectionRefusedError(10061, '由于目标计算机积极拒绝，无法连接。')
+    refused_detail = uc.describe_download_exception(refused, 'connect')
+    assert '连接被拒绝' in refused_detail
+    assert 'phase=connect' in refused_detail
+    assert refused_detail != timeout_detail
+
+
+def test_describe_download_exception_unwraps_aiohttp_os_error():
+    """aiohttp 把底层连接拒绝包在 os_error 里，也要能识别成"连接被拒绝"。"""
+    class _ConnectorError(Exception):
+        def __init__(self):
+            super().__init__('Cannot connect to host example.invalid:443')
+            self.os_error = ConnectionRefusedError(10061, '由于目标计算机积极拒绝，无法连接。')
+
+    detail = uc.describe_download_exception(_ConnectorError(), 'connect')
+    assert '连接被拒绝' in detail
+
+
+def test_describe_download_exception_never_blank():
+    """str(e) 为空时必须带上类名/repr，不能再出现「下载失败: 」。"""
+    fake_connector_error = type('ClientConnectorError', (Exception,), {})
+    detail = uc.describe_download_exception(fake_connector_error(), 'connect')
+
+    assert 'ClientConnectorError' in detail
+    assert '连接服务器失败' in detail
+    assert detail.replace('phase', '').strip() != ''
+
+
+def test_download_failure_logs_type_phase_and_reason(monkeypatch):
+    """run() 的异常分支必须记录异常类型、阶段与原因，而不是空消息。"""
+    class _Lang:
+        def tr(self, key, default=None):
+            return default if default is not None else key
+
+    thread = uc.UpdateDownloadThread('https://example.invalid/pkg.exe')
+
+    async def _boom():
+        thread._phase = 'body'
+        raise asyncio.TimeoutError()
+
+    thread._download = _boom
+    logs = []
+    fake_logger = MagicMock()
+    fake_logger.error.side_effect = logs.append
+    monkeypatch.setattr(uc, 'logger', fake_logger)
+    monkeypatch.setattr('core.language_manager.LanguageManager', _Lang)
+
+    thread.run()
+
+    assert logs, '下载超时必须在日志里留下记录'
+    assert 'TimeoutError' in logs[0]
+    assert '下载超时' in logs[0]
+    assert 'phase=body' in logs[0]
+    assert logs[0] != '下载失败: '
+
+
