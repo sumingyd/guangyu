@@ -2,7 +2,8 @@
 
 HDR 输出模式（与界面、右键菜单保持一致，只有三个）：
 - passthrough: 直通。按片源元数据输出 HDR，需要系统 HDR 开启；
-  PQ 片源用 target-colorspace-hint-mode=source 真正透传元数据。
+  PQ 片源（HDR10/HDR10+）由应用侧用 bt.2390 压到面板峰值，避免直通裁剪过曝；
+  HLG 转 PQ，目标峰值取 min(700nit, 面板峰值)。
 - tonemap: 色调映射到 SDR。关闭 colorspace hint，让 target-prim/trc/peak
   真正决定输出（bt.709 + 系统对应的 SDR gamma + 100nit），高光做压缩。
 - disable: 强制 SDR。同样关闭 colorspace hint，但用 clip 曲线不压缩高光，
@@ -23,6 +24,10 @@ HDR_MODE_TONEMAP = 'tonemap'
 HDR_MODE_DISABLE = 'disable'
 HDR_MODES = (HDR_MODE_PASSTHROUGH, HDR_MODE_TONEMAP, HDR_MODE_DISABLE)
 _LEGACY_HDR_MODE_MAP = {'auto': HDR_MODE_PASSTHROUGH, 'scrgb': HDR_MODE_PASSTHROUGH}
+
+# PC 端 HLG 的目标峰值：按用户观感偏好固定 700nit（亮度优先）。
+# 注意这不是面板真实峰值（本机 DXGI 实测 358），只是渲染时假设的目标亮度。
+HLG_PC_TARGET_PEAK = 700
 
 
 def normalize_hdr_mode(mode) -> str:
@@ -220,13 +225,13 @@ class MpvHdr:
         return profile, panel, convert, path
 
     def _sdr_hint_value(self) -> str:
-        """SDR 内容/色调映射时的 colorspace hint。
+        """SDR 内容的 colorspace hint 固定为 no（真正的 SDR 输出）。
 
-        只有 tonemap/disable 两种模式需要“真正切到 SDR 输出”，此时 hint 必须关闭，
-        否则 Windows 会按显示器 HDR 能力把输出重新拉回 PQ，target-* 全部失效。
-        passthrough 模式下 SDR 内容沿用系统目标，避免 PQ swapchain 上的 SDR 发暗。
+        hint=yes 会把 SDR 装进 PQ 容器，按 target-peak=100nit 绝对编码；
+        本机 Windows SDR 白点实测 416nit，SDR 视频因此比桌面其它 SDR 内容暗。
+        关掉 hint 后由系统按 SDR 白点合成，亮度才一致。
         """
-        return 'no' if self._current_mode() in (HDR_MODE_TONEMAP, HDR_MODE_DISABLE) else 'yes'
+        return 'no'
 
     def _show_osd(self, text: str):
         try:
@@ -268,28 +273,60 @@ class MpvHdr:
     def _apply_passthrough_config(self, is_pq=True):
         """按片源元数据直出 HDR。
 
-        PQ（HDR10/HDR10+）：target-colorspace-hint=yes + hint-mode=source，
-        由 Windows 合成器直接按片源元数据输出，不做 tone mapping。
-        HLG：Windows 只有 PQ 容器，mpv 负责 HLG→PQ 转换，参考白 1000nit。
+        PQ（HDR10/HDR10+）：不再 clip 直通，由应用侧压缩到面板峰值：
+        hint-mode=target + target-peak=面板峰值 + tone-mapping=bt.2390。
+        取不到面板峰值时回退 1000nit 并记警告日志。
+        HLG：Windows 只有 PQ 容器，mpv 负责 HLG→PQ 转换；目标峰值取
+        min(700, 面板峰值)，面板峰值取不到时用 700 上限。
         """
+        self._facade._set_mpv_string('d3d11-output-csp', 'pq')
         self._facade._set_mpv_string('target-colorspace-hint', 'yes')
         self._facade._set_mpv_string('gamut-mapping-mode', 'relative')
         self._facade._set_mpv_string('target-prim', 'bt.2020')
         self._facade._set_mpv_string('target-trc', 'pq')
+        panel_peak = self._panel_peak()
         if is_pq:
-            self._facade._set_mpv_string('target-colorspace-hint-mode', 'source')
-            self._facade._set_mpv_string('tone-mapping', 'clip')
+            # 面板只有 358nit 时，1000nit 的 PQ 直通会把超出部分裁掉（过曝），
+            # 必须压到面板峰值；bt.2390 做软拐点，避免硬裁。
+            if panel_peak and panel_peak > 0:
+                target_peak = str(int(round(panel_peak)))
+            else:
+                target_peak = '1000'
+                self._facade.logger.warning(
+                    "HDR10 面板峰值取不到，回退 target-peak=1000")
+            self._facade._set_mpv_string('target-colorspace-hint-mode', 'target')
+            self._facade._set_mpv_string('tone-mapping', 'bt.2390')
             self._facade._set_mpv_string('hdr-compute-peak', 'no')
-            self._facade._set_mpv_string('target-peak', '10000')
+            self._facade._set_mpv_string('target-peak', target_peak)
             self._facade.logger.info(
-                "HDR配置: 直通 → PQ按片源元数据输出 (hint=source, bt.2020/pq)")
+                f"HDR配置: 直通 → PQ压缩到面板 (bt.2020/pq, target-peak={target_peak}, "
+                f"tone-mapping=bt.2390, 面板峰值={panel_peak or '未知'})")
         else:
             self._facade._set_mpv_string('target-colorspace-hint-mode', 'target')
             self._facade._set_mpv_string('tone-mapping', 'auto')
             self._facade._set_mpv_string('hdr-compute-peak', 'no')
-            self._facade._set_mpv_string('target-peak', '1000')
+            # HLG 以 700nit 为上限：面板更低时跟面板走，更高时用 700。
+            # 700 是用户偏好的亮度上限，不是面板真实峰值。
+            if panel_peak and panel_peak > 0:
+                target = min(HLG_PC_TARGET_PEAK, int(round(panel_peak)))
+            else:
+                target = HLG_PC_TARGET_PEAK
+            target_peak = str(target)
+            self._facade._set_mpv_string('target-peak', target_peak)
             self._facade.logger.info(
-                "HDR配置: 直通 → HLG转PQ (bt.2020/pq, target-peak=1000, compute-peak=no)")
+                f"HDR配置: 直通 → HLG转PQ (bt.2020/pq, target-peak={target_peak}, "
+                f"面板峰值={panel_peak or '未知'}, 上限={HLG_PC_TARGET_PEAK})")
+
+    def _panel_peak(self):
+        """播放窗口所在显示器的峰值亮度；非 Windows 或取不到返回 None。"""
+        if not is_windows():
+            return None
+        try:
+            from utils.hdr_detect import get_windows_display_peak_luminance
+            return get_windows_display_peak_luminance(self._hdr_screen_name())
+        except Exception as e:
+            self._facade.logger.debug(f"读取面板峰值失败: {e}")
+            return None
 
     def _apply_tonemap_config(self, is_hlg=False, system_hdr=None, force_sdr=True):
         """HDR→SDR 色调映射。
@@ -298,6 +335,7 @@ class MpvHdr:
         passthrough 模式下因系统 HDR 关闭而回退时 force_sdr=False，沿用系统 SDR 目标。
         """
         sdr_trc = self._sdr_target_trc(system_hdr)
+        self._facade._set_mpv_string('d3d11-output-csp', 'srgb')
         self._facade._set_mpv_string(
             'target-colorspace-hint', 'no' if force_sdr else 'yes')
         self._facade._set_mpv_string('tone-mapping', 'auto')
@@ -314,6 +352,7 @@ class MpvHdr:
     def _apply_disable_config(self, system_hdr=None):
         """强制 SDR：关闭 colorspace hint 并固定 bt.709/SDR 目标，用 clip 曲线。"""
         sdr_trc = self._sdr_target_trc(system_hdr)
+        self._facade._set_mpv_string('d3d11-output-csp', 'srgb')
         self._facade._set_mpv_string('target-colorspace-hint', 'no')
         self._facade._set_mpv_string('tone-mapping', 'clip')
         self._facade._set_mpv_string('hdr-compute-peak', 'no')
@@ -325,17 +364,27 @@ class MpvHdr:
             f"HDR配置: 强制SDR (bt.709/{sdr_trc}, target-peak=100, clip, hint=no)")
 
     def _apply_wcg_config(self):
-        """WCG 视频（宽色域 SDR）：保持 bt.2020 色域，SDR 亮度。"""
+        """WCG 视频（宽色域 SDR）：走真正的 SDR 输出。
+
+        SDR 内容必须用 SDR swapchain（hint=no），由 Windows 按系统 SDR 白点
+        合成；之前 hint=yes 把 SDR 装进 PQ 容器、按 100nit 绝对编码，
+        而本机 SDR 白点实测 416nit，导致画面明显偏暗。
+        代价：SDR 容器是 sRGB/bt.709，bt.2020 广色域会被转换掉。
+        """
         sdr_trc = self._sdr_target_trc(None)
-        self._facade._set_mpv_string('target-colorspace-hint', self._sdr_hint_value())
+        self._facade._set_mpv_string('d3d11-output-csp', 'srgb')
         self._facade._set_mpv_string('tone-mapping', 'auto')
         self._facade._set_mpv_string('hdr-compute-peak', 'no')
-        self._facade._set_mpv_string('target-prim', 'bt.2020')
+        self._facade._set_mpv_string('target-prim', 'bt.709')
         self._facade._set_mpv_string('target-trc', sdr_trc)
         self._facade._set_mpv_string('target-peak', '100')
         self._facade._set_mpv_string('gamut-mapping-mode', 'relative')
+        # 显式复位：PQ 直通会把 hint-mode 设成 source，WCG 之前一直没清
+        self._facade._set_mpv_string('target-colorspace-hint-mode', 'target')
+        self._facade._set_mpv_string('target-colorspace-hint', self._sdr_hint_value())
         self._facade.logger.info(
-            f"HDR配置: WCG → 保持bt.2020色域 (bt.2020/{sdr_trc}, target-peak=100)")
+            f"HDR配置: WCG → bt.709 SDR 输出 (bt.709/{sdr_trc}, target-peak=100, "
+            f"hint=no；为与桌面 SDR 同亮度，放弃 bt.2020 广色域)")
 
     def _sdr_target_trc(self, system_hdr=None) -> str:
         """SDR 输出的 target-trc。
@@ -359,13 +408,16 @@ class MpvHdr:
     def _reset_hdr_params(self):
         """非 HDR 视频：回到 SDR 默认值（全部使用合法值，不用空串）。"""
         sdr_trc = self._sdr_target_trc(None)
-        self._facade._set_mpv_string('target-colorspace-hint', self._sdr_hint_value())
+        self._facade._set_mpv_string('d3d11-output-csp', 'srgb')
         self._facade._set_mpv_string('tone-mapping', 'auto')
         self._facade._set_mpv_string('hdr-compute-peak', 'auto')
         self._facade._set_mpv_string('target-prim', 'bt.709')
         self._facade._set_mpv_string('target-trc', sdr_trc)
         self._facade._set_mpv_string('target-peak', '100')
         self._facade._set_mpv_string('gamut-mapping-mode', 'auto')
+        # 同 _apply_wcg_config：显式复位 hint-mode，并把 hint 放到最后
+        self._facade._set_mpv_string('target-colorspace-hint-mode', 'target')
+        self._facade._set_mpv_string('target-colorspace-hint', self._sdr_hint_value())
         self._facade.logger.info(
             f"HDR配置: 已重置为SDR默认值 (bt.709/{sdr_trc}, target-peak=100)")
 
