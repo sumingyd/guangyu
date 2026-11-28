@@ -24,14 +24,20 @@ _HDR_CACHE_TTL = 30
 # Windows 按显示器查询的结果：{友好名小写: {'gdi':..., 'enabled': bool, 'supported': bool}}
 _win_hdr_map = None
 _win_hdr_map_time = 0
+# Windows 显示器 HDR 峰值：(时间戳, [(GDI 名, MaxLuminance), ...])
+_win_peak_cache = None
+_win_peak_time = 0
 
 
 def clear_hdr_cache():
     global _hdr_cache, _hdr_cache_time, _win_hdr_map, _win_hdr_map_time
+    global _win_peak_cache, _win_peak_time
     _hdr_cache = None
     _hdr_cache_time = 0
     _win_hdr_map = None
     _win_hdr_map_time = 0
+    _win_peak_cache = None
+    _win_peak_time = 0
 
 
 def is_android_hdr_enabled():
@@ -364,8 +370,10 @@ def _query_windows_display_hdr():
 
             friendly = (tgt_name.monitorFriendlyDeviceName or '').strip()
             gdi = (src_name.viewGdiDeviceName or '').strip()
+            path = (tgt_name.monitorDevicePath or '').strip()
             key = (friendly or gdi or f'display{i}').lower()
-            result[key] = {'gdi': gdi.lower(), 'enabled': enabled, 'supported': supported}
+            result[key] = {'gdi': gdi.lower(), 'enabled': enabled,
+                           'supported': supported, 'path': path}
             logger.debug(
                 f"显示器 {friendly or gdi}: HDR支持={supported}, HDR开启={enabled}")
         return result or None
@@ -440,6 +448,311 @@ def is_windows_hdr_enabled(screen_name=None):
     result = _check_windows_hdr_registry()
     logger.info(f"Windows HDR检测(注册表): {'已启用' if result else '未启用'}")
     return result
+
+
+# ==================== 显示器 HDR 峰值 ====================
+
+def _query_windows_display_peak_list():
+    """用 DXGI 1.6 读出每台已连接显示器的 HDR 峰值亮度。
+
+    返回 [(GDI 设备名, MaxLuminance), ...]；任何一步失败返回 None。
+    MaxLuminance 是显示器在 HDR 模式下的实际峰值（nits），也是 Windows 上唯一
+    可靠的峰值来源（DISPLAYCONFIG 只给 HDR 开关和编码信息）。
+    """
+    if sys.platform != 'win32':
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _GUID(ctypes.Structure):
+            _fields_ = [('Data1', ctypes.c_uint32), ('Data2', ctypes.c_uint16),
+                        ('Data3', ctypes.c_uint16), ('Data4', ctypes.c_ubyte * 8)]
+
+        def _make_guid(text):
+            parts = text.strip('{}').split('-')
+            g = _GUID()
+            g.Data1 = int(parts[0], 16)
+            g.Data2 = int(parts[1], 16)
+            g.Data3 = int(parts[2], 16)
+            tail = parts[3] + parts[4]
+            for i in range(8):
+                g.Data4[i] = int(tail[i * 2:i * 2 + 2], 16)
+            return g
+
+        class _OUTPUT_DESC1(ctypes.Structure):
+            _fields_ = [
+                ('DeviceName', ctypes.c_wchar * 32),
+                ('DesktopCoordinates', wintypes.RECT),
+                ('AttachedToDesktop', wintypes.BOOL),
+                ('Rotation', ctypes.c_int),
+                ('Monitor', wintypes.HANDLE),
+                # BitsPerColor/ColorSpace 两个字段容易漏，漏掉后后面所有 float
+                # 都会错位，读出的亮度是一堆垃圾小数
+                ('BitsPerColor', ctypes.c_uint32),
+                ('ColorSpace', ctypes.c_int),
+                ('RedPrimary', ctypes.c_float * 2),
+                ('GreenPrimary', ctypes.c_float * 2),
+                ('BluePrimary', ctypes.c_float * 2),
+                ('WhitePoint', ctypes.c_float * 2),
+                ('MinLuminance', ctypes.c_float),
+                ('MaxLuminance', ctypes.c_float),
+                ('MaxFullFrameLuminance', ctypes.c_float),
+            ]
+
+        def _call(obj, index, argtypes, *args):
+            vtbl = ctypes.cast(
+                obj, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+            proto = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, *argtypes)
+            return proto(vtbl[index])(obj, *args)
+
+        iid_factory1 = _make_guid('770aae78-f26f-4dba-a829-253c83d1b387')
+        # IID_IDXGIOutput6 = {068346E8-AAEC-4B84-ADD7-137F513F77A1}
+        # 曾经误写成 4b21，导致 QueryInterface 直接 E_NOINTERFACE
+        iid_output6 = _make_guid('068346e8-aaec-4b84-add7-137f513f77a1')
+        dxgi = ctypes.WinDLL('dxgi', use_last_error=True)
+        factory = ctypes.c_void_p()
+        if dxgi.CreateDXGIFactory1(ctypes.byref(iid_factory1),
+                                   ctypes.byref(factory)) != 0 or not factory:
+            return None
+
+        peaks = []
+        try:
+            idx = 0
+            while idx < 16:
+                adapter = ctypes.c_void_p()
+                # IDXGIFactory1::EnumAdapters1 = 12
+                if _call(factory, 12, [ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)],
+                         idx, ctypes.byref(adapter)) != 0 or not adapter:
+                    break
+                try:
+                    out_idx = 0
+                    while out_idx < 16:
+                        output = ctypes.c_void_p()
+                        # IDXGIAdapter::EnumOutputs = 7
+                        if _call(adapter, 7, [ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)],
+                                 out_idx, ctypes.byref(output)) != 0 or not output:
+                            break
+                        try:
+                            out6 = ctypes.c_void_p()
+                            # IUnknown::QueryInterface = 0
+                            if _call(output, 0, [ctypes.POINTER(_GUID),
+                                                 ctypes.POINTER(ctypes.c_void_p)],
+                                     ctypes.byref(iid_output6),
+                                     ctypes.byref(out6)) == 0 and out6:
+                                try:
+                                    desc = _OUTPUT_DESC1()
+                                    # IDXGIOutput6::GetDesc1 在 vtable 中的索引是 27。
+                                    # 22 是 GetDisplaySurfaceData1、28 是
+                                    # CheckHardwareCompositionSupport，都会踩空/写错
+                                    if _call(out6, 27, [ctypes.POINTER(_OUTPUT_DESC1)],
+                                             ctypes.byref(desc)) == 0:
+                                        name = (desc.DeviceName or '').strip()
+                                        peak = float(desc.MaxLuminance)
+                                        if name and 0 < peak < 100000:
+                                            peaks.append((name, peak))
+                                finally:
+                                    _call(out6, 2, [])
+                        finally:
+                            _call(output, 2, [])
+                        out_idx += 1
+                finally:
+                    _call(adapter, 2, [])
+                idx += 1
+        finally:
+            _call(factory, 2, [])
+        return peaks or None
+    except Exception as e:
+        logger.debug(f"DXGI 峰值查询失败: {e}")
+        return None
+
+
+def _parse_edid_hdr_peak(blob):
+    """从 EDID 的 CTA-861 HDR 静态元数据块里取最大亮度（nits）。
+
+    该块（扩展 tag 0x06）紧跟在 CTA-861 扩展块的数据块集合里，payload 依次是
+    EOTF、静态元数据描述符、最大亮度码、maxFALL 码、最小亮度码。亮度按 CTA-861.3
+    的编码换算：50 * 2^(code/32)，这也是 Windows 系统属性里“峰值亮度”的来源。
+    没有扩展块或没有该数据块时返回 None。
+    """
+    try:
+        data = bytes(blob)
+    except Exception:
+        return None
+    if len(data) < 128 or data[:8] != b'\x00\xff\xff\xff\xff\xff\xff\x00':
+        return None
+    ext_count = data[126]
+    for n in range(ext_count):
+        start = 128 * (n + 1)
+        ext = data[start:start + 128]
+        if len(ext) < 128 or ext[0] != 0x02:
+            continue
+        # 字节 2 是首个 DTD 的偏移；数据块集合从字节 4 开始（字节 3 是标志位）
+        dtd_start = ext[2]
+        pos = 4
+        end = dtd_start if 4 <= dtd_start <= 127 else 127
+        while pos < end:
+            header = ext[pos]
+            if header == 0:
+                break
+            tag = header >> 5
+            length = header & 0x1f
+            if pos + 1 + length > end:
+                break
+            if tag == 7 and length >= 4:
+                block = ext[pos + 1:pos + 1 + length]
+                # block[0] 为扩展 tag，0x06 = HDR 静态元数据；
+                # block[2] 的 bit0 表示后续带最大亮度/maxFALL/最小亮度三个字节
+                if block[0] == 0x06 and (block[2] & 0x01):
+                    code = block[3]
+                    if code > 0:
+                        return 50.0 * (2.0 ** (code / 32.0))
+            pos += 1 + length
+    return None
+
+
+def _query_edid_peak_list():
+    """枚举注册表里每台显示器的 EDID，读出 HDR 静态元数据的最大亮度。
+
+    返回 [{'hwid':..., 'instance':..., 'peak': float}, ...]；
+    非 Windows 或读取失败返回 None。hwid/instance 与 DISPLAYCONFIG 的
+    monitorDevicePath（DISPLAY#<hwid>#<instance>#...）一一对应。
+    """
+    if sys.platform != 'win32' or winreg is None:
+        return None
+    base = r"SYSTEM\CurrentControlSet\Enum\DISPLAY"
+    entries = []
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, base) as h_root:
+            i = 0
+            while True:
+                try:
+                    hwid = winreg.EnumKey(h_root, i)
+                except OSError:
+                    break
+                i += 1
+                try:
+                    h_dev = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, f"{base}\\{hwid}")
+                except OSError:
+                    continue
+                try:
+                    j = 0
+                    while True:
+                        try:
+                            inst = winreg.EnumKey(h_dev, j)
+                        except OSError:
+                            break
+                        j += 1
+                        try:
+                            with winreg.OpenKey(
+                                    winreg.HKEY_LOCAL_MACHINE,
+                                    f"{base}\\{hwid}\\{inst}\\Device Parameters") as hp:
+                                blob, _ = winreg.QueryValueEx(hp, 'EDID')
+                        except OSError:
+                            continue
+                        peak = _parse_edid_hdr_peak(blob)
+                        if peak:
+                            entries.append({'hwid': hwid, 'instance': inst, 'peak': peak})
+                finally:
+                    winreg.CloseKey(h_dev)
+    except Exception as e:
+        logger.debug(f"EDID 峰值枚举失败: {e}")
+        return None
+    return entries or None
+
+
+def _screen_monitor_path(screen_name):
+    """取播放窗口所在显示器的 DISPLAYCONFIG monitorDevicePath。
+
+    与 is_windows_hdr_enabled 共用同一份 30 秒缓存的显示器表，避免重复查询。
+    """
+    import time
+    global _win_hdr_map, _win_hdr_map_time
+    if not screen_name:
+        return None
+    now = time.monotonic()
+    if _win_hdr_map is None or (now - _win_hdr_map_time) >= _HDR_CACHE_TTL:
+        _win_hdr_map = _query_windows_display_hdr()
+        _win_hdr_map_time = now
+    if not _win_hdr_map:
+        return None
+    key = str(screen_name).strip().lower()
+    for name, info in _win_hdr_map.items():
+        path = str(info.get('path') or '')
+        if not path:
+            continue
+        gdi = str(info.get('gdi') or '').lower()
+        if key == name or key == gdi or key in name or name in key:
+            return path
+    return None
+
+
+def get_windows_display_peak_luminance(screen_name=None):
+    """显示器实际 HDR 峰值亮度（nits）；取不到返回 None。
+
+    screen_name 为播放窗口所在显示器名（Qt 的 QScreen.name()，形如 \\\\.\\DISPLAY1）。
+
+    回退顺序：
+    1. DXGI 1.6 MaxLuminance，按 DeviceName 匹配播放窗口所在输出；
+    2. 同一份 DXGI 结果里第一台峰值有效的显示器（老行为，保持不变）；
+    3. DXGI 不可用时读 EDID CTA-861 HDR 静态元数据的最大亮度，
+       按 DISPLAYCONFIG monitorDevicePath 精确匹配注册表条目；
+    4. 所有 EDID 峰值唯一一致时取该值；
+    5. 都没有返回 None，由调用方沿用 1000 的安全默认，不猜一个数。
+
+    结果缓存 30 秒；查询失败缓存空结果，避免每次播放重复枚举。
+    """
+    import time
+    global _win_peak_cache, _win_peak_time
+    now = time.monotonic()
+    if _win_peak_cache is None or (now - _win_peak_time) >= _HDR_CACHE_TTL:
+        _win_peak_cache = {
+            'dxgi': _query_windows_display_peak_list() or [],
+            'edid': _query_edid_peak_list() or [],
+        }
+        _win_peak_time = now
+
+    cache = _win_peak_cache if isinstance(_win_peak_cache, dict) else {}
+    dxgi = cache.get('dxgi') or []
+
+    if screen_name and dxgi:
+        key = str(screen_name).strip().lower()
+        for name, peak in dxgi:
+            gdi = str(name).strip().lower()
+            if key == gdi or key in gdi or gdi in key:
+                logger.info(f"显示器峰值(DXGI/{screen_name}): {peak:.0f}nit")
+                return peak
+
+    if dxgi:
+        logger.info(f"显示器峰值(DXGI/{dxgi[0][0]}): {dxgi[0][1]:.0f}nit")
+        return dxgi[0][1]
+
+    edid = cache.get('edid') or []
+    if not edid:
+        return None
+
+    path = _screen_monitor_path(screen_name)
+    if path:
+        parts = path.split('#')
+        if len(parts) >= 3:
+            hwid = parts[1].strip().lower()
+            inst = parts[2].strip().lower()
+            for entry in edid:
+                if (str(entry.get('hwid')).strip().lower() == hwid
+                        and str(entry.get('instance')).strip().lower() == inst):
+                    peak = float(entry['peak'])
+                    logger.info(
+                        f"显示器峰值(EDID/{entry['hwid']}/{entry['instance']}): "
+                        f"{peak:.0f}nit")
+                    return peak
+
+    values = {round(float(e['peak']), 1) for e in edid}
+    if len(values) == 1:
+        value = values.pop()
+        logger.info(f"显示器峰值(EDID/唯一值): {value:.0f}nit")
+        return value
+    logger.debug(f"EDID 峰值无法唯一定位（{len(values)} 种取值），按取不到处理")
+    return None
 
 
 # ==================== 杜比视界能力（三态） ====================
