@@ -233,3 +233,72 @@ def test_download_failure_logs_type_phase_and_reason(monkeypatch):
     assert logs[0] != '下载失败: '
 
 
+def test_restart_env_drops_pyinstaller_home_dir(monkeypatch):
+    """重启新版本时不能把旧进程的 onefile 解包目录传下去。
+
+    父进程的 _PYI_APPLICATION_HOME_DIR 会让新进程复用旧 _MEI 目录而不解包，
+    旧进程退出后该目录被删，新进程随即缺模块/缺资源。
+    """
+    monkeypatch.setenv('_PYI_APPLICATION_HOME_DIR', r'C:\Temp\_MEI000066c02')
+    monkeypatch.setenv('_PYI_ARCHIVE_FILE', r'D:\iptv\GuangYu.exe')
+    monkeypatch.setenv('_PYI_PARENT_PROCESS_LEVEL', '1')
+    monkeypatch.setenv('_PYI_SPLASH_IPC', '12345')
+
+    env = uc.build_restart_env()
+
+    for key in uc._PYI_ENV_KEYS:
+        assert key not in env
+    # 不能改动本进程自己的环境，只影响被启动的新进程
+    assert os.environ.get('_PYI_APPLICATION_HOME_DIR') == r'C:\Temp\_MEI000066c02'
+
+
+def test_restart_env_strips_old_meipass_from_library_path(monkeypatch):
+    """Linux/macOS 引导器把 _MEIPASS 追加进库搜索路径，重启时也要剔除。"""
+    meipass = os.path.join(os.path.dirname(os.path.abspath(__file__)), '_MEI_test')
+    monkeypatch.setattr(sys, '_MEIPASS', meipass, raising=False)
+    monkeypatch.setenv(
+        'LD_LIBRARY_PATH', os.pathsep.join([meipass, '/opt/other/lib'])
+    )
+
+    env = uc.build_restart_env()
+
+    assert meipass not in env['LD_LIBRARY_PATH'].split(os.pathsep)
+    assert '/opt/other/lib' in env['LD_LIBRARY_PATH'].split(os.pathsep)
+
+
+def test_restart_env_drops_library_path_when_only_meipass(monkeypatch):
+    """库搜索路径只剩旧解包目录时整条删掉，避免留下空值。"""
+    meipass = os.path.join(os.path.dirname(os.path.abspath(__file__)), '_MEI_test')
+    monkeypatch.setattr(sys, '_MEIPASS', meipass, raising=False)
+    monkeypatch.setenv('LD_LIBRARY_PATH', meipass)
+
+    env = uc.build_restart_env()
+
+    assert 'LD_LIBRARY_PATH' not in env
+
+
+def test_install_windows_starts_new_exe_with_clean_env(tmp_path, monkeypatch):
+    """Windows 覆盖安装后 Popen 新 exe 必须带上剥离过 _PYI_* 的环境变量。"""
+    target = tmp_path / 'GuangYu.exe'
+    target.write_text('new', encoding='utf-8')
+    monkeypatch.setenv('_PYI_APPLICATION_HOME_DIR', r'C:\Temp\_MEI000066c02')
+
+    captured = {}
+
+    def _fake_popen(args, **kwargs):
+        captured['args'] = args
+        captured['env'] = kwargs.get('env')
+        return MagicMock()
+
+    monkeypatch.setattr(uc, 'resolve_install_target', lambda *a, **k: str(target))
+    monkeypatch.setattr(uc, 'swap_in_place', lambda new, old: str(target) + uc.BACKUP_SUFFIX)
+    monkeypatch.setattr(uc.subprocess, 'Popen', _fake_popen)
+    monkeypatch.setattr(uc, '_remove_path', lambda _path: None)
+    monkeypatch.setattr(uc.QApplication, 'quit', staticmethod(lambda: None))
+
+    controller = uc.UpdateController(MagicMock())
+    assert controller._install_windows(str(target)) is True
+
+    assert captured['args'] == [str(target)]
+    assert captured['env'] is not None
+    assert '_PYI_APPLICATION_HOME_DIR' not in captured['env']

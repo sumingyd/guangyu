@@ -203,6 +203,51 @@ def cleanup_stale_backup(target_path=None):
         return False
 
 
+# PyInstaller onefile 引导器把解包目录写进这些环境变量并传给子进程；
+# 子进程看到 _PYI_APPLICATION_HOME_DIR 就直接复用父进程的 _MEI 目录、不再解包。
+_PYI_ENV_KEYS = (
+    '_PYI_APPLICATION_HOME_DIR',
+    '_PYI_ARCHIVE_FILE',
+    '_PYI_PARENT_PROCESS_LEVEL',
+    '_PYI_SPLASH_IPC',
+)
+# 引导器在这些变量里追加了自己的解包目录，同样会指向旧进程的 _MEI
+_LIB_PATH_ENV_KEYS = ('LD_LIBRARY_PATH', 'DYLD_LIBRARY_PATH')
+
+
+def build_restart_env():
+    """构造启动新版本用的环境变量：去掉旧进程的 onefile 解包目录指针。
+
+    在线更新是从旧进程里 Popen 新可执行文件的，新进程会继承
+    _PYI_APPLICATION_HOME_DIR（= 旧进程的 _MEIxxxxxx）。引导器据此复用旧解包
+    目录、不再自己解包；旧进程退出时引导器又把这个目录删掉，于是新进程第一次
+    启动读不到 PySide6.QtNetwork、i18n、themes 等文件，手动再启动一次（没有父
+    进程环境）才恢复正常。剥离这些变量后，新进程解包到自己的目录，与旧进程
+    何时退出无关。
+    """
+    env = os.environ.copy()
+    for key in _PYI_ENV_KEYS:
+        env.pop(key, None)
+
+    meipass = getattr(sys, '_MEIPASS', '') or ''
+    if not meipass:
+        return env
+    meipass = os.path.abspath(meipass)
+    for key in _LIB_PATH_ENV_KEYS:
+        value = env.get(key)
+        if not value:
+            continue
+        kept = [
+            part for part in value.split(os.pathsep)
+            if part and os.path.abspath(part) != meipass
+        ]
+        if kept:
+            env[key] = os.pathsep.join(kept)
+        else:
+            env.pop(key, None)
+    return env
+
+
 def restore_backup(backup_path, target_path):
     """用备份恢复原安装；返回是否恢复成功"""
     try:
@@ -807,7 +852,11 @@ class UpdateController:
             return False
 
         try:
-            subprocess.Popen([target_exe], cwd=os.path.dirname(target_exe))
+            subprocess.Popen(
+                [target_exe],
+                cwd=os.path.dirname(target_exe),
+                env=build_restart_env(),
+            )
         except Exception as e:
             logger.error(f"Windows 新版本启动失败，回滚旧版本: {e}")
             restore_backup(backup, target_exe)
@@ -847,7 +896,7 @@ class UpdateController:
             return False
 
         try:
-            subprocess.Popen(['open', target_app])
+            subprocess.Popen(['open', target_app], env=build_restart_env())
         except Exception as e:
             logger.error(f"macOS 新版本启动失败，回滚旧版本: {e}")
             restore_backup(backup, target_app)
@@ -888,7 +937,11 @@ class UpdateController:
             return False
 
         try:
-            subprocess.Popen([target_exe], start_new_session=True)
+            subprocess.Popen(
+                [target_exe],
+                start_new_session=True,
+                env=build_restart_env(),
+            )
         except Exception as e:
             logger.error(f"Linux 新版本启动失败，回滚旧版本: {e}")
             restore_backup(backup, target_exe)
