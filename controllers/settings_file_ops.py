@@ -73,6 +73,22 @@ class _EpgLoadThread(QThread):
             self.done.emit(last_msg['text'])
 
 
+def _fit_button_text_height(button: QPushButton) -> int:
+    """按字体行高与按钮样式（QSS 上下内边距 + 边框）计算高度，避免写死数值裁掉文字。
+
+    sizeHint().height() 已经由样式系统把 QSS 的上下内边距与边框算进去；
+    再和 fontMetrics 的行高取大，字体或内边距任一变大，按钮都会跟着长高。
+    """
+    fm = button.fontMetrics()
+    height = max(button.sizeHint().height(), fm.height() + 2)
+    button.setFixedHeight(height)
+    return height
+
+
+def _defer_fit_button_text_height(button: QPushButton) -> None:
+    """样式在对话框显示后才真正继承到位，显示后再按实际字体/内边距校正一次。"""
+    # 带 context 的 singleShot：按钮提前销毁时定时器随之取消，不会留下悬空回调
+    QTimer.singleShot(0, button, lambda b=button: _fit_button_text_height(b))
 # 使用说明默认内容 —— 定义在模块级别便于维护
 DEFAULT_USAGE_CONTENT = (
     '## 基本操作\n\n'
@@ -295,7 +311,7 @@ class SettingsFileOperations:
 
         tab_widget.addTab(network_tab, tr("network_settings_tab", "网络"))
 
-        # ===== Tab 4：订阅源管理（播放列表 + EPG）=====
+        # ===== Tab 4：订阅源管理（播放列表 + EPG + 台标来源）=====
         subscription_tab = QWidget()
         subscription_tab_layout = QVBoxLayout(subscription_tab)
         subscription_tab_layout.setContentsMargins(0, 0, 0, 0)
@@ -304,25 +320,18 @@ class SettingsFileOperations:
         epg_section = self._build_subscription_section(tr, 'epg', playback=False)
 
         subscription_content = QWidget()
-        subscription_content_layout = QHBoxLayout(subscription_content)
+        subscription_content_layout = QVBoxLayout(subscription_content)
         subscription_content_layout.setContentsMargins(0, 0, 0, 0)
         subscription_content_layout.setSpacing(8)
-        # 三列：播放列表订阅 / EPG 订阅 / 台标来源，避免两列并排把宽度撑出屏幕
-        playlist_col = QVBoxLayout()
-        playlist_col.setSpacing(6)
-        playlist_col.addWidget(playlist_section['group'])
-        playlist_col.addStretch()
-        epg_col = QVBoxLayout()
-        epg_col.setSpacing(6)
-        epg_col.addWidget(epg_section['group'])
-        epg_col.addStretch()
-        logo_col = QVBoxLayout()
-        logo_col.setSpacing(6)
-        logo_col.addWidget(self._build_logo_section(tr))
-        logo_col.addStretch()
-        subscription_content_layout.addLayout(playlist_col, 1)
-        subscription_content_layout.addLayout(epg_col, 1)
-        subscription_content_layout.addLayout(logo_col, 1)
+        # 分两层：上层两个订阅源列表并排（同类信息，等宽），
+        # 下层台标来源整行铺开，四行来源与规则模板各占一块，不再挤成第三列窄条。
+        sources_row = QHBoxLayout()
+        sources_row.setSpacing(8)
+        sources_row.addWidget(playlist_section['group'], 1)
+        sources_row.addWidget(epg_section['group'], 1)
+        subscription_content_layout.addLayout(sources_row)
+        subscription_content_layout.addWidget(self._build_logo_section(tr))
+        subscription_content_layout.addStretch()
 
         subscription_scroll = QScrollArea()
         subscription_scroll.setWidgetResizable(True)
@@ -508,8 +517,10 @@ class SettingsFileOperations:
         tier_combo.setCurrentIndex(max(0, tier_combo.findData(tier)))
         scale_combo.setCurrentIndex(max(0, scale_combo.findData(percent)))
 
-        layout.addRow(QLabel(tr("font_size_label", "字体大小:")), tier_combo)
-        layout.addRow(QLabel(tr("ui_scale_label", "界面缩放:")), scale_combo)
+        layout.addRow(self._form_label(tr("font_size_label", "字体大小:")),
+                      self._combo_row(tier_combo))
+        layout.addRow(self._form_label(tr("ui_scale_label", "界面缩放:")),
+                      self._combo_row(scale_combo))
 
         theme_manager = get_theme_manager()
         color_combo = QComboBox()
@@ -517,14 +528,16 @@ class SettingsFileOperations:
         for mode in theme_manager.get_available_color_modes():
             color_combo.addItem(tr(f"color_mode_{mode}", mode), mode)
         color_combo.setCurrentIndex(max(0, color_combo.findData(theme_manager.get_color_mode())))
-        layout.addRow(QLabel(tr("color_mode_label", "颜色模式:")), color_combo)
+        layout.addRow(self._form_label(tr("color_mode_label", "颜色模式:")),
+                      self._combo_row(color_combo))
 
         style_combo = QComboBox()
         style_combo.setObjectName("visual_style_combo")
         for style in theme_manager.get_available_visual_styles():
             style_combo.addItem(tr(f"visual_style_{style}", style), style)
         style_combo.setCurrentIndex(max(0, style_combo.findData(theme_manager.get_visual_style())))
-        layout.addRow(QLabel(tr("visual_style_label", "视觉风格:")), style_combo)
+        layout.addRow(self._form_label(tr("visual_style_label", "视觉风格:")),
+                      self._combo_row(style_combo))
 
         hint = QLabel(tr(
             "appearance_hint",
@@ -967,7 +980,8 @@ class SettingsFileOperations:
             if rtsp_transport_combo.itemData(i) == rtsp_value:
                 rtsp_transport_combo.setCurrentIndex(i)
                 break
-        layout.addRow(tr("rtsp_transport_colon", "RTSP Transport:"), rtsp_transport_combo)
+        layout.addRow(self._form_label(tr("rtsp_transport_colon", "RTSP Transport:")),
+                      rtsp_transport_combo)
 
         hwdec_combo = QComboBox()
         hwdec_combo.setObjectName("hwdec_combo")
@@ -988,7 +1002,7 @@ class SettingsFileOperations:
             if hwdec_combo.itemData(i) == hwdec_value:
                 hwdec_combo.setCurrentIndex(i)
                 break
-        layout.addRow(tr("hwdec_label", "Hardware Decoding"), hwdec_combo)
+        layout.addRow(self._form_label(tr("hwdec_label", "Hardware Decoding")), hwdec_combo)
 
         passthrough_combo = QComboBox()
         passthrough_combo.setObjectName("audio_passthrough_combo")
@@ -1006,7 +1020,8 @@ class SettingsFileOperations:
             if val == current_passthrough:
                 selected_pt_idx = i
         passthrough_combo.setCurrentIndex(selected_pt_idx)
-        layout.addRow(tr("audio_passthrough_colon", "Audio Pass-through:"), passthrough_combo)
+        layout.addRow(self._form_label(tr("audio_passthrough_colon", "Audio Pass-through:")),
+                      passthrough_combo)
 
         hdr_combo = QComboBox()
         hdr_combo.setObjectName("hdr_output_mode_combo")
@@ -1339,7 +1354,7 @@ class SettingsFileOperations:
             queue_combo.addItem(label, value)
         queue_combo.setCurrentIndex(
             max(0, queue_combo.findData(playback_settings.get('queue_mode', 'none'))))
-        layout.addRow(tr("queue_mode_label", "循环模式:"), queue_combo)
+        layout.addRow(self._form_label(tr("queue_mode_label", "循环模式:")), queue_combo)
 
         def _skip_row(enable_name, seconds_name, key_enable, key_seconds):
             row = QWidget()
@@ -1363,10 +1378,10 @@ class SettingsFileOperations:
             row_layout.addWidget(spin, 1)
             return row
 
-        layout.addRow(tr("skip_intro_label", "跳过片头:"),
+        layout.addRow(self._form_label(tr("skip_intro_label", "跳过片头:")),
                       _skip_row("auto_skip_intro_check", "skip_intro_seconds_spin",
                                 "auto_skip_intro", "skip_intro_seconds"))
-        layout.addRow(tr("skip_outro_label", "跳过片尾:"),
+        layout.addRow(self._form_label(tr("skip_outro_label", "跳过片尾:")),
                       _skip_row("auto_skip_outro_check", "skip_outro_seconds_spin",
                                 "auto_skip_outro", "skip_outro_seconds"))
 
@@ -1672,13 +1687,39 @@ class SettingsFileOperations:
         combo.setMinimumContentsLength(0)
 
     @staticmethod
+    def _form_label(text):
+        """表单行标签：允许换行，窄列时最小宽度可压缩。"""
+        label = QLabel(text)
+        label.setWordWrap(True)
+        return label
+
+    @staticmethod
+    def _combo_row(combo, max_width=240):
+        """让下拉框按内容长度取宽，不再被 QFormLayout 拉满整行。
+
+        外观页的下拉选项文字都不长，撑满整行既空又难看；这里用一段
+        stretch 吃掉剩余宽度，下拉框自身保持内容宽度并设置上限。
+        """
+        combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        combo.setMaximumWidth(max_width)
+        row = QWidget()
+        line = QHBoxLayout(row)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(0)
+        line.addWidget(combo)
+        line.addStretch(1)
+        return row
+
+    @staticmethod
     def _compact_field(label_text, control):
         """把「标签 + 控件」压成一行，供两列紧凑网格使用。"""
         field = QWidget()
         row = QHBoxLayout(field)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(4)
-        row.addWidget(QLabel(label_text))
+        label = QLabel(label_text)
+        label.setWordWrap(True)
+        row.addWidget(label)
         row.addWidget(control, 1)
         return field
 
@@ -1699,6 +1740,8 @@ class SettingsFileOperations:
         现在说明挂在标签与控件上，鼠标悬停即可看全，既不删内容也不缩小字号。
         """
         label = QLabel(label_text)
+        # 允许换行后，标签的最小宽度不再等于整句话宽度，窄列也能压缩
+        label.setWordWrap(True)
         if desc_text:
             widget.setToolTip(desc_text)
             label.setToolTip(desc_text)
