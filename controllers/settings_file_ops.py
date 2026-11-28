@@ -2795,12 +2795,12 @@ class SettingsFileOperations:
                         try:
                             pc._hdr.refresh_hlg_target_peak()
                         except Exception as e:
-                            global_logger.debug(f"即时应用 HLG 峰值失败: {e}")
+                            logger.debug(f"即时应用 HLG 峰值失败: {e}")
 
                     # 即时应用可运行时修改的参数（无需重启 mpv）
                     self._apply_runtime_playback_params(pc, old_playback, new_playback)
             except Exception as e:
-                global_logger.debug(f"更新播放设置失败: {e}")
+                logger.debug(f"更新播放设置失败: {e}")
 
     @staticmethod
     def _apply_runtime_playback_params(pc, old_playback, new_playback):
@@ -2855,7 +2855,7 @@ class SettingsFileOperations:
                     new_val = vs
                 pc.set_property_string(mpv_prop, str(new_val))
             except Exception as e:
-                global_logger.debug(f"即时应用 {mpv_prop}={new_val} 失败: {e}")
+                logger.debug(f"即时应用 {mpv_prop}={new_val} 失败: {e}")
 
         # TLS 校验：mpv 支持运行时写入 tls-verify（已实测），不必重启
         old_tls = old_playback.get('tls_verify')
@@ -2864,7 +2864,7 @@ class SettingsFileOperations:
             try:
                 pc.set_property_string('tls-verify', 'yes' if new_tls else 'no')
             except Exception as e:
-                global_logger.debug(f"即时应用 tls-verify={new_tls} 失败: {e}")
+                logger.debug(f"即时应用 tls-verify={new_tls} 失败: {e}")
 
         # 网络超时：与看门狗同口径，Auto(0) 时也写入默认值（mpv 自身默认 60s）
         old_net = old_playback.get('network_timeout_sec')
@@ -2874,7 +2874,7 @@ class SettingsFileOperations:
                 net_to = new_net if new_net and new_net > 0 else DEFAULT_NETWORK_TIMEOUT_SEC
                 pc.set_property_string('network-timeout', str(net_to))
             except Exception as e:
-                global_logger.debug(f"即时应用 network-timeout={new_net} 失败: {e}")
+                logger.debug(f"即时应用 network-timeout={new_net} 失败: {e}")
 
         # 反交错：auto 用 mpv 的 deinterlace=auto（FFmpeg 检测到隔行帧才插滤镜），
         # yes（旧配置）仍用 yadif bob 滤镜。
@@ -2893,7 +2893,7 @@ class SettingsFileOperations:
                     pc.set_property_string('deinterlace', 'no')
                     pc._disable_deinterlace_filter()
             except Exception as e:
-                global_logger.debug(f"即时应用 deinterlace={new_di} 失败: {e}")
+                logger.debug(f"即时应用 deinterlace={new_di} 失败: {e}")
 
         # audio_passthrough 需要特殊处理（映射到 audio-spdif）
         old_pt = old_playback.get('audio_passthrough', 'never')
@@ -2903,13 +2903,13 @@ class SettingsFileOperations:
                 pt_val = AUDIO_SPDIF_MAP.get(new_pt, '') if new_pt else ''
                 pc.set_property_string('audio-spdif', pt_val)
             except Exception as e:
-                global_logger.debug(f"即时应用 audio-passthrough={new_pt} 失败: {e}")
+                logger.debug(f"即时应用 audio-passthrough={new_pt} 失败: {e}")
 
         # 必须重启 mpv 的 option 变化记录日志（tls-verify/network-timeout 已改为运行时生效）
         restart_required_keys = ('vo',)
         for key in restart_required_keys:
             if old_playback.get(key) != new_playback.get(key):
-                global_logger.info(
+                logger.info(
                     f"播放参数 {key} 已更改，将在下次重启播放器后完全生效"
                 )
                 break
