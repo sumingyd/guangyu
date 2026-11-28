@@ -28,8 +28,10 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QGroupBox,
     QListWidget,
+    QListWidgetItem,
     QWidget,
     QFormLayout,
+    QGridLayout,
     QTextEdit,
     QFrame,
     QTabWidget,
@@ -193,13 +195,21 @@ class SettingsFileOperations:
         general_tab_layout.setContentsMargins(0, 0, 0, 0)
 
         general_content = QWidget()
-        general_content_layout = QVBoxLayout(general_content)
+        general_content_layout = QHBoxLayout(general_content)
         general_content_layout.setContentsMargins(0, 0, 0, 0)
+        general_content_layout.setSpacing(8)
         screensaver_section = self._build_screensaver_section(tr)
-        general_content_layout.addWidget(self._build_general_app_section(tr))
-        general_content_layout.addWidget(self._build_close_behavior_section(tr))
-        general_content_layout.addWidget(screensaver_section)
-        general_content_layout.addStretch()
+        general_left = QVBoxLayout()
+        general_left.setSpacing(6)
+        general_left.addWidget(self._build_general_app_section(tr))
+        general_left.addWidget(self._build_close_behavior_section(tr))
+        general_left.addStretch()
+        general_right = QVBoxLayout()
+        general_right.setSpacing(6)
+        general_right.addWidget(screensaver_section)
+        general_right.addStretch()
+        general_content_layout.addLayout(general_left, 1)
+        general_content_layout.addLayout(general_right, 1)
 
         general_scroll = QScrollArea()
         general_scroll.setWidgetResizable(True)
@@ -215,11 +225,34 @@ class SettingsFileOperations:
         playback_tab_layout.setContentsMargins(0, 0, 0, 0)
 
         playback_content = QWidget()
-        playback_content_layout = QVBoxLayout(playback_content)
+        playback_content_layout = QHBoxLayout(playback_content)
         playback_content_layout.setContentsMargins(0, 0, 0, 0)
-        playback_content_layout.addWidget(self._build_protocol_section(tr, playback_settings))
-        playback_content_layout.addWidget(self._build_playback_extras_section(tr, playback_settings))
-        playback_content_layout.addStretch()
+        playback_content_layout.setSpacing(8)
+        protocol_basic, protocol_advanced, protocol_cache = (
+            self._build_protocol_groups(tr, playback_settings))
+        behavior_group, video_group, audio_group, subtitle_group, extras_hint = (
+            self._build_playback_extras_groups(tr, playback_settings))
+        # 三列：协议 / 缓存+播放行为 / 图像+音频+字幕，常用分辨率下一屏放下
+        playback_col1 = QVBoxLayout()
+        playback_col1.setSpacing(6)
+        playback_col1.addWidget(protocol_basic)
+        playback_col1.addWidget(protocol_advanced)
+        playback_col1.addWidget(extras_hint)
+        playback_col1.addStretch()
+        playback_col2 = QVBoxLayout()
+        playback_col2.setSpacing(6)
+        playback_col2.addWidget(protocol_cache)
+        playback_col2.addWidget(behavior_group)
+        playback_col2.addStretch()
+        playback_col3 = QVBoxLayout()
+        playback_col3.setSpacing(6)
+        playback_col3.addWidget(video_group)
+        playback_col3.addWidget(audio_group)
+        playback_col3.addWidget(subtitle_group)
+        playback_col3.addStretch()
+        playback_content_layout.addLayout(playback_col1, 1)
+        playback_content_layout.addLayout(playback_col2, 1)
+        playback_content_layout.addLayout(playback_col3, 1)
 
         playback_scroll = QScrollArea()
         playback_scroll.setWidgetResizable(True)
@@ -235,15 +268,24 @@ class SettingsFileOperations:
         network_tab_layout.setContentsMargins(0, 0, 0, 0)
 
         network_content = QWidget()
-        network_content_layout = QVBoxLayout(network_content)
+        network_content_layout = QHBoxLayout(network_content)
         network_content_layout.setContentsMargins(0, 0, 0, 0)
-        network_content_layout.addWidget(self._build_connection_section(tr, playback_settings))
+        network_content_layout.setSpacing(8)
         stream_section = self._build_network_stream_section(tr, playback_settings)
-        network_content_layout.addWidget(stream_section)
-        network_content_layout.addWidget(self._build_github_proxy_section(tr))
         server_section = self._build_server_section(tr)
-        network_content_layout.addWidget(server_section)
-        network_content_layout.addStretch()
+        # 两列：连接+流媒体请求 / 加速代理+服务设置
+        network_left = QVBoxLayout()
+        network_left.setSpacing(6)
+        network_left.addWidget(self._build_connection_section(tr, playback_settings))
+        network_left.addWidget(stream_section)
+        network_left.addStretch()
+        network_right = QVBoxLayout()
+        network_right.setSpacing(6)
+        network_right.addWidget(self._build_github_proxy_section(tr))
+        network_right.addWidget(server_section)
+        network_right.addStretch()
+        network_content_layout.addLayout(network_left, 1)
+        network_content_layout.addLayout(network_right, 1)
 
         network_scroll = QScrollArea()
         network_scroll.setWidgetResizable(True)
@@ -346,21 +388,38 @@ class SettingsFileOperations:
             )
 
         # exec 前的布局准备：加载订阅源后 QListWidget 尺寸提示变化，
-        # 这里激活布局并设定窗口初始大小。
-        # 分层窗口首次绘制时的文字重叠由 FloatingDialog.showEvent 中的
-        # _fix_first_paint 负责（ensurePolished + invalidate/activate + resize 抖动）。
+        # 这里激活布局并按「所有页签里最大的内容」定尺寸，让常用分辨率一屏放下；
+        # 极端小屏/高缩放比下再被屏幕尺寸夹住，由 QScrollArea 兜底滚动。
         dialog.layout().activate()
-        dialog.adjustSize()
-        # 大字号下 sizeHint 可能超过基准宽度：取两者较大值并限制在屏幕内，
-        # 避免订阅源表格/外观说明被横向裁切。
-        hint = dialog.sizeHint()
-        width = max(typography.scale_px(720), hint.width())
-        height = max(typography.scale_px(500), hint.height())
+        scroll_pages = [
+            general_scroll, playback_scroll, network_scroll,
+            subscription_scroll, appearance_scroll,
+        ]
+        content_min_w = 0
+        content_hint_w = 0
+        content_h = 0
+        for scroll in scroll_pages:
+            page = scroll.widget()
+            if page is not None and page.layout() is not None:
+                page.layout().activate()
+            if page is None:
+                continue
+            content_min_w = max(content_min_w, page.minimumSizeHint().width())
+            content_hint_w = max(content_hint_w, page.sizeHint().width())
+            content_h = max(content_h, page.sizeHint().height())
+        # 宽度：多列内容在窄屏按比例收缩即可，不需要撑到 sizeHint 那么宽；
+        # 上限 1240 避免订阅源页里列表的 sizeHint 把窗口拉得过宽。
+        width = max(typography.scale_px(760),
+                    min(max(content_min_w, min(content_hint_w, 1240)), 1240) + 44)
+        # 高度：留出页签栏、底部按钮行与外边距；内容自然高度 + 160。
+        height = max(typography.scale_px(520), content_h + 160)
         screen = dialog.screen()
         if screen is not None:
             available = screen.availableGeometry()
-            width = min(width, int(available.width() * 0.92))
-            height = min(height, int(available.height() * 0.92))
+            width = min(width, int(available.width() * 0.98))
+            height = min(height, int(available.height() * 0.96))
+        # 同步最小尺寸：FloatingDialog.showEvent 里的 adjustSize 不能把窗口缩回去
+        dialog.setMinimumSize(width, height)
         dialog.resize(width, height)
 
         if focus == 'screensaver':
@@ -890,9 +949,14 @@ class SettingsFileOperations:
         group.setLayout(layout)
         return group
 
-    def _build_protocol_section(self, tr, playback_settings):
-        group = QGroupBox(tr("protocol_settings", "Protocol Settings"))
-        layout = QFormLayout()
+    def _build_protocol_groups(self, tr, playback_settings):
+        """回放协议相关分组。
+
+        拆成「基础 / 高级视频 / 缓存与探测覆盖」三个分组，设置页按列排布，
+        常用分辨率下一屏放下；返回三个 QGroupBox。
+        """
+        basic = QGroupBox(tr("protocol_settings", "Protocol Settings"))
+        layout = QFormLayout(basic)
 
         rtsp_transport_combo = QComboBox()
         rtsp_transport_combo.setObjectName("rtsp_transport_combo")
@@ -960,6 +1024,12 @@ class SettingsFileOperations:
                 selected_hdr_idx = i
         hdr_combo.setCurrentIndex(selected_hdr_idx)
         layout.addRow(tr("hdr_output_mode_colon", "HDR Output:"), hdr_combo)
+        for combo in (rtsp_transport_combo, hwdec_combo, passthrough_combo, hdr_combo):
+            self._shrink_combo(combo)
+        basic.setLayout(layout)
+
+        advanced = QGroupBox(tr("protocol_advanced_settings", "高级视频参数"))
+        layout = QFormLayout(advanced)
 
         # ---- 高级参数：视频输出 / 视频同步 / 丢帧策略 / 缓存 override ----
         # 这些参数原仅由播放器内部按 HDR 模式和流类型自动推导；PC 端开放给用户
@@ -1074,6 +1144,13 @@ class SettingsFileOperations:
         )
 
         # 缓存 override：留空或 0 表示保持播放器内部动态计算值（按流类型/HDR/分辨率自适应）
+        for combo in (vo_combo, vsync_combo, framedrop_combo, deinterlace_combo):
+            self._shrink_combo(combo)
+        advanced.setLayout(layout)
+
+        cache = QGroupBox(tr("protocol_cache_settings", "缓存与探测覆盖"))
+        layout = QFormLayout(cache)
+
         cache_secs_edit = QLineEdit()
         cache_secs_edit.setObjectName("cache_secs_override_edit")
         cache_secs_edit.setPlaceholderText(
@@ -1182,17 +1259,18 @@ class SettingsFileOperations:
                "to load or fail with corrupt packet warnings.")
         )
 
-        group.setLayout(layout)
-        return group
+        cache.setLayout(layout)
+        return basic, advanced, cache
 
-    def _build_playback_extras_section(self, tr, playback_settings):
+    def _build_playback_extras_groups(self, tr, playback_settings):
         """播放设置页的其余分组：循环模式、片头片尾跳过、视频/音频/字幕调整。
 
         图像/音频/字幕参数与各自的独立对话框共用同一份配置，保存时先读取
         现有字典再合并本次字段，避免互相覆盖。
+        返回 (播放行为, 图像, 音频, 字幕, 底部说明)，设置页按列排布。
         """
-        group = QGroupBox(tr("playback_extras_settings", "播放行为"))
-        layout = QFormLayout()
+        behavior = QGroupBox(tr("playback_extras_settings", "播放行为"))
+        layout = QFormLayout(behavior)
 
         queue_combo = QComboBox()
         queue_combo.setObjectName("queue_mode_combo")
@@ -1250,7 +1328,7 @@ class SettingsFileOperations:
         # ---- 视频图像调整（核心参数） ----
         eq_cfg = self.window.config.load_video_eq() if self.window.config else {}
         video_box = QGroupBox(tr("video_eq_group_image", "图像参数"))
-        video_layout = QFormLayout(video_box)
+        video_fields = []
         for key in ('brightness', 'contrast', 'saturation', 'hue', 'gamma'):
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setObjectName(f"video_eq_{key}_slider")
@@ -1268,7 +1346,7 @@ class SettingsFileOperations:
             row_layout.setContentsMargins(0, 0, 0, 0)
             row_layout.addWidget(slider, 1)
             row_layout.addWidget(value_label)
-            video_layout.addRow(tr(f"video_eq_{key}", key.capitalize()), row)
+            video_fields.append((tr(f"video_eq_{key}", key.capitalize()), row))
 
         sharp_slider = QSlider(Qt.Orientation.Horizontal)
         sharp_slider.setObjectName("video_eq_sharpness_slider")
@@ -1287,7 +1365,7 @@ class SettingsFileOperations:
         sharp_layout.setContentsMargins(0, 0, 0, 0)
         sharp_layout.addWidget(sharp_slider, 1)
         sharp_layout.addWidget(sharp_label)
-        video_layout.addRow(tr("video_eq_sharpness", "锐度"), sharp_row)
+        video_fields.append((tr("video_eq_sharpness", "锐度"), sharp_row))
 
         rotate_combo = QComboBox()
         rotate_combo.setObjectName("video_eq_rotate_combo")
@@ -1298,7 +1376,7 @@ class SettingsFileOperations:
         except (TypeError, ValueError):
             rotate_value = 0
         rotate_combo.setCurrentIndex(max(0, rotate_combo.findData(rotate_value)))
-        video_layout.addRow(tr("video_eq_rotate", "旋转"), rotate_combo)
+        video_fields.append((tr("video_eq_rotate", "旋转"), rotate_combo))
 
         flip_combo = QComboBox()
         flip_combo.setObjectName("video_eq_flip_combo")
@@ -1311,18 +1389,23 @@ class SettingsFileOperations:
             flip_combo.addItem(label, value)
         flip_combo.setCurrentIndex(
             max(0, flip_combo.findData(eq_cfg.get('video_flip', '') or '')))
-        video_layout.addRow(tr("video_eq_flip", "镜像翻转"), flip_combo)
+        video_fields.append((tr("video_eq_flip", "镜像翻转"), flip_combo))
 
         reset_check = QCheckBox(tr("video_eq_reset_on_new_file", "切换文件时自动重置"))
         reset_check.setObjectName("video_eq_reset_check")
         reset_check.setChecked(bool(eq_cfg.get('reset_on_new_file', False)))
-        video_layout.addRow('', reset_check)
-        layout.addRow(video_box)
+
+        video_grid = self._compact_grid(video_box)
+        for index, (label_text, field_widget) in enumerate(video_fields):
+            grid_row, grid_col = divmod(index, 2)
+            video_grid.addWidget(
+                self._compact_field(label_text, field_widget), grid_row, grid_col)
+        video_grid.addWidget(reset_check, (len(video_fields) + 1) // 2, 0, 1, 2)
 
         # ---- 音频调整（核心参数） ----
         audio_cfg = self.window.config.load_audio_eq() if self.window.config else {}
         audio_box = QGroupBox(tr("audio_eq_group_delay", "音频调整"))
-        audio_layout = QFormLayout(audio_box)
+        audio_fields = []
 
         delay_slider = QSlider(Qt.Orientation.Horizontal)
         delay_slider.setObjectName("audio_eq_delay_slider")
@@ -1341,7 +1424,7 @@ class SettingsFileOperations:
         delay_layout.setContentsMargins(0, 0, 0, 0)
         delay_layout.addWidget(delay_slider, 1)
         delay_layout.addWidget(delay_label)
-        audio_layout.addRow(tr("audio_eq_delay", "音频延迟"), delay_row)
+        audio_fields.append((tr("audio_eq_delay", "音频延迟"), delay_row))
 
         pitch_slider = QSlider(Qt.Orientation.Horizontal)
         pitch_slider.setObjectName("audio_eq_pitch_slider")
@@ -1362,7 +1445,7 @@ class SettingsFileOperations:
         pitch_layout.setContentsMargins(0, 0, 0, 0)
         pitch_layout.addWidget(pitch_slider, 1)
         pitch_layout.addWidget(pitch_label)
-        audio_layout.addRow(tr("audio_eq_pitch", "音调（变调不变速）"), pitch_row)
+        audio_fields.append((tr("audio_eq_pitch", "音调（变调不变速）"), pitch_row))
 
         channels_combo = QComboBox()
         channels_combo.setObjectName("audio_eq_channels_combo")
@@ -1375,7 +1458,7 @@ class SettingsFileOperations:
             channels_combo.addItem(label, value)
         channels_combo.setCurrentIndex(
             max(0, channels_combo.findData(audio_cfg.get('audio_channels', 'auto') or 'auto')))
-        audio_layout.addRow(tr("audio_eq_channels", "声道"), channels_combo)
+        audio_fields.append((tr("audio_eq_channels", "声道"), channels_combo))
 
         eq_bands = audio_cfg.get('eq', [0.0] * 10)
         if not isinstance(eq_bands, list) or len(eq_bands) != 10:
@@ -1396,31 +1479,39 @@ class SettingsFileOperations:
             slider.setValue(max(-12, min(12, band_value)))
             slider.setToolTip(tr("audio_eq_band_tip", "第 {n} 段").format(n=i + 1))
             band_layout.addWidget(slider, 1)
-        audio_layout.addRow(tr("audio_eq_group_equalizer", "均衡器"), band_row)
-        layout.addRow(audio_box)
+
+        audio_grid = self._compact_grid(audio_box)
+        for index, (label_text, field_widget) in enumerate(audio_fields):
+            grid_row, grid_col = divmod(index, 2)
+            audio_grid.addWidget(
+                self._compact_field(label_text, field_widget), grid_row, grid_col)
+        eq_row = (len(audio_fields) + 1) // 2
+        audio_grid.addWidget(
+            self._compact_field(tr("audio_eq_group_equalizer", "均衡器"), band_row),
+            eq_row, 0, 1, 2)
 
         # ---- 字幕样式（核心参数） ----
         sub_cfg = self.window.config.load_subtitle_style() if self.window.config else {}
         sub_box = QGroupBox(tr("sub_style_group", "字幕样式"))
-        sub_layout = QFormLayout(sub_box)
+        sub_fields = []
 
         sub_font_size = QSpinBox()
         sub_font_size.setObjectName("sub_font_size_spin")
         sub_font_size.setRange(8, 200)
         sub_font_size.setValue(int(sub_cfg.get('font_size', 55) or 55))
-        sub_layout.addRow(tr("sub_font_size", "字体大小"), sub_font_size)
+        sub_fields.append((tr("sub_font_size", "字体大小"), sub_font_size))
 
         sub_border_size = QSpinBox()
         sub_border_size.setObjectName("sub_border_size_spin")
         sub_border_size.setRange(0, 20)
         sub_border_size.setValue(int(sub_cfg.get('border_size', 3) or 0))
-        sub_layout.addRow(tr("sub_border_size", "边框粗细"), sub_border_size)
+        sub_fields.append((tr("sub_border_size", "边框粗细"), sub_border_size))
 
         sub_shadow_offset = QSpinBox()
         sub_shadow_offset.setObjectName("sub_shadow_offset_spin")
         sub_shadow_offset.setRange(0, 20)
         sub_shadow_offset.setValue(int(sub_cfg.get('shadow_offset', 1) or 0))
-        sub_layout.addRow(tr("sub_shadow_offset", "阴影偏移"), sub_shadow_offset)
+        sub_fields.append((tr("sub_shadow_offset", "阴影偏移"), sub_shadow_offset))
 
         sub_font_style = QWidget()
         sub_font_style_layout = QHBoxLayout(sub_font_style)
@@ -1434,7 +1525,7 @@ class SettingsFileOperations:
         sub_font_style_layout.addWidget(bold_check)
         sub_font_style_layout.addWidget(italic_check)
         sub_font_style_layout.addStretch()
-        sub_layout.addRow(tr("sub_font_style", "字形"), sub_font_style)
+        sub_fields.append((tr("sub_font_style", "字形"), sub_font_style))
 
         sub_delay = QSpinBox()
         sub_delay.setObjectName("sub_delay_spin")
@@ -1447,7 +1538,7 @@ class SettingsFileOperations:
         except (TypeError, ValueError):
             delay_ms = 0
         sub_delay.setValue(max(-300000, min(300000, delay_ms)))
-        sub_layout.addRow(tr("sub_delay", "字幕延迟"), sub_delay)
+        sub_fields.append((tr("sub_delay", "字幕延迟"), sub_delay))
 
         sub_scale = QSpinBox()
         sub_scale.setObjectName("sub_scale_spin")
@@ -1460,7 +1551,7 @@ class SettingsFileOperations:
         except (TypeError, ValueError):
             scale_percent = 100
         sub_scale.setValue(max(10, min(1000, scale_percent)))
-        sub_layout.addRow(tr("sub_scale", "字幕缩放"), sub_scale)
+        sub_fields.append((tr("sub_scale", "字幕缩放"), sub_scale))
 
         sub_pos = QSlider(Qt.Orientation.Horizontal)
         sub_pos.setObjectName("sub_pos_slider")
@@ -1475,13 +1566,20 @@ class SettingsFileOperations:
         sub_pos_layout.setContentsMargins(0, 0, 0, 0)
         sub_pos_layout.addWidget(sub_pos, 1)
         sub_pos_layout.addWidget(sub_pos_label)
-        sub_layout.addRow(tr("sub_pos", "字幕位置"), sub_pos_row)
-
         sub_visibility = QCheckBox(tr("sub_visibility", "显示字幕"))
         sub_visibility.setObjectName("sub_visibility_check")
         sub_visibility.setChecked(bool(sub_cfg.get('sub_visibility', True)))
-        sub_layout.addRow('', sub_visibility)
-        layout.addRow(sub_box)
+
+        sub_grid = self._compact_grid(sub_box)
+        for index, (label_text, field_widget) in enumerate(sub_fields):
+            grid_row, grid_col = divmod(index, 2)
+            sub_grid.addWidget(
+                self._compact_field(label_text, field_widget), grid_row, grid_col)
+        sub_pos_row_index = (len(sub_fields) + 1) // 2
+        sub_grid.addWidget(
+            self._compact_field(tr("sub_pos", "字幕位置"), sub_pos_row),
+            sub_pos_row_index, 0, 1, 2)
+        sub_grid.addWidget(sub_visibility, sub_pos_row_index + 1, 0, 1, 2)
 
         hint = QLabel(tr(
             "playback_extras_hint",

@@ -1082,6 +1082,8 @@
   "progress": "Progress",
   "protocol_label": "Protocol",
   "protocol_settings": "Protocol Settings",
+  "protocol_advanced_settings": "Advanced Video",
+  "protocol_cache_settings": "Cache & Probe Overrides",
   "protocol_type": "Protocol Type",
   "protocol_type_colon": "Protocol Type:",
   "qt_version": "QT Version",

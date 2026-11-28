@@ -18,14 +18,19 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QProgressBar,
+    QScrollArea,
+    QFrame,
+    QApplication,
+    QWidget,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPainterPath, QPen
 from PySide6.QtCore import QThread
 
 from ui.floating_dialog import FloatingDialog
 from ui.styles import AppStyles
 from core.log_manager import global_logger as logger
+from utils.delay_constants import DelayMs
 
 
 def _color_to_mpv(color: QColor) -> str:
@@ -174,12 +179,35 @@ class SubtitleStyleDialog(FloatingDialog):
         self.window = main_window
         tr = main_window.language_manager.tr
         self.setWindowTitle(tr('subtitle_style_title', '字幕样式'))
-        self.setMinimumSize(560, 620)
+        # 最小尺寸只防止控件被压扁；实际尺寸按内容，超出屏幕时内部滚动
+        self.setMinimumSize(640, 430)
         self._loading = False
         self._setup_ui()
         self._apply_theme()
         from ui.theme_manager import safe_register_window
         safe_register_window(self)
+
+    def showEvent(self, event):
+        self._apply_screen_limits()
+        super().showEvent(event)
+        QTimer.singleShot(DelayMs.UI_REFRESH, self._apply_screen_limits)
+
+    def _apply_screen_limits(self):
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        max_w = max(620, int(avail.width() * 0.96))
+        max_h = max(400, int(avail.height() * 0.94))
+        if self._content_widget.layout() is not None:
+            self._content_widget.layout().activate()
+        hint = self._content_widget.sizeHint()
+        want_w = max(640, hint.width() + 24)
+        # 底部操作按钮行约 40，加外边距
+        want_h = max(430, hint.height() + 64)
+        self.setMaximumSize(max_w, max_h)
+        self.setMinimumSize(min(want_w, max_w), min(want_h, max_h))
+        self.resize(min(want_w, max_w), min(want_h, max_h))
 
     def reapply_styles(self):
         self._apply_theme()
@@ -210,13 +238,35 @@ class SubtitleStyleDialog(FloatingDialog):
 
     def _setup_ui(self):
         tr = self.window.language_manager.tr
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(12, 12, 12, 12)
+        outer.setSpacing(8)
+
+        content = QWidget()
+        self._content_widget = content
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setWidget(content)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        outer.addWidget(scroll, 1)
 
         # 顶部实时预览：调样式时不必回到画面确认
-        self.preview_label = _SubtitlePreview(self)
+        self.preview_label = _SubtitlePreview(content)
         layout.addWidget(self.preview_label)
+
+        # 样式组与「控制 + 预设」左右两列，避免单列把窗口撑到需要滚动
+        columns = QHBoxLayout()
+        columns.setSpacing(10)
+        left_col = QVBoxLayout()
+        left_col.setSpacing(8)
+        right_col = QVBoxLayout()
+        right_col.setSpacing(8)
 
         # ===== 字幕样式组 =====
         style_group = QGroupBox(tr('sub_style_group', '字幕样式'))
@@ -316,7 +366,8 @@ class SubtitleStyleDialog(FloatingDialog):
         align_row.addStretch()
         form.addRow(tr('sub_align', '对齐'), align_row)
 
-        layout.addWidget(style_group)
+        left_col.addWidget(style_group)
+        left_col.addStretch()
 
         # ===== 字幕控制组 =====
         ctrl_group = QGroupBox(tr('sub_ctrl_group', '字幕控制'))
@@ -381,7 +432,7 @@ class SubtitleStyleDialog(FloatingDialog):
         self.visibility_check.toggled.connect(self._on_visibility_toggled)
         ctrl_form.addRow('', self.visibility_check)
 
-        layout.addWidget(ctrl_group)
+        right_col.addWidget(ctrl_group)
 
         # ===== 预设组 =====
         preset_group = QGroupBox(tr('sub_preset_group', '快速预设'))
@@ -408,7 +459,11 @@ class SubtitleStyleDialog(FloatingDialog):
             btn.clicked.connect(lambda checked, s=style: self._apply_preset(s))
             preset_layout.addWidget(btn)
         preset_layout.addStretch()
-        layout.addWidget(preset_group)
+        right_col.addWidget(preset_group)
+        right_col.addStretch()
+        columns.addLayout(left_col, 3)
+        columns.addLayout(right_col, 2)
+        layout.addLayout(columns)
 
         # ===== 操作按钮组（标准设置式：重置默认 | 应用 + 完成） =====
         def _on_done():
@@ -422,7 +477,7 @@ class SubtitleStyleDialog(FloatingDialog):
             apply_text=tr('sub_apply_now', '应用'),
             done_text=tr('sub_close', '完成'),
         )
-        layout.addWidget(btn_bar)
+        outer.addWidget(btn_bar)
 
         # 加载当前样式
         self._load_from_config()

@@ -2,7 +2,7 @@
 from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QPushButton,
     QSlider, QCheckBox, QComboBox, QGroupBox, QWidget,
-    QGridLayout, QProgressBar,
+    QGridLayout, QProgressBar, QScrollArea, QFrame, QApplication,
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtCore import QTimer as _QTimer
@@ -126,7 +126,8 @@ class AudioEqualizerDialog(FloatingDialog):
         self.window = main_window
         tr = main_window.language_manager.tr
         self.setWindowTitle(tr('audio_eq_title', '音频调整'))
-        self.setMinimumSize(560, 660)
+        # 最小尺寸只防止控件被压扁；实际尺寸按内容，超出屏幕时内部滚动
+        self.setMinimumSize(560, 420)
         self._loading = False
         self._eq_sliders = []
         self._eq_labels = []
@@ -190,9 +191,24 @@ class AudioEqualizerDialog(FloatingDialog):
 
     def _setup_ui(self):
         tr = self.window.language_manager.tr
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(12, 12, 12, 12)
+        outer.setSpacing(8)
+
+        content = QWidget()
+        self._content_widget = content
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
+
+        # 内容超出屏幕时由滚动区兜底，底部操作按钮始终可见
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setWidget(content)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        outer.addWidget(scroll, 1)
 
         # ===== 上半部分：左右双列 =====
         top_row = QHBoxLayout()
@@ -386,10 +402,12 @@ class AudioEqualizerDialog(FloatingDialog):
             apply_text=tr('audio_eq_apply', '应用'),
             done_text=tr('audio_eq_close', '完成'),
         )
-        layout.addWidget(btn_bar)
+        outer.addWidget(btn_bar)
 
     def showEvent(self, event):
+        self._apply_screen_limits()
         super().showEvent(event)
+        _QTimer.singleShot(DelayMs.UI_REFRESH, self._apply_screen_limits)
         if not self._devices_loaded:
             try:
                 _QTimer.singleShot(DelayMs.LAYOUT_SETTLE, self._load_audio_devices)
@@ -397,6 +415,23 @@ class AudioEqualizerDialog(FloatingDialog):
             except Exception:
                 self._load_audio_devices()
                 self._refresh_channels()
+
+    def _apply_screen_limits(self):
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        max_w = max(560, int(avail.width() * 0.96))
+        max_h = max(400, int(avail.height() * 0.94))
+        if self._content_widget.layout() is not None:
+            self._content_widget.layout().activate()
+        hint = self._content_widget.sizeHint()
+        want_w = max(560, hint.width() + 24)
+        # 按钮行约 40，加外边距
+        want_h = max(420, hint.height() + 64)
+        self.setMaximumSize(max_w, max_h)
+        self.setMinimumSize(min(want_w, max_w), min(want_h, max_h))
+        self.resize(min(want_w, max_w), min(want_h, max_h))
 
     def _load_audio_devices(self):
         """从 mpv 加载音频设备列表"""

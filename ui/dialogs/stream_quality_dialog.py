@@ -13,7 +13,7 @@
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QPushButton,
-    QGroupBox, QSizePolicy,
+    QGroupBox, QSizePolicy, QScrollArea, QFrame, QApplication, QWidget,
 )
 
 from ui.floating_dialog import FloatingDialog
@@ -32,7 +32,8 @@ class StreamQualityDialog(FloatingDialog):
         self.window = main_window
         tr = main_window.language_manager.tr
         self.setWindowTitle(tr('stream_quality_title', '流质量检测'))
-        self.setMinimumSize(640, 660)
+        # 最小尺寸只保证按钮/分组不被压扁；实际高度按内容定，超出屏幕时内部滚动
+        self.setMinimumSize(720, 420)
         self._labels = {}
         self._setup_ui()
         self._apply_theme()
@@ -44,6 +45,23 @@ class StreamQualityDialog(FloatingDialog):
         self._timer.timeout.connect(self._refresh)
         self._timer.start()
         QTimer.singleShot(DelayMs.UI_REFRESH, self._refresh)
+
+    def _apply_screen_limits(self):
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        max_w = max(640, int(avail.width() * 0.96))
+        max_h = max(400, int(avail.height() * 0.94))
+        if self._content_widget.layout() is not None:
+            self._content_widget.layout().activate()
+        hint = self._content_widget.sizeHint()
+        want_w = max(720, hint.width() + 24)
+        # 底部关闭按钮行约 40，加外边距
+        want_h = max(420, hint.height() + 64)
+        self.setMaximumSize(max_w, max_h)
+        self.setMinimumSize(min(want_w, max_w), min(want_h, max_h))
+        self.resize(min(want_w, max_w), min(want_h, max_h))
 
     # ---------- UI ----------
     def reapply_styles(self):
@@ -78,9 +96,33 @@ class StreamQualityDialog(FloatingDialog):
 
     def _setup_ui(self):
         tr = self.window.language_manager.tr
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(12, 12, 12, 12)
+        outer.setSpacing(8)
+
+        content = QWidget()
+        self._content_widget = content
+        layout = QHBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        col1 = QVBoxLayout()
+        col1.setSpacing(8)
+        col2 = QVBoxLayout()
+        col2.setSpacing(8)
+        col3 = QVBoxLayout()
+        col3.setSpacing(8)
+        layout.addLayout(col1, 1)
+        layout.addLayout(col2, 1)
+        layout.addLayout(col3, 1)
+
+        # 内容超出屏幕时由滚动区兜底，关闭按钮始终固定在底部
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setWidget(content)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        outer.addWidget(scroll, 1)
 
         # ===== 视频信息 =====
         video_group = QGroupBox(tr('stream_quality_group_video', '视频'))
@@ -99,7 +141,8 @@ class StreamQualityDialog(FloatingDialog):
             ('video_depth',         tr('stream_quality_video_depth',        '视频位深')),
             ('aspect_ratio',        tr('stream_quality_aspect_ratio',       '宽高比')),
         ])
-        layout.addWidget(video_group)
+        col1.addWidget(video_group)
+        col1.addStretch()
 
         # ===== 音频信息 =====
         audio_group = QGroupBox(tr('stream_quality_group_audio', '音频'))
@@ -112,7 +155,7 @@ class StreamQualityDialog(FloatingDialog):
             ('audio_bitrate',  tr('stream_quality_audio_bitrate', '音频码率')),
             ('audio_depth',    tr('stream_quality_audio_depth',   '音频位深')),
         ])
-        layout.addWidget(audio_group)
+        col2.addWidget(audio_group)
 
         # ===== 网络与缓存 =====
         net_group = QGroupBox(tr('stream_quality_group_network', '网络与缓存'))
@@ -128,7 +171,8 @@ class StreamQualityDialog(FloatingDialog):
             ('first_frame',      tr('stream_quality_first_frame',     '首帧耗时')),
             ('demuxer_bitrate',  tr('stream_quality_demuxer_bitrate', '解复用码率')),
         ])
-        layout.addWidget(net_group)
+        col2.addWidget(net_group)
+        col2.addStretch()
 
         # ===== 丢帧统计 =====
         drop_group = QGroupBox(tr('stream_quality_group_drops', '丢帧统计'))
@@ -139,7 +183,7 @@ class StreamQualityDialog(FloatingDialog):
             ('mistimed_frame',    tr('stream_quality_mistimed_frame',    '误时帧')),
             ('vo_delay',          tr('stream_quality_vo_delay',          'VO 延迟帧')),
         ])
-        layout.addWidget(drop_group)
+        col3.addWidget(drop_group)
 
         # ===== 硬件与渲染 =====
         hw_group = QGroupBox(tr('stream_quality_group_hw', '硬件与渲染'))
@@ -150,7 +194,8 @@ class StreamQualityDialog(FloatingDialog):
             ('gpu_api',        tr('stream_quality_gpu_api',        'GPU API')),
             ('gpu_context',    tr('stream_quality_gpu_context',    'GPU 上下文')),
         ])
-        layout.addWidget(hw_group)
+        col3.addWidget(hw_group)
+        col3.addStretch()
 
         # ===== 关闭按钮 =====
         btn_row = QHBoxLayout()
@@ -159,7 +204,7 @@ class StreamQualityDialog(FloatingDialog):
         close_btn.clicked.connect(self.close)
         close_btn.setToolTip(tr('close_tooltip', '关闭'))
         btn_row.addWidget(close_btn)
-        layout.addLayout(btn_row)
+        outer.addLayout(btn_row)
 
     def _add_rows(self, form: QFormLayout, rows):
         """批量添加 label: value 行，value 标签存入 self._labels
@@ -340,7 +385,11 @@ class StreamQualityDialog(FloatingDialog):
 
     # ---------- 生命周期 ----------
     def showEvent(self, event):
+        # 先限制最大尺寸，避免首次 adjustSize 把窗口撑出屏幕
+        self._apply_screen_limits()
         super().showEvent(event)
+        # 样式在首次显示后才完成 polish，延后再按真实内容尺寸校正一次
+        QTimer.singleShot(DelayMs.UI_REFRESH, self._apply_screen_limits)
         if not self._timer.isActive():
             self._timer.start()
         self._refresh()

@@ -1082,6 +1082,8 @@
   "progress": "进度",
   "protocol_label": "协议",
   "protocol_settings": "回放协议设置",
+  "protocol_advanced_settings": "高级视频参数",
+  "protocol_cache_settings": "缓存与探测覆盖",
   "protocol_type": "协议类型",
   "protocol_type_colon": "协议类型:",
   "qt_version": "QT版本",
