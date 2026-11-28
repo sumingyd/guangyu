@@ -1363,6 +1363,9 @@ if (lyricsOpen) {
         // 新版本更新提示对话框（发现新版本时自动弹出，也可从"关于"面板手动触发）
         UpdateDialog(viewModel = viewModel)
 
+        // 存储权限说明（首次启动未授予共享目录权限时提示，可拒绝后继续用私有目录）
+        StoragePermissionDialog(viewModel = viewModel)
+
         // 退出确认对话框（BACK 键退出时提示：立即退出 / 进入 PiP）
         ExitConfirmDialog(viewModel = viewModel)
 

@@ -863,6 +863,16 @@ internal var _channelInputJob: kotlinx.coroutines.Job? = null
     internal val _aboutPanelOpen = MutableStateFlow(false)
     val aboutPanelOpen: StateFlow<Boolean> = _aboutPanelOpen.asStateFlow()
 
+    /** 当前实际使用的数据目录（由 Python get_storage_info 返回，路径以真实结果为准） */
+    internal val _storageInfo = MutableStateFlow<com.iptv.scanner.editor.pro.data.StorageInfo?>(null)
+    val storageInfo: StateFlow<com.iptv.scanner.editor.pro.data.StorageInfo?> =
+        _storageInfo.asStateFlow()
+
+    /** 首次启动的存储权限说明弹窗（Android 11+ 未授权时展示） */
+    internal val _storagePermissionDialogOpen = MutableStateFlow(false)
+    val storagePermissionDialogOpen: StateFlow<Boolean> =
+        _storagePermissionDialogOpen.asStateFlow()
+
     // 版本检查（与 PC 端 UpdateController 对齐）
     /** 版本检查状态 */
 

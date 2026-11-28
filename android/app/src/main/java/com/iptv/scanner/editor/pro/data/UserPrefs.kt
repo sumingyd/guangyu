@@ -331,6 +331,15 @@ class UserPrefs private constructor() {
     }
 
     // -----------------------------------------------------------------
+    // 存储权限说明弹窗（只自动弹一次，之后从关于页手动进入）
+    // -----------------------------------------------------------------
+
+    fun isStoragePermissionAsked(): Boolean = prefs.getBoolean(KEY_STORAGE_PERMISSION_ASKED, false)
+    fun setStoragePermissionAsked() {
+        prefs.edit().putBoolean(KEY_STORAGE_PERMISSION_ASKED, true).apply()
+    }
+
+    // -----------------------------------------------------------------
     // 主题模式
     // -----------------------------------------------------------------
 
@@ -551,6 +560,8 @@ class UserPrefs private constructor() {
 
         private const val KEY_LOG_LEVEL = "log_level"
         private const val DEFAULT_LOG_LEVEL = "info"
+
+        private const val KEY_STORAGE_PERMISSION_ASKED = "storage_permission_asked"
 
         private const val KEY_THEME_MODE = "theme_mode"
         private const val DEFAULT_THEME_MODE = "dark"

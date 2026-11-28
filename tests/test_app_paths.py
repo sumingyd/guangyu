@@ -120,3 +120,120 @@ def test_unwritable_user_dir_falls_back_to_legacy_dir(tmp_path, monkeypatch):
     record = legacy / 'path_fallback.log'
     assert record.exists()
     assert '不可写' in record.read_text(encoding='utf-8')
+
+
+# ----------------------------------------------------------------------
+# Android 共享目录布局（/sdcard/GuangYu）
+# ----------------------------------------------------------------------
+
+def _android_env(tmp_path, monkeypatch):
+    monkeypatch.setenv('ANDROID_ARGUMENT', '1')
+    root = tmp_path / 'sdcard' / 'GuangYu'
+    private = tmp_path / 'android-data' / 'GuangYu'
+    monkeypatch.setenv('IPTV_DATA_DIR', str(root))
+    monkeypatch.setenv('IPTV_PUBLIC_ROOT', str(root))
+    monkeypatch.setenv('IPTV_PRIVATE_ROOT', str(private))
+    monkeypatch.delenv('IPTV_CONFIG_DIR', raising=False)
+    return root, private
+
+
+def test_android_detected_by_explicit_marker(tmp_path, monkeypatch):
+    """Chaquopy 下 sys.platform 为 linux，必须靠 IPTV_ANDROID 标记识别为 Android。"""
+    monkeypatch.delenv('ANDROID_ARGUMENT', raising=False)
+    monkeypatch.setenv('IPTV_ANDROID', '1')
+    root = tmp_path / 'sdcard' / 'GuangYu'
+    monkeypatch.setenv('IPTV_DATA_DIR', str(root))
+    monkeypatch.setenv('IPTV_PUBLIC_ROOT', str(root))
+    monkeypatch.setenv('IPTV_PRIVATE_ROOT', str(tmp_path / 'private' / 'GuangYu'))
+
+    assert app_paths.get_config_dir() == str(root / 'config')
+    assert app_paths.get_log_dir() == str(root / 'logs')
+
+
+def test_android_layout_creates_five_subdirs(tmp_path, monkeypatch):
+    root, _ = _android_env(tmp_path, monkeypatch)
+
+    created = app_paths.ensure_android_layout(str(root))
+
+    for name in ('config', 'logs', 'cache', 'data', 'exports'):
+        assert (root / name).is_dir(), name
+    assert len(created) == 5
+    assert app_paths.get_config_dir() == str(root / 'config')
+    assert app_paths.get_log_dir() == str(root / 'logs')
+    assert app_paths.get_cache_dir() == str(root / 'cache')
+    assert app_paths.get_data_dir() == str(root / 'data')
+    assert app_paths.get_export_dir() == str(root / 'exports')
+
+    info = app_paths.get_storage_info()
+    assert info['shared'] is True
+    assert info['root'] == str(root)
+
+
+def test_android_migration_classifies_and_is_idempotent(tmp_path, monkeypatch):
+    root, private = _android_env(tmp_path, monkeypatch)
+    legacy = private.parent / 'ISEP'
+    legacy.mkdir(parents=True)
+    (legacy / 'config.ini').write_text('[Player]\nvolume = 30\n', encoding='utf-8')
+    (legacy / 'app.log').write_text('log line\n', encoding='utf-8')
+    (legacy / 'favorites.json').write_text('{"items": []}', encoding='utf-8')
+    (legacy / 'logo_cache').mkdir()
+    (legacy / 'logo_cache' / 'cctv1.png').write_bytes(b'logo')
+
+    migrated = app_paths.migrate_android_layout(str(root), str(private))
+
+    assert (root / 'config' / 'config.ini').exists()
+    assert (root / 'logs' / 'app.log').exists()
+    assert (root / 'data' / 'favorites.json').exists()
+    assert (root / 'cache' / 'logo_cache' / 'cctv1.png').read_bytes() == b'logo'
+    assert len(migrated) == 4
+    # 全部迁移成功后删除旧目录，避免两份互不一致的数据
+    assert not legacy.exists()
+    marker = app_paths._read_layout_marker(str(root))
+    assert str(legacy) in marker['migrated_sources']
+
+    # 幂等：重复调用不再产生迁移结果
+    assert app_paths.migrate_android_layout(str(root), str(private)) == []
+
+
+def test_android_migration_keeps_source_when_unhandled_items_exist(tmp_path, monkeypatch):
+    root, private = _android_env(tmp_path, monkeypatch)
+    legacy = private.parent / 'ISEP'
+    legacy.mkdir(parents=True)
+    (legacy / 'config.ini').write_text('[Player]\nvolume = 30\n', encoding='utf-8')
+    (legacy / 'unknown_thing.bin').write_bytes(b'x')
+
+    app_paths.migrate_android_layout(str(root), str(private))
+
+    assert (root / 'config' / 'config.ini').exists()
+    assert (root / 'data' / 'unknown_thing.bin').exists()
+    # 未知文件已迁到 data/，旧目录被清理
+    assert not legacy.exists()
+
+
+def test_android_migration_does_not_overwrite_existing_config(tmp_path, monkeypatch):
+    root, private = _android_env(tmp_path, monkeypatch)
+    app_paths.ensure_android_layout(str(root))
+    (root / 'config' / 'config.ini').write_text('[Player]\nvolume = 80\n', encoding='utf-8')
+    legacy = private.parent / 'ISEP'
+    legacy.mkdir(parents=True)
+    (legacy / 'config.ini').write_text('[Player]\nvolume = 10\n', encoding='utf-8')
+
+    app_paths.migrate_android_layout(str(root), str(private))
+
+    assert 'volume = 80' in (root / 'config' / 'config.ini').read_text(encoding='utf-8')
+
+
+def test_android_migration_merges_previous_layout_when_switching_to_shared(tmp_path, monkeypatch):
+    """私有目录已升级为分类布局后，授予权限切到共享目录时按子目录合并。"""
+    root, private = _android_env(tmp_path, monkeypatch)
+    app_paths.ensure_android_layout(str(private))
+    (private / 'config' / 'config.ini').write_text('[Player]\nvolume = 42\n', encoding='utf-8')
+    logo = private / 'cache' / 'logo_cache'
+    logo.mkdir(parents=True)
+    (logo / 'cctv1.png').write_bytes(b'logo')
+
+    app_paths.migrate_android_layout(str(root), str(private))
+
+    assert (root / 'config' / 'config.ini').exists()
+    assert (root / 'cache' / 'logo_cache' / 'cctv1.png').read_bytes() == b'logo'
+    assert not private.exists()

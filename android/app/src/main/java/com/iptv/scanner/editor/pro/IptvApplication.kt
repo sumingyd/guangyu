@@ -1,6 +1,7 @@
 package com.iptv.scanner.editor.pro
 
 import android.util.Log
+import coil.EventListener
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.disk.DiskCache
@@ -318,9 +319,13 @@ class IptvApplication : PyApplication(), ImageLoaderFactory {
                     }
                 }
             }
-            // 复制 app.log
-            val appLog = File(filesDir, "ISEP/app.log")
-            if (appLog.exists()) {
+            // 复制 app.log（共享目录/私有目录的 logs/，兼容旧版 ISEP 路径）
+            val appLogCandidates = listOf(
+                com.iptv.scanner.editor.pro.data.AppStorage.logFile(this),
+                File(filesDir, "ISEP/app.log")
+            )
+            val appLog = appLogCandidates.firstOrNull { it.exists() }
+            if (appLog != null) {
                 appLog.copyTo(File(destDir, "app.log"), overwrite = true)
                 count++
             }

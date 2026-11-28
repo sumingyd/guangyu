@@ -137,14 +137,27 @@ class IptvRepository private constructor() {
     // -----------------------------------------------------------------
 
     /** 初始化 Python 环境 + ServerContext 单例。返回 'OK' 或 'FAILED: ...' */
-    suspend fun initContext(extFilesDir: String = "", filesDir: String = "", logLevel: String = "info", nativeLibDir: String = ""): Result<Unit> {
-        val raw = callPyRaw("init_context", extFilesDir, filesDir, logLevel, nativeLibDir)
+    suspend fun initContext(
+        extFilesDir: String = "",
+        filesDir: String = "",
+        logLevel: String = "info",
+        nativeLibDir: String = "",
+        publicRoot: String = "",
+        privateRoot: String = "",
+    ): Result<Unit> {
+        val raw = callPyRaw(
+            "init_context", extFilesDir, filesDir, logLevel, nativeLibDir, publicRoot, privateRoot
+        )
         return if (raw.startsWith("OK")) {
             Result.success(Unit)
         } else {
             Result.failure(IptvException(raw.removePrefix("FAILED:").trim()))
         }
     }
+
+    /** 当前实际使用的数据目录（Python 端解析结果） */
+    suspend fun getStorageInfo(): Result<StorageInfo> =
+        callPyTyped("get_storage_info")
 
     /** 设置应用版本信息（供 Web 界面使用） */
     suspend fun setAppInfo(version: String, buildDate: String): Result<Unit> {

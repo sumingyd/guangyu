@@ -905,7 +905,7 @@ private fun BackupRestoreBar(viewModel: AppViewModel) {
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "导出配置到下载目录，重装/换机后可恢复",
+                        text = "导出到 GuangYu/exports（未授权时保存到下载目录），重装/换机后可恢复",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

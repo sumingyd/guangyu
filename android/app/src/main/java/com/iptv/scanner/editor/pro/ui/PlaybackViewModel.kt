@@ -146,14 +146,19 @@ internal fun AppViewModel.startInitialization() {
             delay(300)
 
             // 1. 初始化 Python + ServerContext 单例（在 IO 线程执行，减少主线程压力）
-            // 传递 Android 存储路径给 Python（jnius 不可用时的兜底方案）
+            // 传递 Android 存储路径给 Python：共享目录（需所有文件访问权限）优先，
+            // Python 侧会再写探针验证，不可写时自动回退到私有目录。
             val app = getApplication<Application>()
             val extFilesDir = app.getExternalFilesDir(null)?.absolutePath ?: ""
             val filesDir = app.filesDir.absolutePath
             val nativeLibDir = app.applicationInfo.nativeLibraryDir
+            val publicRoot = com.iptv.scanner.editor.pro.data.AppStorage.publicRoot().absolutePath
+            val privateRoot = com.iptv.scanner.editor.pro.data.AppStorage.privateRoot(app).absolutePath
             val logLevel = userPrefs.getLogLevel()
             val initResult = withContext(Dispatchers.IO) {
-                repository.initContext(extFilesDir, filesDir, logLevel, nativeLibDir)
+                repository.initContext(
+                    extFilesDir, filesDir, logLevel, nativeLibDir, publicRoot, privateRoot
+                )
             }
             if (initResult.isFailure) {
                 val msg = initResult.exceptionOrNull()?.message ?: "初始化失败"
@@ -162,6 +167,10 @@ internal fun AppViewModel.startInitialization() {
                 return@launch
             }
             Log.i(AppViewModel.TAG, "initContext OK, start polling status")
+
+            // 记录 Python 回报的真实数据目录，并在首次启动时提示申请共享存储权限
+            refreshStorageInfo()
+            maybeShowStoragePermissionDialog()
 
             // 1.2 复制内置 GLSL 着色器文件到 filesDir/shaders/
             withContext(Dispatchers.IO) {
@@ -416,9 +425,17 @@ internal fun AppViewModel.restoreLastChannel(autoPlayFirstFallback: Boolean) {
     }
     // 外部标志文件：如果存在则跳过自动播放（用于测试/调试）
     try {
-        val extDir = android.os.Environment.getExternalStorageDirectory()
-        val flagFile = java.io.File(extDir, "Android/data/com.iptv.scanner.editor.pro/files/ISEP/skip_auto_resume")
-        if (flagFile.exists()) {
+        val app = getApplication<Application>()
+        val flags = listOf(
+            // 新布局：<root>/data/skip_auto_resume（共享或私有目录）
+            java.io.File(com.iptv.scanner.editor.pro.data.AppStorage.dataDir(app), "skip_auto_resume"),
+            // 旧版路径，保留兼容
+            java.io.File(
+                android.os.Environment.getExternalStorageDirectory(),
+                "Android/data/com.iptv.scanner.editor.pro/files/ISEP/skip_auto_resume"
+            )
+        )
+        if (flags.any { it.exists() }) {
             Log.i(AppViewModel.TAG, "restoreLastChannel: skip_auto_resume flag file exists, skipping")
             return
         }

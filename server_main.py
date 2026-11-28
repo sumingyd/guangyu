@@ -26,10 +26,13 @@ def _setup_android_env():
         Python = importlib.import_module('chaquopy.python').Python
         app = Python.getPlatform().getApplication()
         files_dir = app.getFilesDir().getAbsolutePath()
-        os.environ.setdefault('IPTV_DATA_DIR', files_dir)
-        # 使用统一辅助函数获取 ISEP 目录（兜底处理）
-        from utils.platform_utils import get_android_data_dir
-        config_dir = get_android_data_dir() or os.path.join(files_dir, 'ISEP')
+        # 与 Android 桥接层保持一致的平台标记（Chaquopy 的 sys.platform 不可靠）
+        os.environ['IPTV_ANDROID'] = '1'
+        # 与服务端共用同一套根目录约定：<root>/{config,logs,cache,data,exports}
+        os.environ.setdefault('IPTV_DATA_DIR', os.path.join(files_dir, 'GuangYu'))
+        from utils.app_paths import get_config_dir, ensure_android_layout
+        ensure_android_layout()
+        config_dir = get_config_dir()
         os.makedirs(config_dir, exist_ok=True)
         os.chdir(config_dir)
     except Exception as e:

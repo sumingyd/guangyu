@@ -17,6 +17,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.iptv.scanner.editor.pro.data.AppStorage
 import com.iptv.scanner.editor.pro.data.IptvChannel
 import com.iptv.scanner.editor.pro.data.GithubProxy
 import com.iptv.scanner.editor.pro.data.GithubProxySettings
@@ -253,7 +254,38 @@ internal fun AppViewModel.toggleViewSettings() {
 
 internal fun AppViewModel.toggleAboutPanel() {
     _aboutPanelOpen.value = !_aboutPanelOpen.value
-    if (!_aboutPanelOpen.value) showControlsAutoHide()
+    if (_aboutPanelOpen.value) refreshStorageInfo() else showControlsAutoHide()
+}
+
+// ---------------------------------------------------------------------
+// 存储目录与权限
+// ---------------------------------------------------------------------
+
+/** 读取 Python 端解析出的真实数据目录（设置/关于页展示用） */
+internal fun AppViewModel.refreshStorageInfo() {
+    viewModelScope.launch {
+        repository.getStorageInfo().onSuccess { _storageInfo.value = it }
+    }
+}
+
+/**
+ * 首次启动检查：未获得共享存储权限时弹一次说明，
+ * 已询问过则不再自动打扰（用户仍可从关于页手动打开）。
+ */
+internal fun AppViewModel.maybeShowStoragePermissionDialog() {
+    val app = getApplication<Application>()
+    if (!AppStorage.hasStoragePermission(app) && !userPrefs.isStoragePermissionAsked()) {
+        userPrefs.setStoragePermissionAsked()
+        _storagePermissionDialogOpen.value = true
+    }
+}
+
+internal fun AppViewModel.openStoragePermissionDialog() {
+    _storagePermissionDialogOpen.value = true
+}
+
+internal fun AppViewModel.dismissStoragePermissionDialog() {
+    _storagePermissionDialogOpen.value = false
 }
 
 internal fun AppViewModel.getCurrentVersion(): String {
@@ -1000,7 +1032,10 @@ internal fun AppViewModel.exportScanResultsAsM3u() {
                 .format(java.util.Date())
             val filename = "scan_$ts.m3u"
             val app = getApplication<Application>()
-            val written = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val direct = writeExportFile(filename, m3uText.toByteArray())
+            val written = if (direct != null) {
+                true
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val resolver = app.contentResolver
                 val values = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
@@ -1021,8 +1056,9 @@ internal fun AppViewModel.exportScanResultsAsM3u() {
                 true
             }
             if (written) {
-                showOsd("导出", "已保存到 Downloads/$filename（$channelCount 个频道）")
-                Log.i(AppViewModel.TAG, "Scan results exported to Downloads/$filename ($channelCount channels)")
+                val where = direct?.absolutePath ?: "Downloads/$filename"
+                showOsd("导出", "已保存到 $where（$channelCount 个频道）")
+                Log.i(AppViewModel.TAG, "Scan results exported to $where ($channelCount channels)")
             } else {
                 showOsd("导出", "保存失败")
             }

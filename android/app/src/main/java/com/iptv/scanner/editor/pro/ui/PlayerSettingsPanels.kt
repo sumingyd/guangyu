@@ -1163,7 +1163,7 @@ fun ClipExportPanel(viewModel: AppViewModel) {
 
             // 说明
             Text(
-                text = "说明：导出文件将保存到下载目录（Download/ISEP_*）。" +
+                text = "说明：导出文件保存到 /sdcard/GuangYu/exports/（未授予所有文件访问权限时保存到下载目录）。" +
                        "MP4 使用流拷贝（快速），GIF 限制 480px 宽 10fps，MP3 提取音轨。",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 11.sp,

@@ -1241,7 +1241,13 @@ internal fun AppViewModel.exportConfig() {
                 val fullBackup = buildFullBackup(pyJson)
                 val written = writeBackupToFile(fullBackup)
                 if (written) {
-                    showOsd("备份", "已导出到下载目录")
+                    val app = getApplication<Application>()
+                    showOsd(
+                        "备份",
+                        if (com.iptv.scanner.editor.pro.data.AppStorage.isUsingShared(app))
+                            "已导出到 /sdcard/GuangYu/exports/"
+                        else "已导出到下载目录"
+                    )
                 } else {
                     showOsd("备份", "导出失败：无法写入文件")
                 }
@@ -1345,11 +1351,32 @@ internal suspend fun AppViewModel.restoreFullBackup(json: String): Result<Unit> 
     }
 }
 
+/**
+ * 把导出内容写入统一导出目录（共享目录可用时为 /sdcard/GuangYu/exports）。
+ * 共享目录不可用返回 null，调用方继续走 MediaStore Downloads，保证用户仍能拿到文件。
+ */
+internal fun AppViewModel.writeExportFile(filename: String, bytes: ByteArray): java.io.File? {
+    val app = getApplication<Application>()
+    val file = com.iptv.scanner.editor.pro.data.AppStorage.exportFile(app, filename) ?: return null
+    return try {
+        file.writeBytes(bytes)
+        file
+    } catch (e: Exception) {
+        Log.e(AppViewModel.TAG, "writeExportFile failed: ${file.absolutePath}", e)
+        null
+    }
+}
+
 internal fun AppViewModel.writeBackupToFile(json: String): Boolean {
     val now = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
     val filename = "IPTV_backup_$now.json"
     return try {
         val app = getApplication<Application>()
+        val direct = writeExportFile(filename, json.toByteArray())
+        if (direct != null) {
+            Log.i(AppViewModel.TAG, "Backup written to ${direct.absolutePath}")
+            return true
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val resolver = app.contentResolver
             val values = ContentValues().apply {

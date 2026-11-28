@@ -496,9 +496,9 @@ async def handle_ws_logs(request):
         pass
 
     if not log_file:
-        # 回退到默认路径
-        from utils.platform_utils import get_android_data_dir
-        log_file = os.path.join(get_android_data_dir(), 'ISEP', 'app.log')
+        # 回退到统一日志目录（Android 为 <root>/logs/app.log）
+        from utils.app_paths import get_log_dir
+        log_file = os.path.join(get_log_dir(), 'app.log')
 
     last_pos = 0
     try:

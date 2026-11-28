@@ -826,7 +826,13 @@ internal fun AppViewModel.saveAsM3u() {
             val m3uContent = buildM3uContent(channels)
             val written = withContext(Dispatchers.IO) { writeM3uToFile(m3uContent) }
             if (written) {
-                showOsd("另存为", "已导出到下载目录")
+                val app = getApplication<Application>()
+                showOsd(
+                    "另存为",
+                    if (com.iptv.scanner.editor.pro.data.AppStorage.isUsingShared(app))
+                        "已导出到 /sdcard/GuangYu/exports/"
+                    else "已导出到下载目录"
+                )
             } else {
                 showOsd("另存为", "导出失败")
             }
@@ -857,6 +863,7 @@ internal fun AppViewModel.writeM3uToFile(content: String): Boolean {
     val filename = "GuangYu_export_$now.m3u"
     return try {
         val app = getApplication<Application>()
+        if (writeExportFile(filename, content.toByteArray()) != null) return true
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val resolver = app.contentResolver
             val values = android.content.ContentValues().apply {
@@ -943,8 +950,9 @@ internal fun AppViewModel.exportClip(startTime: Double, duration: Double, format
             val ext = when (format) { "gif" -> "gif"; "mp3" -> "mp3"; else -> "mp4" }
             val filename = "GuangYu_clip_$now.$ext"
 
-            // 获取输出路径
-            val outFile = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // 获取输出路径：共享目录可用时直接写 GuangYu/exports，否则退回 Downloads
+            val directOut = com.iptv.scanner.editor.pro.data.AppStorage.exportFile(app, filename)
+            val outFile = directOut ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val resolver = app.contentResolver
                 val mimeType = when (format) {
                     "gif" -> "image/gif"
@@ -1008,7 +1016,10 @@ internal fun AppViewModel.exportClip(startTime: Double, duration: Double, format
             if (exitCode == 0) {
                 _clipExportProgress.value = 100
                 _clipExportStatus.value = "导出成功: $filename"
-                showOsd("切片导出", "已导出到下载目录")
+                showOsd(
+                    "切片导出",
+                    if (directOut != null) "已导出到 ${directOut.parent}" else "已导出到下载目录"
+                )
             } else {
                 _clipExportStatus.value = "导出失败 (exit=$exitCode)"
                 showOsd("切片导出", "导出失败")

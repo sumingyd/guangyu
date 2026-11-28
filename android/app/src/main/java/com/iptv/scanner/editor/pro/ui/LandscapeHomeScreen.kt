@@ -775,9 +775,10 @@ private fun LandscapeSystemOverviewPanel(viewModel: AppViewModel) {
     // ==================== 运行日志（app.log 尾部，5 秒自动刷新） ====================
     val context = androidx.compose.ui.platform.LocalContext.current
     val appLogFile = remember(context) {
-        // 与 Python 端 _setup_android_paths 的目录解析顺序一致：
-        // /sdcard/ISEP/ → getExternalFilesDir()/ISEP/ → filesDir/ISEP/
+        // 与 Python 端目录解析一致：共享目录/私有目录的 logs/app.log，
+        // 保留旧版 ISEP 路径作为只读兜底（未迁移成功时仍能看到历史日志）
         listOf(
+            com.iptv.scanner.editor.pro.data.AppStorage.logFile(context),
             java.io.File("/sdcard/ISEP/app.log"),
             context.getExternalFilesDir(null)?.let { java.io.File(it, "ISEP/app.log") },
             java.io.File(context.filesDir, "ISEP/app.log")

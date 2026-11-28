@@ -20,7 +20,7 @@ from services.mpv_common import (
     _is_mpv_available,
 )
 
-# Android Chaquopy 环境：优先使用 IPTV_DATA_DIR（已指向 ISEP 目录）下的 cache 目录
+# 缩略图缓存：统一走 utils.app_paths（Android 为 <数据根>/cache/thumbnails）
 from utils.app_paths import get_cache_dir
 from core.log_manager import global_logger as logger
 CACHE_DIR = os.path.join(get_cache_dir(), 'thumbnails')

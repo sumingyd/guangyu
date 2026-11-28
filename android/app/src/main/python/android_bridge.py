@@ -33,17 +33,27 @@ def _log(msg, level='I'):
     _ab_logger.log(py_level, msg)
 
 
-def _setup_android_paths(ext_files_dir='', files_dir='', native_lib_dir=''):
-    """设置 Android 数据目录路径（IPTV_DATA_DIR 环境变量）。
+def _setup_android_paths(ext_files_dir='', files_dir='', native_lib_dir='',
+                         public_root='', private_root=''):
+    """设置 Android 数据根目录（IPTV_DATA_DIR 环境变量）与子目录布局。
 
-    数据目录优先级（覆盖安装/卸载重装均不丢失）：
-    1. /sdcard/ISEP/（需要存储权限，Android 9 或有 MANAGE_EXTERNAL_STORAGE）
-    2. getExternalFilesDir()/ISEP/（无需权限，覆盖安装不丢失）
-    3. getFilesDir()/ISEP/（最终兜底）
+    根目录优先级：
+    1. public_root（共享存储 /sdcard/GuangYu，需要 MANAGE_EXTERNAL_STORAGE）
+    2. private_root（getExternalFilesDir()/GuangYU，无需权限，覆盖安装不丢失）
+    3. ext_files_dir/GuangYu（Kotlin 传递的外部私有目录）
+    4. files_dir/GuangYu（最终兜底）
 
-    jnius 不可用时，使用 Kotlin 端传递的 ext_files_dir / files_dir 参数。
-    并自动从旧目录迁移数据（IPTV_Scanner_Editor_Pro 或旧版 ISEPP → ISEP）。
+    根目录下固定创建 config / logs / cache / data / exports 子目录，
+    并把旧目录（ISEP / ISEPP / IPTV_Scanner_Editor_Pro）的数据分类迁移过来。
     """
+    from utils.app_paths import (
+        APP_NAME, ensure_android_layout, is_writable_dir, migrate_android_layout,
+    )
+
+    # Chaquopy 下 sys.platform 可能是 'linux'，显式标记 Android 平台，
+    # 否则 app_paths 会退回桌面端的 XDG 目录（曾导致配置读到 .config/GuangYu）
+    os.environ['IPTV_ANDROID'] = '1'
+
     target_dir = None
 
     # 尝试通过 jnius 获取路径（Chaquopy 某些版本支持）
@@ -62,56 +72,62 @@ def _setup_android_paths(ext_files_dir='', files_dir='', native_lib_dir=''):
             files_dir = jnius_files_dir
         if not ext_files_dir:
             ext_files_dir = app.getExternalFilesDir(None).getAbsolutePath()
-
-        # 1. 尝试 /sdcard/ISEP/（需要存储权限）
-        try:
-            ext_storage = Environment.getExternalStorageDirectory().getAbsolutePath()
-            candidate = os.path.join(ext_storage, 'ISEP')
-            os.makedirs(candidate, exist_ok=True)
-            test_file = os.path.join(candidate, '.write_test')
+        if not public_root or not private_root:
             try:
-                with open(test_file, 'w') as f:
-                    f.write('ok')
-            finally:
-                try:
-                    os.remove(test_file)
-                except Exception as e:
-                    _log(f'_setup_android_paths: cleanup test file failed: {e}', 'D')
-            target_dir = candidate
-            _log(f'_setup_android_paths: using external storage {target_dir}')
-        except Exception as e:
-            _log(f'_setup_android_paths: /sdcard/ISEP not writable: {e}')
-
+                ext_storage = Environment.getExternalStorageDirectory().getAbsolutePath()
+                public_root = public_root or os.path.join(ext_storage, APP_NAME)
+            except Exception as e:
+                _log(f'_setup_android_paths: resolve public root failed: {e}', 'W')
+            if not private_root and ext_files_dir:
+                private_root = os.path.join(ext_files_dir, APP_NAME)
     except Exception as e:
         _log(f'_setup_android_paths: jnius unavailable ({e}), using Kotlin-provided paths')
 
-    # 2. 回退到 getExternalFilesDir()/ISEP/（使用 Kotlin 传递的路径）
-    if not target_dir and ext_files_dir:
-        try:
-            candidate = os.path.join(ext_files_dir, 'ISEP')
-            os.makedirs(candidate, exist_ok=True)
-            target_dir = candidate
-            _log(f'_setup_android_paths: using external files dir {target_dir}')
-        except Exception as e:
-            _log(f'_setup_android_paths: ext_files_dir failed: {e}')
+    if not private_root and ext_files_dir:
+        private_root = os.path.join(ext_files_dir, APP_NAME)
 
-    # 3. 回退到 getFilesDir()/ISEP/（使用 Kotlin 传递的路径）
-    if not target_dir and files_dir:
-        try:
-            candidate = os.path.join(files_dir, 'ISEP')
-            os.makedirs(candidate, exist_ok=True)
-            target_dir = candidate
-            _log(f'_setup_android_paths: using internal files dir {target_dir}')
-        except Exception as e:
-            _log(f'_setup_android_paths: files_dir failed: {e}')
+    # 记录候选目录，供目录解析与迁移使用
+    if public_root:
+        os.environ['IPTV_PUBLIC_ROOT'] = public_root
+    if private_root:
+        os.environ['IPTV_PRIVATE_ROOT'] = private_root
+    if ext_files_dir:
+        os.environ['IPTV_EXTERNAL_FILES_DIR'] = ext_files_dir
+    if files_dir:
+        os.environ['IPTV_INTERNAL_DIR'] = files_dir
 
-    # 4. 最终兜底：使用 expanduser
+    # 1. 共享存储根目录（写入探针验证真实可写性，不只看权限声明）
+    candidates = []
+    if public_root:
+        candidates.append(public_root)
+    if private_root:
+        candidates.append(private_root)
+    if ext_files_dir:
+        candidates.append(os.path.join(ext_files_dir, APP_NAME))
+    if files_dir:
+        candidates.append(os.path.join(files_dir, APP_NAME))
+
+    for candidate in candidates:
+        try:
+            # 必须先用写探针确认真正可写，再建子目录：
+            # 权限未授予时 makedirs 会失败但不抛到调用方，只看返回值会误判
+            if not is_writable_dir(candidate):
+                _log(f'_setup_android_paths: data root not writable ({candidate})', 'W')
+                continue
+            ensure_android_layout(candidate)
+            target_dir = candidate
+            _log(f'_setup_android_paths: using data root {target_dir}')
+            break
+        except Exception as e:
+            _log(f'_setup_android_paths: data root failed ({candidate}): {e}', 'W')
+
+    # 最终兜底：home 目录
     if not target_dir:
         try:
-            candidate = os.path.join(os.path.expanduser('~'), 'ISEP')
-            os.makedirs(candidate, exist_ok=True)
+            candidate = os.path.join(os.path.expanduser('~'), APP_NAME)
+            ensure_android_layout(candidate)
             target_dir = candidate
-            _log(f'_setup_android_paths: using home dir {target_dir}')
+            _log(f'_setup_android_paths: using home dir {target_dir}', 'W')
         except Exception as e:
             _log(f'_setup_android_paths: home dir failed: {e}', 'E')
 
@@ -135,69 +151,14 @@ def _setup_android_paths(ext_files_dir='', files_dir='', native_lib_dir=''):
         except Exception as e:
             _log(f'_setup_android_paths: native_lib_dir not available ({e})')
 
-    # 迁移旧数据（必须无条件执行：native_lib_dir 由 Kotlin 侧恒传入，
-    # 放在上面的 else 分支里会导致迁移永不执行，升级后旧数据全部丢失）
-    if target_dir and files_dir:
-        _migrate_old_data(None, files_dir, target_dir)
-
-
-def _migrate_old_data(app, files_dir, new_dir):
-    """从旧目录迁移数据到新目录（仅当新目录为空时）"""
-    if not new_dir or not files_dir:
-        return
-    try:
-        import shutil
-
-        # 收集所有可能的旧数据目录
-        old_dirs = []
-
-        # 旧版目录名 IPTV_Scanner_Editor_Pro（最早期的命名）
-        old_dirs.append(os.path.join(files_dir, 'IPTV_Scanner_Editor_Pro'))
-
-        # 旧版目录名 ISEPP（简称从 ISEPP 改为 ISEP 时的迁移）
-        new_parent = os.path.dirname(new_dir)
-        old_dirs.append(os.path.join(new_parent, 'ISEPP'))
-        if files_dir and os.path.dirname(files_dir) != new_parent:
-            old_dirs.append(os.path.join(files_dir, 'ISEPP'))
-
-        for old_dir in old_dirs:
-            if not os.path.isdir(old_dir):
-                continue
-            old_files = os.listdir(old_dir)
-            if not old_files:
-                continue
-            # 新目录已有数据则不迁移（避免覆盖）
-            new_files = [f for f in os.listdir(new_dir) if not f.startswith('.')]
-            if new_files:
-                _log('_migrate_old_data: target dir not empty, skip migration')
-                return
-            failed_count = 0
-            for item in old_files:
-                src = os.path.join(old_dir, item)
-                dst = os.path.join(new_dir, item)
-                try:
-                    if os.path.isdir(src):
-                        shutil.copytree(src, dst, symlinks=True)
-                    else:
-                        shutil.copy2(src, dst)
-                except Exception as e:
-                    _log(f'_migrate_old_data: skip {item}: {e}')
-                    failed_count += 1
-            _log(f'_migrate_old_data: migrated {len(old_files) - failed_count}/{len(old_files)} items from {old_dir}')
-            # 仅当所有文件复制成功时才删除旧目录，避免数据丢失
-            if failed_count == 0:
-                try:
-                    shutil.rmtree(old_dir)
-                    _log(f'_migrate_old_data: removed old dir {old_dir}')
-                except Exception as e:
-                    _log(f'_migrate_old_data: could not remove old dir {old_dir}: {e}')
-            else:
-                _log(f'_migrate_old_data: {failed_count} files failed, keeping old dir {old_dir}', 'W')
-            return  # 仅从一个来源迁移
-    except Exception as e:
-        _log(f'_migrate_old_data failed: {e}', 'W')
-
-
+    # 迁移旧数据（旧共享目录 /sdcard/ISEP、私有 ISEP / ISEPP / IPTV_Scanner_Editor_Pro
+    # → 新根目录下按用途分类的 config / logs / cache / data）
+    if target_dir:
+        try:
+            from utils.app_paths import migrate_android_layout
+            migrate_android_layout(target_dir, private_root)
+        except Exception as e:
+            _log(f'_setup_android_paths: migrate layout failed: {e}', 'W')
 # 日志等级映射：字符串 → logging 常量
 _LOG_LEVEL_MAP = {
     'debug': logging.DEBUG,
@@ -212,12 +173,13 @@ _current_log_level = logging.INFO
 
 
 def _get_log_file_path():
-    """获取 app.log 文件路径（与 LogManager._get_log_path 逻辑一致）"""
-    data_dir = os.environ.get('IPTV_DATA_DIR', '')
-    if data_dir:
-        config_dir = data_dir if os.path.basename(data_dir) == 'ISEP' else os.path.join(data_dir, 'ISEP')
-        return os.path.join(config_dir, 'app.log')
-    return os.path.join(os.path.expanduser('~'), 'ISEP', 'app.log')
+    """获取 app.log 文件路径（统一走目录解析，Android 为 <root>/logs/app.log）"""
+    try:
+        from utils.app_paths import get_log_dir
+        return os.path.join(get_log_dir(), 'app.log')
+    except Exception as e:
+        _log(f'_get_log_file_path failed: {e}', 'W')
+        return os.path.join(os.path.expanduser('~'), 'GuangYu', 'logs', 'app.log')
 
 
 def _add_file_handler(root_logger):
@@ -468,11 +430,28 @@ def set_app_info(version='', build_date=''):
     return 'OK'
 
 
-def init_context(ext_files_dir='', files_dir='', log_level='info', native_lib_dir=''):
+def get_storage_info():
+    """返回当前实际使用的存储路径（供设置/关于页展示）。
+
+    包含根目录与 config/logs/cache/data/exports 子目录、是否共享存储、
+    以及降级原因，Kotlin 端据此显示真实路径而不是猜测。
+    """
+    try:
+        from utils.app_paths import get_storage_info as _info
+        return _ok(_info())
+    except Exception as e:
+        _ab_logger.exception('get_storage_info failed')
+        return _err(f'get_storage_info failed: {e}')
+
+
+def init_context(ext_files_dir='', files_dir='', log_level='info', native_lib_dir='',
+                 public_root='', private_root=''):
     """初始化 Python 环境 + ServerContext 单例，立即返回（不阻塞）。
 
     参数 ext_files_dir / files_dir 由 Kotlin 端通过 Chaquopy callAttr 传入，
     用于在 jnius 不可用时定位 Android 数据目录。
+    public_root / private_root 分别是共享目录（/sdcard/GuangYu）与应用私有目录
+    （getExternalFilesDir()/GuangYu），由 Kotlin 端按权限状态传入。
     参数 log_level 由 Kotlin 端传入，设置 Python 日志等级（debug/info/warn/error）。
 
     返回 'OK' 表示成功，'FAILED: ...' 表示错误。
@@ -483,7 +462,8 @@ def init_context(ext_files_dir='', files_dir='', log_level='info', native_lib_di
         if _inited:
             return 'OK'
         try:
-            _setup_android_paths(ext_files_dir, files_dir, native_lib_dir)
+            _setup_android_paths(ext_files_dir, files_dir, native_lib_dir,
+                                 public_root, private_root)
             # 在设置日志前先应用 Kotlin 端传入的日志等级
             if log_level:
                 set_log_level(log_level)
@@ -492,9 +472,9 @@ def init_context(ext_files_dir='', files_dir='', log_level='info', native_lib_di
 
             # 设置配置目录（与 start_server() 保持一致）
             # 不使用 os.chdir（全局状态，多线程不安全）
-            data_dir = os.environ.get('IPTV_DATA_DIR', '')
-            if data_dir:
-                config_dir = data_dir if os.path.basename(data_dir) == 'ISEP' else os.path.join(data_dir, 'ISEP')
+            from utils.app_paths import get_config_dir
+            config_dir = get_config_dir()
+            if config_dir:
                 os.makedirs(config_dir, exist_ok=True)
                 os.environ['IPTV_CONFIG_DIR'] = config_dir
                 _log(f'init_context: config_dir={config_dir}')
@@ -1496,8 +1476,8 @@ def clear_cache(cache_type='all'):
             return _err('not inited')
         import os
         import shutil
-        data_dir = os.environ.get('IPTV_DATA_DIR', os.path.expanduser('~'))
-        app_dir = data_dir if os.path.basename(data_dir) == 'ISEP' else os.path.join(data_dir, 'ISEP')
+        from utils.app_paths import get_cache_dir
+        cache_dir = get_cache_dir()
         deleted = 0
 
         cache_dirs = {
@@ -1514,13 +1494,22 @@ def clear_cache(cache_type='all'):
             target_dirs = cache_dirs.get(cache_type, [])
 
         for d in target_dirs:
-            full = os.path.join(app_dir, d)
+            full = os.path.join(cache_dir, d)
             if os.path.isdir(full):
                 try:
                     shutil.rmtree(full)
                     deleted += 1
                 except Exception as e:
                     _log(f'clear_cache: rmtree {full} failed: {e}', 'W')
+
+        # 台标缓存同时清掉解析结果和失败地址记录，否则会继续跳过坏地址
+        if cache_type in ('logo', 'all'):
+            try:
+                from services.logo_resolver import get_logo_resolver
+                get_logo_resolver().clear_cache()
+            except Exception as e:
+                _log(f'clear_cache: clear logo resolver failed: {e}', 'W')
+
         return _ok({'ok': True, 'deleted_count': deleted})
     except Exception as e:
         _ab_logger.exception('clear_cache failed')
@@ -1536,11 +1525,10 @@ def get_thumbnail_paths(urls_json='[]'):
         import os
         import json
         import hashlib
+        from utils.app_paths import get_cache_dir
 
-        data_dir = os.environ.get('IPTV_DATA_DIR', os.path.expanduser('~'))
-        app_dir = data_dir if os.path.basename(data_dir) == 'ISEP' else os.path.join(data_dir, 'ISEP')
-        thumb_dir = os.path.join(app_dir, 'cache', 'thumbnails')
-        thumb_cache_dir = os.path.join(app_dir, 'cache', 'thumb_cache')
+        thumb_dir = os.path.join(get_cache_dir(), 'thumbnails')
+        thumb_cache_dir = os.path.join(get_cache_dir(), 'thumb_cache')
 
         urls = json.loads(urls_json) if isinstance(urls_json, str) else urls_json
         paths = {}
@@ -1572,9 +1560,8 @@ def capture_thumbnail(url, file_path):
         if not url or not os.path.exists(file_path):
             return _err('invalid url or file not found')
 
-        data_dir = os.environ.get('IPTV_DATA_DIR', os.path.expanduser('~'))
-        app_dir = data_dir if os.path.basename(data_dir) == 'ISEP' else os.path.join(data_dir, 'ISEP')
-        thumb_dir = os.path.join(app_dir, 'cache', 'thumbnails')
+        from utils.app_paths import get_cache_dir
+        thumb_dir = os.path.join(get_cache_dir(), 'thumbnails')
         os.makedirs(thumb_dir, exist_ok=True)
 
         url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()
@@ -1608,9 +1595,8 @@ def generate_thumbnail_bg(url):
             return _err('empty url')
 
         # 缩略图保存路径
-        data_dir = os.environ.get('IPTV_DATA_DIR', os.path.expanduser('~'))
-        app_dir = data_dir if os.path.basename(data_dir) == 'ISEP' else os.path.join(data_dir, 'ISEP')
-        thumb_dir = os.path.join(app_dir, 'cache', 'thumbnails')
+        from utils.app_paths import get_cache_dir
+        thumb_dir = os.path.join(get_cache_dir(), 'thumbnails')
         os.makedirs(thumb_dir, exist_ok=True)
         url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()
         thumb_path = os.path.join(thumb_dir, f'{url_hash}.png')

@@ -35,6 +35,26 @@ data class GithubProxySettings(
     @SerialName("proxies") val proxies: List<String> = emptyList(),
 )
 
+/**
+ * 当前实际使用的存储路径（Python 端 get_storage_info 返回）。
+ * shared=true 表示数据落在 /sdcard/GuangYu（文件管理器可见）。
+ */
+@Serializable
+data class StorageInfo(
+    @SerialName("platform") val platform: String = "",
+    @SerialName("root") val root: String = "",
+    @SerialName("config_dir") val configDir: String = "",
+    @SerialName("log_dir") val logDir: String = "",
+    @SerialName("cache_dir") val cacheDir: String = "",
+    @SerialName("data_dir") val dataDir: String = "",
+    @SerialName("export_dir") val exportDir: String = "",
+    @SerialName("shared") val shared: Boolean = false,
+    @SerialName("public_root") val publicRoot: String = "",
+    @SerialName("private_root") val privateRoot: String = "",
+    @SerialName("uninstall_note") val uninstallNote: String = "",
+    @SerialName("degraded") val degraded: List<String> = emptyList(),
+)
+
 @Serializable
 data class IptvChannel(
     @SerialName("id") val id: Int = 0,

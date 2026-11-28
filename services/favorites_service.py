@@ -23,10 +23,10 @@ class FavoritesService:
 
     def _get_data_dir(self):
         import sys
-        # Android Chaquopy 环境：优先使用 IPTV_DATA_DIR（已指向 ISEP 目录）
-        android_data = get_android_data_dir()
-        if android_data:
-            return android_data
+        from utils.app_paths import get_data_dir
+        # Android：新布局的 data/ 子目录（不再直接落在根目录）
+        if get_android_data_dir():
+            return get_data_dir()
         if getattr(sys, 'frozen', False):
             return os.path.dirname(sys.executable)
         current_dir = os.path.dirname(os.path.abspath(__file__))
