@@ -44,6 +44,8 @@ from services.mpv_common import (
     DEFAULT_USER_AGENT,
     DEFAULT_NETWORK_TIMEOUT_SEC,
     AUDIO_SPDIF_MAP,
+    effective_hwdec,
+    normalize_hwdec,
 )
 
 
@@ -450,19 +452,21 @@ class MpvPlayback:
             # 导致 macOS 上 vo 被再次改写为非 libmpv，无画面。
             if not (is_macos() and getattr(self._facade, '_use_render_api', False)):
                 _mpv_set_option_string(self._facade.mpv_handle, 'vo', vo)
-            # 硬解模式：auto-copy（默认，copy-back 保证 vf 滤镜可用）/ auto（原生，最快但滤镜受限）/ no（软解）
-            # 兼容旧配置：bool True→auto-copy，False→no；字符串 'True'/'False' 同样处理
+            # 硬解模式：auto-copy（copy-back，vf 滤镜可用）/ auto（原生，最快但滤镜受限）/ no（软解）
+            # 已保存的运动补偿或细节增强需要 lavfi 滤镜：用户选 auto 时自动改为 auto-copy，
+            # 避免每次起播滤镜都被 mpv 静默禁用；两项都关时保持用户选择。
             hwdec_raw = self._facade._playback_settings.get('hwdec', 'auto-copy')
-            if isinstance(hwdec_raw, bool):
-                hwdec = 'auto-copy' if hwdec_raw else 'no'
-            else:
-                hwdec_str = str(hwdec_raw).lower()
-                if hwdec_str in ('auto', 'auto-copy', 'no'):
-                    hwdec = hwdec_str
-                elif hwdec_str in ('true', '1', 'yes'):
-                    hwdec = 'auto-copy'  # 旧 bool True 升级到 auto-copy，保证滤镜可用
-                else:
-                    hwdec = 'no'
+            try:
+                from core.config_manager import ConfigManager
+                _saved_video_eq = ConfigManager().load_video_eq()
+            except Exception as _e:
+                self._facade.logger.debug(f"读取视频增强配置失败，按未开启处理: {_e}")
+                _saved_video_eq = {}
+            hwdec = effective_hwdec(hwdec_raw, _saved_video_eq)
+            if hwdec != normalize_hwdec(hwdec_raw):
+                self._facade.logger.info(
+                    "运动补偿/细节增强已开启，硬解自动使用 copy-back(auto-copy) 以支持滤镜"
+                )
             _mpv_set_option_string(self._facade.mpv_handle, 'hwdec', hwdec)
             _mpv_set_option_string(self._facade.mpv_handle, 'osc', 'no')
             _mpv_set_option_string(self._facade.mpv_handle, 'osd-bar', 'no')

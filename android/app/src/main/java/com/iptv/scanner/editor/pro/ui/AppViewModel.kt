@@ -150,6 +150,22 @@ sealed class SearchResult {
 
 enum class HdrMode { DISABLE, TONEMAP, PASSTHROUGH }
 
+/** 运动补偿/细节增强在回读校验后被证实未生效的状态 */
+data class FilterEnhancementIssue(
+    val motionCompensation: Boolean = false,
+    val detailEnhance: Boolean = false,
+    /** 是否允许给用户提供「切换解码方式」入口（arm32 电视/黑名单/已是软解时为 false） */
+    val switchable: Boolean = false,
+)
+
+/** 播放页的滤镜未生效提示；targetVo/targetHwdec 是用户确认后要切换到的组合 */
+data class FilterSupportPrompt(
+    val message: String,
+    val switchable: Boolean,
+    val targetVo: String,
+    val targetHwdec: String,
+)
+
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     internal val repository = IptvRepository.getInstance()
@@ -648,6 +664,21 @@ internal var switchPlayJob: Job? = null
     internal val _currentHwdec = MutableStateFlow(userPrefs.getHwdec())
     val currentHwdec: StateFlow<String> = _currentHwdec.asStateFlow()
 
+    // 滤镜回读校验结果（vf / hwdec-current）：null=当前没有未生效项
+    internal val _filterEnhancementIssue = MutableStateFlow<FilterEnhancementIssue?>(null)
+    val filterEnhancementIssue: StateFlow<FilterEnhancementIssue?> = _filterEnhancementIssue.asStateFlow()
+
+    // 播放页「滤镜未生效」提示；用户确认切换后才改解码方式
+    internal val _filterSupportPrompt = MutableStateFlow<FilterSupportPrompt?>(null)
+    val filterSupportPrompt: StateFlow<FilterSupportPrompt?> = _filterSupportPrompt.asStateFlow()
+
+    /** 同配置只提示一次，避免每次换台都弹窗 */
+    internal var lastFilterPromptKey: String? = null
+    /** 面板里的「切换解码方式」入口复用最近一次提示内容 */
+    internal var lastFilterPrompt: FilterSupportPrompt? = null
+    /** 用户确认切换后，等待下一次回读校验做结果提示 */
+    internal var pendingFilterSwitchVerify: Boolean = false
+
     // mpv 实际生效的硬解（hwdec-current）：可能因黑名单/会话降级/arm32 而不同于用户选择
     val actualHwdec: StateFlow<String> get() = mpvSingleton.actualHwdec
     // 当前设备是否处于硬解崩溃黑名单
@@ -681,6 +712,10 @@ val logLevel: StateFlow<String> = _logLevel.asStateFlow()
 mpvSingleton.onVoAutoFallback = { vo ->
     _currentVo.value = vo
     showOsd("画面输出已切换", "当前渲染方式：$vo（原默认渲染路径不可用）")
+}
+// 滤镜挂载后回读 vf / hwdec-current：没挂上时提示用户，并由用户确认是否切换解码方式
+mpvSingleton.onFilterApplyCheck = { check ->
+    handleFilterApplyCheck(check)
 }
 // 注册文件加载错误回调：当 mpv 报告文件加载失败时换源，
 // 添加短暂延迟避免坏流导致 mpv 核心状态未清理就加载下一个流。

@@ -37,6 +37,8 @@ import com.iptv.scanner.editor.pro.data.ScanStatus
 import com.iptv.scanner.editor.pro.data.SubtitleItem
 import com.iptv.scanner.editor.pro.data.UserPrefs
 import com.iptv.scanner.editor.pro.mpv.MpvController
+import com.iptv.scanner.editor.pro.mpv.controller.FilterApplyCheck
+import com.iptv.scanner.editor.pro.mpv.controller.FilterApplyStatus
 import com.iptv.scanner.editor.pro.player.CatchupHelper
 import com.iptv.scanner.editor.pro.player.CatchupProgram
 import com.iptv.scanner.editor.pro.player.ExoPlayerWrapper
@@ -495,11 +497,14 @@ internal fun AppViewModel.applyHdrOnFileLoaded(recheck: Boolean = false) {
 internal fun AppViewModel.applyVideoEnhancementsOnFileLoaded() {
     val mpv = this.mpv
     if (!mpv.fileLoaded.value) return
-    val currentVo = try { mpv.getPropertyString("vo") ?: "" } catch (_: Throwable) { "" }
-    // 直写 Surface 播放不支持 vf / glsl-shaders
-    if (currentVo == "mediacodec_embed") return
-
     val prefs = userPrefs
+    val currentVo = try { mpv.getPropertyString("vo") ?: "" } catch (_: Throwable) { "" }
+    // 直写 Surface 播放不支持 vf；不能静默跳过，否则面板仍显示「已开启」
+    if (currentVo == "mediacodec_embed") {
+        onEnhancementsSkippedOnEmbed(prefs.getVideoMcStrength(), prefs.getVideoSrDetail())
+        return
+    }
+
     val mcStrength = prefs.getVideoMcStrength()
     if (mcStrength == "off") {
         mpv.clearMotionCompensation()
@@ -516,6 +521,309 @@ internal fun AppViewModel.applyVideoEnhancementsOnFileLoaded() {
         mpv.clearUserShader()
     } else {
         mpv.setUserShader(shader)
+    }
+}
+
+/**
+ * 挂载滤镜后回读 vf / hwdec-current 的结果处理。
+ *
+ * 以前 Android 侧 `vf add` 失败没有返回值也没有日志，面板会一直显示「已开启」。
+ * 现在未生效时记录日志、更新面板状态，并在播放页给出需要用户确认的切换入口（不自动切）。
+ */
+internal fun AppViewModel.handleFilterApplyCheck(check: FilterApplyCheck) {
+    val label = check.label.removePrefix("@")
+    val isMc = label == "iptv_mc"
+    if (!isMc && label != "iptv_sr") return
+
+    when (check.status) {
+        FilterApplyStatus.CLEARED -> clearFilterEnhancementIssue(isMc)
+
+        FilterApplyStatus.APPLIED -> {
+            clearFilterEnhancementIssue(isMc)
+            if (pendingFilterSwitchVerify) {
+                pendingFilterSwitchVerify = false
+                showOsd("滤镜", "解码方式已切换，滤镜已生效")
+                Log.i(
+                    AppViewModel.TAG,
+                    "filter switch verify: APPLIED label=${check.label} vo='${check.vo}' hwdec-current='${check.hwdecCurrent}'"
+                )
+            }
+        }
+
+        FilterApplyStatus.UNKNOWN -> {
+            Log.i(
+                AppViewModel.TAG,
+                "filter verify: ${check.label} 状态未知（hwdec-current 为空），暂不提示"
+            )
+        }
+
+        FilterApplyStatus.NOT_APPLIED -> {
+            val issue = buildFilterEnhancementIssue(check, isMc)
+            mergeFilterEnhancementIssue(issue)
+            Log.w(
+                AppViewModel.TAG,
+                "filter verify: ${check.label} 实际未生效 vo='${check.vo}' " +
+                    "hwdec-current='${check.hwdecCurrent}' vf=${check.vf.take(200)}"
+            )
+            if (pendingFilterSwitchVerify) {
+                pendingFilterSwitchVerify = false
+                showOsd("滤镜", "切换后滤镜仍未生效，已记录日志")
+                Log.w(
+                    AppViewModel.TAG,
+                    "filter switch verify: NOT_APPLIED label=${check.label} vo='${check.vo}' " +
+                        "hwdec-current='${check.hwdecCurrent}'"
+                )
+            }
+            maybeShowFilterSupportPrompt(check)
+        }
+    }
+}
+
+private fun AppViewModel.buildFilterEnhancementIssue(
+    check: FilterApplyCheck,
+    isMc: Boolean
+): FilterEnhancementIssue {
+    val vo = check.vo.ifEmpty { actualVo.value.ifEmpty { _currentVo.value } }
+    val hwdec = check.hwdecCurrent.ifEmpty { actualHwdec.value }
+    val targetVo = if (vo == "mediacodec_embed") "gpu" else vo
+    val targetHwdec = "auto-copy"
+    val blacklisted = userPrefs.isHwdecComboBlacklisted(targetVo, targetHwdec)
+    // 只有当前确实是「接不了滤镜」的路径才提供切换：
+    // 直写 Surface / mediacodec 零拷贝。已经是 copy-back/软解还挂不上，是滤镜本身的问题。
+    val incompatible = vo == "mediacodec_embed" || hwdec == "mediacodec"
+    val switchable = !isArm32TvDevice && incompatible && !blacklisted && vo.isNotEmpty()
+    return FilterEnhancementIssue(
+        motionCompensation = isMc,
+        detailEnhance = !isMc,
+        switchable = switchable,
+    )
+}
+
+private fun AppViewModel.mergeFilterEnhancementIssue(issue: FilterEnhancementIssue) {
+    val current = _filterEnhancementIssue.value
+    _filterEnhancementIssue.value = FilterEnhancementIssue(
+        motionCompensation = (current?.motionCompensation ?: false) || issue.motionCompensation,
+        detailEnhance = (current?.detailEnhance ?: false) || issue.detailEnhance,
+        // 两个未生效项里只要有一个不能切，就不提供切换入口
+        switchable = issue.switchable && (current?.switchable ?: true),
+    )
+}
+
+private fun AppViewModel.clearFilterEnhancementIssue(isMc: Boolean) {
+    val current = _filterEnhancementIssue.value ?: return
+    val next = if (isMc) {
+        current.copy(motionCompensation = false)
+    } else {
+        current.copy(detailEnhance = false)
+    }
+    if (next.motionCompensation || next.detailEnhance) {
+        _filterEnhancementIssue.value = next
+        return
+    }
+    _filterEnhancementIssue.value = null
+    lastFilterPrompt = null
+    lastFilterPromptKey = null
+    // 滤镜已生效/已关闭，收起残留提示
+    _filterSupportPrompt.value = null
+}
+
+private fun AppViewModel.maybeShowFilterSupportPrompt(check: FilterApplyCheck) {
+    val issue = _filterEnhancementIssue.value ?: return
+    val vo = check.vo.ifEmpty { actualVo.value.ifEmpty { _currentVo.value } }
+    val hwdec = check.hwdecCurrent.ifEmpty { actualHwdec.value }
+    val prompt = FilterSupportPrompt(
+        message = buildFilterIssueMessage(vo, hwdec, issue),
+        switchable = issue.switchable,
+        targetVo = if (vo == "mediacodec_embed") "gpu" else vo,
+        targetHwdec = "auto-copy",
+    )
+    lastFilterPrompt = prompt
+    // 同一种解码配置只主动提示一次，避免每次换台重复弹窗；面板里的入口仍可随时打开
+    val key = "$vo|$hwdec|$isArm32TvDevice"
+    if (key == lastFilterPromptKey) {
+        if (_filterSupportPrompt.value != null) _filterSupportPrompt.value = prompt
+        return
+    }
+    lastFilterPromptKey = key
+    _filterSupportPrompt.value = prompt
+    Log.i(
+        AppViewModel.TAG,
+        "filter prompt: vo='$vo' hwdec-current='$hwdec' switchable=${issue.switchable} " +
+            "mc=${issue.motionCompensation} detail=${issue.detailEnhance}"
+    )
+}
+
+private fun AppViewModel.buildFilterIssueMessage(
+    vo: String,
+    hwdec: String,
+    issue: FilterEnhancementIssue
+): String {
+    val feature = when {
+        issue.motionCompensation && issue.detailEnhance -> "运动补偿和细节增强"
+        issue.motionCompensation -> "运动补偿"
+        else -> "细节增强"
+    }
+    val desc = when {
+        vo == "mediacodec_embed" -> "直写 Surface（mediacodec_embed）"
+        hwdec == "mediacodec" -> "零拷贝硬解（mediacodec）"
+        hwdec == "no" -> "软解"
+        hwdec.isEmpty() -> "当前解码方式"
+        else -> hwdec
+    }
+    return buildString {
+        append("当前解码方式为$desc，不支持${feature}滤镜，需要 copy-back 或软解。")
+        when {
+            isArm32TvDevice ->
+                append("\n\n本机是 arm32 电视/盒子，没有可用的 copy-back 路径，无法启用${feature}。")
+            hwdec == "no" ->
+                append("\n\n当前已是软解，滤镜仍未挂上，请检查滤镜参数或播放内容。")
+            hwdec == "mediacodec-copy" ->
+                append("\n\n当前已是 copy-back，滤镜仍未挂上，请检查滤镜参数或播放内容。")
+            !issue.switchable -> {
+                val blocked = userPrefs.isHwdecComboBlacklisted(
+                    if (vo == "mediacodec_embed") "gpu" else vo,
+                    "auto-copy"
+                )
+                if (blocked) {
+                    append("\n\n目标解码组合曾导致崩溃，已被黑名单禁用，无法切换。")
+                } else {
+                    append("\n\n当前解码方式下滤镜仍未挂上，请检查滤镜参数或播放内容。")
+                }
+            }
+            vo == "mediacodec_embed" ->
+                append(
+                    "\n\n切换到 GPU + copy-back 会重建播放器，画面会短暂中断；" +
+                        "同时会失去杜比视界直通，杜比视界内容可能变色或退到基础层；" +
+                        "copy-back 下 4K 内容还可能掉帧，功耗和发热也会增加。"
+                )
+            else ->
+                append(
+                    "\n\n切换会改为 copy-back 并重建播放器，画面会短暂中断；" +
+                        "解码帧要回读到 CPU 再上传 GPU，4K 内容可能掉帧，功耗和发热也会增加。"
+                )
+        }
+    }
+}
+
+/** embed 路径换台时增强项无法重放：明确告知，并提供用户确认后的切换入口 */
+internal fun AppViewModel.onEnhancementsSkippedOnEmbed(mcStrength: String, srDetail: Int) {
+    val mc = mcStrength != "off"
+    val detail = srDetail > 0
+    if (!mc && !detail) {
+        _filterEnhancementIssue.value = null
+        lastFilterPrompt = null
+        lastFilterPromptKey = null
+        return
+    }
+    val switchable = !isArm32TvDevice && !userPrefs.isHwdecComboBlacklisted("gpu", "auto-copy")
+    _filterEnhancementIssue.value = FilterEnhancementIssue(
+        motionCompensation = mc,
+        detailEnhance = detail,
+        switchable = switchable,
+    )
+    val feature = when {
+        mc && detail -> "运动补偿和细节增强"
+        mc -> "运动补偿"
+        else -> "细节增强"
+    }
+    val message = buildString {
+        append("当前为直写 Surface（mediacodec_embed），不支持${feature}滤镜，需要 copy-back 或软解。")
+        when {
+            isArm32TvDevice ->
+                append("\n\n本机是 arm32 电视/盒子，没有可用的 copy-back 路径，无法启用。")
+            !switchable ->
+                append("\n\n目标解码组合曾导致崩溃，已被黑名单禁用，无法切换。")
+            else ->
+                append(
+                    "\n\n切换到 GPU + copy-back 会重建播放器，画面会短暂中断；" +
+                        "同时会失去杜比视界直通，杜比视界内容可能变色或退到基础层；" +
+                        "copy-back 下 4K 内容还可能掉帧，功耗和发热也会增加。"
+                )
+        }
+    }
+    val prompt = FilterSupportPrompt(message, switchable, "gpu", "auto-copy")
+    lastFilterPrompt = prompt
+    Log.i(
+        AppViewModel.TAG,
+        "filter verify: vo=mediacodec_embed 无法挂载滤镜（mc=$mc, detail=$detail），switchable=$switchable"
+    )
+    val key = "embed|$isArm32TvDevice"
+    if (_filterSupportPrompt.value != null) {
+        _filterSupportPrompt.value = prompt
+        return
+    }
+    if (key == lastFilterPromptKey) return
+    lastFilterPromptKey = key
+    _filterSupportPrompt.value = prompt
+    Log.i(AppViewModel.TAG, "filter prompt: vo=mediacodec_embed mc=$mc detail=$detail switchable=$switchable")
+}
+
+internal fun AppViewModel.dismissFilterSupportPrompt() {
+    _filterSupportPrompt.value = null
+}
+
+/** 面板里的「切换解码方式」入口：复用最近一次未生效说明 */
+internal fun AppViewModel.showFilterSupportPromptAgain() {
+    val prompt = lastFilterPrompt ?: return
+    if (!prompt.switchable) return
+    _filterSupportPrompt.value = prompt
+}
+
+/**
+ * 用户确认切换解码方式：持久化选择、重建播放器，等待重新加载后重挂滤镜并回读确认。
+ * 只由用户点击触发，不做任何自动切换。
+ */
+internal fun AppViewModel.confirmFilterSwitch() {
+    val prompt = _filterSupportPrompt.value ?: lastFilterPrompt ?: return
+    _filterSupportPrompt.value = null
+    if (!prompt.switchable) return
+
+    val beforeVo = actualVo.value.ifEmpty {
+        try { mpvSingleton.getPropertyString("vo") ?: "" } catch (_: Throwable) { "" }
+    }
+    val targetVo = prompt.targetVo.ifEmpty {
+        if (beforeVo == "mediacodec_embed") "gpu" else beforeVo
+    }
+    val targetHwdec = prompt.targetHwdec.ifEmpty { "auto-copy" }
+    val prefs = userPrefs
+    prefs.markRenderPathUserChosen()
+    prefs.setVo(targetVo)
+    prefs.setHwdec(targetHwdec)
+    _currentVo.value = targetVo
+    _currentHwdec.value = targetHwdec
+    mpvSingleton.resetVoFallbackForUser()
+
+    val hasEnhancement = prefs.getVideoMcStrength() != "off" || prefs.getVideoSrDetail() > 0
+    pendingFilterSwitchVerify = hasEnhancement
+    Log.i(
+        AppViewModel.TAG,
+        "filter switch confirmed: vo=$beforeVo -> $targetVo, hwdec=$targetHwdec, " +
+            "rebuild=${beforeVo != targetVo}, hasEnhancement=$hasEnhancement"
+    )
+    mpvSingleton.setVoAndHwdec(targetVo, targetHwdec)
+    showOsd("滤镜", "正在切换解码方式并重新加载…")
+
+    if (!hasEnhancement) return
+    viewModelScope.launch {
+        // 切 hwdec/vo 会重建 MPVView 并重新加载，等新实例就绪后再重挂滤镜
+        delay(400)
+        val loaded = withTimeoutOrNull(6000) {
+            while (!mpvSingleton.fileLoaded.value) delay(150)
+            true
+        } == true
+        val voNow = try { mpvSingleton.getPropertyString("vo") ?: "" } catch (_: Throwable) { "" }
+        val hwNow = try { mpvSingleton.getPropertyString("hwdec-current") ?: "" } catch (_: Throwable) { "" }
+        Log.i(
+            AppViewModel.TAG,
+            "filter switch readback: requested vo=$targetVo hwdec=$targetHwdec " +
+                "actual vo='$voNow' hwdec-current='$hwNow' fileLoaded=$loaded"
+        )
+        if (loaded) {
+            applyVideoEnhancementsOnFileLoaded()
+        } else {
+            pendingFilterSwitchVerify = false
+            showOsd("滤镜", "切换后播放未恢复，无法确认滤镜状态（已记录日志）")
+        }
     }
 }
 

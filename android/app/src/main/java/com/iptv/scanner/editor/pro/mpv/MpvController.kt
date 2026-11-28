@@ -8,6 +8,7 @@ import android.widget.FrameLayout
 import `is`.xyz.mpv.MPVLib
 import com.iptv.scanner.editor.pro.NativeCrashLogger
 import com.iptv.scanner.editor.pro.data.UserPrefs
+import com.iptv.scanner.editor.pro.mpv.controller.FilterApplyCheck
 import com.iptv.scanner.editor.pro.mpv.controller.MpvAudioEqController
 import com.iptv.scanner.editor.pro.mpv.controller.MpvControllerHost
 import com.iptv.scanner.editor.pro.mpv.controller.MpvFilterController
@@ -128,6 +129,10 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     /** 自动回退回调（UI 线程）：参数为回退后的 vo，用于同步界面与提示 */
     @Volatile
     var onVoAutoFallback: ((String) -> Unit)? = null
+
+    /** 滤镜挂载校验回调（UI 线程）：回读 vf / hwdec-current 后同步界面状态 */
+    @Volatile
+    var onFilterApplyCheck: ((FilterApplyCheck) -> Unit)? = null
 
     /** 每个进程只做一次 mediacodec_embed 自动回退，避免黑屏判定抖动时反复切 vo */
     @Volatile
@@ -1217,6 +1222,11 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
         postOnUiThread { onFileError?.invoke() }
     }
 
+    /** 透传滤镜回读校验结果，由 AppViewModel 决定提示/切换入口 */
+    override fun notifyFilterApplyChecked(check: FilterApplyCheck) {
+        onFilterApplyCheck?.invoke(check)
+    }
+
     /**
      * 硬解失败后的会话级降级。
      *
@@ -1361,12 +1371,13 @@ class MpvController : MPVLib.EventObserver, Player, MpvControllerHost {
     }
     override fun clear360Filter() = filterController.clear360Filter()
     override fun setMotionCompensation(strength: String, targetFps: Int): Boolean {
-        ensureGpuPathForFeatures("filter")
+        // 不做自动切换：滤镜能否挂上由子控制器回读 vf/hwdec-current 后上报，
+        // 界面再交给用户确认是否切换到 copy-back / GPU
         return filterController.setMotionCompensation(strength, targetFps)
     }
     override fun clearMotionCompensation() = filterController.clearMotionCompensation()
     override fun setSuperResolution(scaleAlgo: String, detailEnhance: Int): Boolean {
-        ensureGpuPathForFeatures("filter")
+        // 同上：细节增强不再自动切 vo
         return filterController.setSuperResolution(scaleAlgo, detailEnhance)
     }
     override fun clearSuperResolution() = filterController.clearSuperResolution()

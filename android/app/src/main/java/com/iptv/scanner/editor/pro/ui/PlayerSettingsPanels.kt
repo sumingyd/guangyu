@@ -117,6 +117,95 @@ import java.util.Locale
 // -----------------------------------------------------------------
 
 /**
+ * 视频设置面板里的「滤镜实际未生效」提示。
+ * 只有在解码方式可以切换时才显示入口，避免 arm32 电视/黑名单设备给出无效按钮。
+ */
+@Composable
+private fun FilterIssueWarning(text: String, switchable: Boolean, onSwitch: () -> Unit) {
+    Spacer(Modifier.height(6.dp))
+    Text(
+        text = text,
+        color = MaterialTheme.colorScheme.error,
+        fontSize = 12.sp,
+        lineHeight = 17.sp
+    )
+    if (switchable) {
+        TextButton(onClick = onSwitch, modifier = Modifier.tvFocusBorder()) {
+            Text("切换解码方式…", fontSize = 12.sp)
+        }
+    }
+}
+
+/**
+ * 播放页滤镜未生效提示：展示代价说明，由用户确认后才切换解码方式。
+ * 不做自动切换；arm32 电视只提示不支持。
+ */
+@Composable
+fun FilterSupportDialog(viewModel: AppViewModel) {
+    val prompt by viewModel.filterSupportPrompt.collectAsState()
+    val current = prompt ?: return
+    val cancelFocus = remember { FocusRequester() }
+    val confirmFocus = remember { FocusRequester() }
+
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = { viewModel.dismissFilterSupportPrompt() }
+    ) {
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 8.dp,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(22.dp).focusGroup()) {
+                Text("滤镜未生效", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = current.message,
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(18.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (current.switchable) "取消" else "知道了",
+                        fontSize = 15.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .focusRequester(cancelFocus)
+                            .tvFocusBorder()
+                            .clickable { viewModel.dismissFilterSupportPrompt() }
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                    if (current.switchable) {
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            text = "切换并重试",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = tvPalette.accentText,
+                            modifier = Modifier
+                                .focusRequester(confirmFocus)
+                                .tvFocusBorder()
+                                .clickable { viewModel.confirmFilterSwitch() }
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        )
+                    }
+                }
+            }
+        }
+        LaunchedEffect(current) {
+            kotlinx.coroutines.delay(60)
+            runCatching { cancelFocus.requestFocus() }
+        }
+    }
+}
+
+/**
  * 视频设置面板：与 PC 端 controllers/video_controller.py 对齐。
  *
  * 功能：
@@ -151,6 +240,7 @@ fun VideoSettingsPanel(viewModel: AppViewModel) {
     var srScale by remember { mutableStateOf(viewModel.userPrefs.getVideoSrScale()) }
     var srDetail by remember { mutableStateOf(viewModel.userPrefs.getVideoSrDetail()) }
     var shaderPreset by remember { mutableStateOf(viewModel.userPrefs.getVideoShaderPreset()) }
+    val filterIssue by viewModel.filterEnhancementIssue.collectAsState()
 
     PanelScaffold(
         title = "视频设置",
@@ -314,8 +404,16 @@ fun VideoSettingsPanel(viewModel: AppViewModel) {
         // 运动补偿（与 PC 端 set_motion_compensation 对齐）
         // 使用 FFmpeg minterpolate 滤镜，需 copy-back 硬解或软解
         // -----------------------------------------------------------------
-        SettingsGroup("运动补偿") {
+        SettingsGroup(if (filterIssue?.motionCompensation == true) "运动补偿（未生效）" else "运动补偿") {
             DescText("需 copy-back 硬解或软解。高强度会增加 CPU 负载；4K 视频会先降到 1080p 再处理")
+
+            if (filterIssue?.motionCompensation == true) {
+                FilterIssueWarning(
+                    text = "当前解码方式不支持运动补偿，实际未生效。",
+                    switchable = filterIssue?.switchable == true,
+                    onSwitch = { viewModel.showFilterSupportPromptAgain() }
+                )
+            }
 
             SelectionGroup(
                 title = "强度",
@@ -331,7 +429,7 @@ fun VideoSettingsPanel(viewModel: AppViewModel) {
                     val label = when (mode) {
                         "off" -> "关闭"; "low" -> "轻度"; "medium" -> "中度"; "high" -> "强力"; else -> mode
                     }
-                    viewModel.showOsd("运动补偿", if (mode == "off") "已关闭" else "$label ${mcFps}fps")
+                    viewModel.showOsd("运动补偿", if (mode == "off") "已关闭" else "已设置 $label ${mcFps}fps")
                 }
             )
 
@@ -354,8 +452,16 @@ fun VideoSettingsPanel(viewModel: AppViewModel) {
         // 分辨率提升（与 PC 端 set_super_resolution 对齐）
         // 缩放算法全局生效；细节增强需 copy-back 硬解或软解
         // -----------------------------------------------------------------
-        SettingsGroup("分辨率提升") {
+        SettingsGroup(if (filterIssue?.detailEnhance == true) "分辨率提升（细节未生效）" else "分辨率提升") {
             DescText("缩放算法全局生效；细节增强需 copy-back 硬解或软解，4K 视频会先降到 1080p 再处理")
+
+            if (filterIssue?.detailEnhance == true) {
+                FilterIssueWarning(
+                    text = "当前解码方式不支持细节增强，实际未生效。",
+                    switchable = filterIssue?.switchable == true,
+                    onSwitch = { viewModel.showFilterSupportPromptAgain() }
+                )
+            }
 
             SelectionGroup(
                 title = "算法",

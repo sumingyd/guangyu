@@ -620,6 +620,10 @@ class MpvPlayerController(QObject):
     def set_motion_compensation(self, strength: str, target_fps: int = 60) -> bool:
         return self._shader.set_motion_compensation(strength, target_fps)
 
+    def resolve_hwdec_setting(self, value) -> str:
+        """把用户选择的硬解模式解析为当前实际应下发的值（增强项开启时用 copy-back）。"""
+        return self._shader.resolve_hwdec(value)
+
     def get_motion_compensation(self) -> dict:
         return self._shader.get_motion_compensation()
 

@@ -20,4 +20,7 @@ interface MpvControllerHost {
     fun isCoreDead(): Boolean
     /** 向界面暴露「播放器核心不可用」错误（不再静默失败） */
     fun notifyPlaybackUnavailable()
+
+    /** 滤镜挂载后回读 vf / hwdec-current 的结果，用于消除「面板显示已开启但实际没挂上」 */
+    fun notifyFilterApplyChecked(check: FilterApplyCheck)
 }

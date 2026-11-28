@@ -1369,6 +1369,9 @@ if (lyricsOpen) {
         // 退出确认对话框（BACK 键退出时提示：立即退出 / 进入 PiP）
         ExitConfirmDialog(viewModel = viewModel)
 
+        // 滤镜未生效提示：回读 vf/hwdec-current 后仍没挂上时，由用户确认是否切换解码方式
+        FilterSupportDialog(viewModel = viewModel)
+
         // DLNA 投屏设备面板（信息栏/底部栏"投屏"按钮触发）
         DlnaCastPanel(viewModel = viewModel)
 
