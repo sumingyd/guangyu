@@ -89,6 +89,108 @@ def _defer_fit_button_text_height(button: QPushButton) -> None:
     """样式在对话框显示后才真正继承到位，显示后再按实际字体/内边距校正一次。"""
     # 带 context 的 singleShot：按钮提前销毁时定时器随之取消，不会留下悬空回调
     QTimer.singleShot(0, button, lambda b=button: _fit_button_text_height(b))
+
+
+class _LogoSourcesWidget(QWidget):
+    """台标来源行容器：每行「序号 + 勾选名称 + 上移/下移」，行序即兜底优先级。
+
+    以前是把四行塞进 QListWidget，再在列表右侧竖排两个移动按钮；按钮和列表分离，
+    既难对准当前行，也让整块显得零碎。改为每行自带移动按钮后，顺序调整和行是一体的。
+    """
+
+    def __init__(self, labels, order, checked, tr, parent=None):
+        super().__init__(parent)
+        self.setObjectName("logo_source_rows")
+        self._labels = dict(labels)
+        self._tr = tr
+        self._rows = []
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(2)
+        ordered = [s for s in order if s in self._labels]
+        ordered += [s for s in self._labels if s not in ordered]
+        for key in ordered:
+            self._add_row(key, key in checked)
+
+    def _add_row(self, key, checked):
+        row = QWidget()
+        row.setObjectName(f"logo_source_row_{key}")
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(6)
+        num = QLabel("")
+        num.setObjectName("logo_source_num")
+        num.setFixedWidth(16)
+        num.setStyleSheet(AppStyles.hint_label_style())
+        check = QCheckBox(self._labels[key])
+        check.setObjectName(f"logo_source_check_{key}")
+        check.setChecked(checked)
+        up = QPushButton("↑")
+        up.setObjectName("logo_source_up")
+        up.setToolTip(self._tr("move_up", "上移"))
+        down = QPushButton("↓")
+        down.setObjectName("logo_source_down")
+        down.setToolTip(self._tr("move_down", "下移"))
+        # 对话框全局 QSS 给 QPushButton 设了 min-width/padding，会把这几个行内小按钮撑到 90 多像素；
+        # 这里用带 id 的更高优先级规则恢复成 24px 宽，并留 2px 上下内边距给字形。
+        for btn, btn_name in ((up, "logo_source_up"), (down, "logo_source_down")):
+            # selfStyled：主题管理器会遍历子控件重设 QPushButton 样式，
+            # 不跳过的话会把这里的尺寸规则冲掉，按钮又变回 90 多像素宽。
+            btn.setProperty('selfStyled', True)
+            btn.setStyleSheet(
+                f"QDialog QPushButton#{btn_name} {{ min-width: 24px; max-width: 24px;"
+                " padding: 2px 0px; font-size: 12px; }")
+            btn.setFixedWidth(24)
+            _fit_button_text_height(btn)
+            _defer_fit_button_text_height(btn)
+        row_layout.addWidget(num)
+        row_layout.addWidget(check, 1)
+        row_layout.addWidget(up)
+        row_layout.addWidget(down)
+        info = {'widget': row, 'key': key, 'check': check,
+                'up': up, 'down': down, 'num': num}
+        self._rows.append(info)
+        self._layout.addWidget(row)
+        up.clicked.connect(lambda _=False, r=info: self._move(r, -1))
+        down.clicked.connect(lambda _=False, r=info: self._move(r, 1))
+        self._sync()
+
+    def _sync(self):
+        """刷新序号与首末行的移动按钮可用状态。"""
+        for i, info in enumerate(self._rows):
+            info['num'].setText(str(i + 1))
+            info['up'].setEnabled(i > 0)
+            info['down'].setEnabled(i < len(self._rows) - 1)
+
+    def _move(self, info, delta):
+        i = self._rows.index(info)
+        j = i + delta
+        if not 0 <= j < len(self._rows):
+            return
+        self._rows.insert(j, self._rows.pop(i))
+        for info_row in self._rows:
+            self._layout.removeWidget(info_row['widget'])
+        for info_row in self._rows:
+            self._layout.addWidget(info_row['widget'])
+        self._sync()
+        info['check'].setFocus()
+
+    def ordered_keys(self):
+        """当前勾选的来源，按行序（即兜底优先级）返回。"""
+        return [r['key'] for r in self._rows if r['check'].isChecked()]
+
+    def reset(self):
+        """恢复默认：按固定顺序排列，除规则模板外全部勾选。"""
+        by_key = {r['key']: r for r in self._rows}
+        self._rows = [by_key[k] for k in self._labels if k in by_key]
+        for info in self._rows:
+            self._layout.removeWidget(info['widget'])
+        for info in self._rows:
+            self._layout.addWidget(info['widget'])
+            info['check'].setChecked(info['key'] != 'rule')
+        self._sync()
+
+
 # 使用说明默认内容 —— 定义在模块级别便于维护
 DEFAULT_USAGE_CONTENT = (
     '## 基本操作\n\n'
@@ -1749,7 +1851,7 @@ class SettingsFileOperations:
 
 
     def _build_logo_section(self, tr):
-        """台标来源：勾选 + 排序，顺序即逐级兜底优先级。"""
+        """台标来源：整行卡片。左侧有序来源行，右侧规则模板与缓存清理。"""
         from services.logo_resolver import (
             SOURCE_LABELS, SOURCE_ORDER, get_logo_resolver,
         )
@@ -1761,80 +1863,66 @@ class SettingsFileOperations:
 
         group = QGroupBox(tr("logo_source_settings", "台标来源"))
         layout = QVBoxLayout()
+        layout.setContentsMargins(10, 4, 10, 6)
+        layout.setSpacing(6)
 
         hint = QLabel(tr(
             "logo_source_hint",
-            "勾选来源后按列表顺序逐级兜底：某一级取不到台标时自动尝试下一级。"
-            "只勾选一个来源＝固定只用它，不再往下找。用「上移/下移」调整顺序。"
-            "本地来源会到程序目录的 img 或配置目录的 logos 里找与频道同名的图片。"
+            "只勾一个＝固定用该来源；勾多个＝按顺序逐级兜底。"
+            "本地来源读程序 img 或配置 logos 下的同名图片。"
         ))
         hint.setWordWrap(True)
         hint.setStyleSheet(AppStyles.hint_label_style())
         layout.addWidget(hint)
 
-        list_widget = QListWidget()
-        list_widget.setObjectName("logo_priority_list")
-        list_widget.setMaximumHeight(116)
-        ordered = [s for s in SOURCE_ORDER if s in enabled]
-        ordered += [s for s in SOURCE_ORDER if s not in ordered]
-        for source in ordered:
-            item = QListWidgetItem(tr(f"logo_source_{source}", SOURCE_LABELS[source]))
-            item.setData(Qt.ItemDataRole.UserRole, source)
-            item.setFlags(item.flags()
-                          | Qt.ItemFlag.ItemIsUserCheckable
-                          | Qt.ItemFlag.ItemIsEnabled
-                          | Qt.ItemFlag.ItemIsSelectable)
-            checked = source in enabled and (source != 'rule' or bool(template.strip()))
-            item.setCheckState(
-                Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
-            list_widget.addItem(item)
-        layout.addWidget(list_widget)
+        body = QHBoxLayout()
+        body.setSpacing(16)
 
-        btn_row = QHBoxLayout()
-        up_btn = QPushButton(tr("move_up", "上移"))
-        up_btn.setObjectName("logo_priority_up_btn")
-        down_btn = QPushButton(tr("move_down", "下移"))
-        down_btn.setObjectName("logo_priority_down_btn")
-        clear_btn = QPushButton(tr("clear_logo_cache", "清空台标缓存"))
-        clear_btn.setObjectName("logo_clear_cache_btn")
-        btn_row.addWidget(up_btn)
-        btn_row.addWidget(down_btn)
-        btn_row.addStretch()
-        btn_row.addWidget(clear_btn)
-        layout.addLayout(btn_row)
+        # 左：四行来源。上移/下移按钮放在各自行尾，和行是一体的
+        left = QVBoxLayout()
+        left.setSpacing(4)
+        order_label = QLabel(tr("logo_source_order", "来源顺序（上移/下移调整兜底优先级）"))
+        order_label.setStyleSheet("font-weight: 600;")
+        left.addWidget(order_label)
+        rows_widget = _LogoSourcesWidget(
+            labels={s: tr(f"logo_source_{s}", SOURCE_LABELS[s]) for s in SOURCE_ORDER},
+            order=enabled,
+            checked={s for s in enabled if s != 'rule' or bool(template.strip())},
+            tr=tr,
+        )
+        left.addWidget(rows_widget)
+        left.addStretch()
 
-        def _move(delta):
-            row = list_widget.currentRow()
-            if row < 0:
-                return
-            target = row + delta
-            if target < 0 or target >= list_widget.count():
-                return
-            item = list_widget.takeItem(row)
-            list_widget.insertItem(target, item)
-            list_widget.setCurrentRow(target)
-
-        up_btn.clicked.connect(lambda: _move(-1))
-        down_btn.clicked.connect(lambda: _move(1))
-
-        rule_row = QHBoxLayout()
-        rule_row.addWidget(QLabel(tr("logo_rule_template", "规则地址:")))
+        # 右：规则模板与缓存清理
+        right = QVBoxLayout()
+        right.setSpacing(4)
+        rule_label = QLabel(tr("logo_rule_template_title", "规则模板"))
+        rule_label.setStyleSheet("font-weight: 600;")
+        right.addWidget(rule_label)
         rule_edit = QLineEdit()
         rule_edit.setObjectName("logo_rule_template_edit")
         rule_edit.setText(template)
         rule_edit.setPlaceholderText("https://example.com/[name].png")
-        rule_row.addWidget(rule_edit, 1)
-        layout.addLayout(rule_row)
-
+        right.addWidget(rule_edit)
         rule_hint = QLabel(tr(
             "logo_rule_hint",
-            "规则地址里的 [name] 会替换成频道名，例如 https://example.com/[name].png。"
-            "地址返回 404 或空内容时按顺序继续往下级兜底，并记住这次失败，"
-            "不会在每次刷新时重复请求；可点「清空台标缓存」重新尝试。"
+            "[name] 会替换为频道名；404 或空内容自动切到下一级，失败会记住。"
         ))
         rule_hint.setWordWrap(True)
         rule_hint.setStyleSheet(AppStyles.hint_label_style())
-        layout.addWidget(rule_hint)
+        right.addWidget(rule_hint)
+        clear_btn = QPushButton(tr("clear_logo_cache", "清空台标缓存"))
+        clear_btn.setObjectName("logo_clear_cache_btn")
+        # 以前写死 24px，比 QSS 内边距 + 中文字形所需高度还矮，文字上下被裁；
+        # 改由字体行高和样式内边距算出高度，显示后再校正一次。
+        _fit_button_text_height(clear_btn)
+        _defer_fit_button_text_height(clear_btn)
+        right.addWidget(clear_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        right.addStretch()
+
+        body.addLayout(left, 3)
+        body.addLayout(right, 2)
+        layout.addLayout(body)
 
         def _clear_cache():
             resolver.clear_cache()
@@ -1890,6 +1978,8 @@ class SettingsFileOperations:
         layout = QVBoxLayout()
 
         sources_label = QLabel(tr(sources_label_key, sources_label_default))
+        # 长标签允许换行，否则它的文本宽度会顶住整列，窄窗口下把整页撑出横向滚动条
+        sources_label.setWordWrap(True)
         list_widget = QListWidget()
         list_widget.setObjectName(list_obj_name)
         list_widget.setMaximumHeight(160)
@@ -1898,19 +1988,26 @@ class SettingsFileOperations:
         remove_btn = QPushButton(tr("remove_source", "- Remove Selected"))
 
         input_widget = QWidget()
-        input_layout = QHBoxLayout(input_widget)
+        input_layout = QVBoxLayout(input_widget)
         input_layout.setContentsMargins(0, 0, 0, 0)
+        input_layout.setSpacing(4)
 
         new_url_edit = QLineEdit()
         new_url_edit.setPlaceholderText(tr(url_placeholder_key, url_placeholder_default))
         new_name_edit = QLineEdit()
         new_name_edit.setPlaceholderText(tr("enter_source_name", "Source name (optional)"))
-        new_name_edit.setMaximumWidth(180)
 
-        input_layout.addWidget(QLabel("URL:"))
-        input_layout.addWidget(new_url_edit, 1)
-        input_layout.addWidget(QLabel("Name:"))
-        input_layout.addWidget(new_name_edit)
+        # URL 与名称各占一行：以前挤在同一行，两列并排时 URL 只剩几十像素，几乎没法输入
+        url_row = QHBoxLayout()
+        url_row.setSpacing(6)
+        url_row.addWidget(QLabel("URL:"))
+        url_row.addWidget(new_url_edit, 1)
+        name_row = QHBoxLayout()
+        name_row.setSpacing(6)
+        name_row.addWidget(QLabel(tr("source_name_short", "Name:")))
+        name_row.addWidget(new_name_edit, 1)
+        input_layout.addLayout(url_row)
+        input_layout.addLayout(name_row)
 
         btn_layout = QHBoxLayout()
         btn_layout.addWidget(add_btn)
@@ -2022,20 +2119,9 @@ class SettingsFileOperations:
         pick('color_mode_combo', 'dark')
         pick('visual_style_combo', 'flat')
         # 台标来源：恢复默认顺序并全部勾选，规则模板清空
-        from services.logo_resolver import SOURCE_LABELS, SOURCE_ORDER
-        logo_list = dialog.findChild(QListWidget, "logo_priority_list")
-        if logo_list is not None:
-            logo_list.clear()
-            for source in SOURCE_ORDER:
-                item = QListWidgetItem(self._tr(f"logo_source_{source}", SOURCE_LABELS[source]))
-                item.setData(Qt.ItemDataRole.UserRole, source)
-                item.setFlags(item.flags()
-                              | Qt.ItemFlag.ItemIsUserCheckable
-                              | Qt.ItemFlag.ItemIsEnabled
-                              | Qt.ItemFlag.ItemIsSelectable)
-                item.setCheckState(
-                    Qt.CheckState.Unchecked if source == 'rule' else Qt.CheckState.Checked)
-                logo_list.addItem(item)
+        rows_widget = dialog.findChild(_LogoSourcesWidget, "logo_source_rows")
+        if rows_widget is not None:
+            rows_widget.reset()
         logo_rule = dialog.findChild(QLineEdit, "logo_rule_template_edit")
         if logo_rule is not None:
             logo_rule.clear()
@@ -2189,20 +2275,14 @@ class SettingsFileOperations:
         """保存台标来源顺序与规则模板；校验失败返回 False 并保持对话框。"""
         from services.logo_resolver import get_logo_resolver
 
-        list_widget = dialog.findChild(QListWidget, "logo_priority_list")
+        rows_widget = dialog.findChild(_LogoSourcesWidget, "logo_source_rows")
         rule_edit = dialog.findChild(QLineEdit, "logo_rule_template_edit")
-        if not isinstance(list_widget, QListWidget):
+        if not isinstance(rows_widget, _LogoSourcesWidget):
             return True
         if not isinstance(rule_edit, QLineEdit):
             rule_edit = None
 
-        order = []
-        for i in range(list_widget.count()):
-            item = list_widget.item(i)
-            if item.checkState() == Qt.CheckState.Checked:
-                source = item.data(Qt.ItemDataRole.UserRole)
-                if source:
-                    order.append(str(source))
+        order = rows_widget.ordered_keys()
         if not order:
             QMessageBox.warning(
                 dialog,

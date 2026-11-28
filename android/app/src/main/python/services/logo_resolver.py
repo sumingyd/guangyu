@@ -25,10 +25,10 @@ SOURCE_EPG = 'epg'
 SOURCE_RULE = 'rule'
 
 SOURCE_LABELS = {
-    SOURCE_LOCAL: '本地台标文件（img 目录）',
-    SOURCE_M3U: 'M3U 内的 tvg-logo',
-    SOURCE_EPG: 'EPG XML 里的 icon',
-    SOURCE_RULE: '规则模板地址',
+    SOURCE_LOCAL: '本地台标文件',
+    SOURCE_M3U: 'M3U tvg-logo',
+    SOURCE_EPG: 'EPG icon',
+    SOURCE_RULE: '规则模板',
 }
 SOURCE_ORDER = (SOURCE_LOCAL, SOURCE_M3U, SOURCE_EPG, SOURCE_RULE)
 
