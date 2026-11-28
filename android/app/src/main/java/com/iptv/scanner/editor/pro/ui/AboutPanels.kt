@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Build
 import android.util.Log
 import com.iptv.scanner.editor.pro.data.BookmarkItem
+import com.iptv.scanner.editor.pro.data.AppStorage
 import com.iptv.scanner.editor.pro.data.ReminderItem
 import com.iptv.scanner.editor.pro.data.ResumeItem
 import com.iptv.scanner.editor.pro.data.ScanResult
@@ -123,6 +124,11 @@ import java.util.Locale
 fun AboutPanel(viewModel: AppViewModel) {
     val currentVersion = remember { viewModel.getCurrentVersion() }
     val updateState by viewModel.updateState.collectAsState()
+    val storage by viewModel.storageInfo.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var openDirHint by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) { viewModel.refreshStorageInfo() }
 
     PanelScaffold(
         title = "关于",
@@ -138,6 +144,76 @@ fun AboutPanel(viewModel: AppViewModel) {
                 InfoRow("UI 框架", "Jetpack Compose")
                 InfoRow("Python 引擎", "Chaquopy")
                 InfoRow("许可证", "GPL-3.0-or-later")
+            }
+        }
+
+        SettingsGroup("存储目录") {
+            val info = storage
+            if (info == null) {
+                Text(
+                    "正在读取实际存储路径…",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+            } else {
+                InfoRow("数据目录", info.root)
+                InfoRow("配置", info.configDir)
+                InfoRow("日志", info.logDir)
+                InfoRow("缓存", info.cacheDir)
+                InfoRow("导出", info.exportDir)
+                Text(
+                    if (info.shared) "当前使用共享目录，文件管理器中可直接查看"
+                    else "当前使用应用私有目录，文件管理器中不可见",
+                    color = if (info.shared) tvPalette.success else tvPalette.warning,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+                Text(
+                    info.uninstallNote,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+                info.degraded.forEach { message ->
+                    Text(
+                        "⚠ $message",
+                        color = tvPalette.warning,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+                Row(
+                    modifier = Modifier.padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { viewModel.refreshStorageInfo() },
+                        modifier = Modifier.tvFocusBorder()
+                    ) { Text("刷新") }
+                    OutlinedButton(
+                        onClick = {
+                            val ok = AppStorage.openDirectory(context, java.io.File(info.root))
+                            openDirHint = if (ok) null
+                            else "系统没有可用的文件管理器，请在文件管理器中手动打开：${info.root}"
+                        },
+                        modifier = Modifier.tvFocusBorder()
+                    ) { Text("打开目录") }
+                    if (!info.shared) {
+                        OutlinedButton(
+                            onClick = { viewModel.openStoragePermissionDialog() },
+                            modifier = Modifier.tvFocusBorder()
+                        ) { Text("申请所有文件访问权限") }
+                    }
+                }
+                openDirHint?.let { hint ->
+                    Text(
+                        hint,
+                        color = tvPalette.warning,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                }
             }
         }
 
@@ -215,6 +291,84 @@ fun AboutPanel(viewModel: AppViewModel) {
         Spacer(modifier = Modifier.height(32.dp))
     }
 }
+
+/**
+ * 存储权限说明与申请弹窗。
+ *
+ * Android 11+ 申请「所有文件访问」权限后，数据目录切到 /sdcard/GuangYu（文件管理器可见）；
+ * 拒绝时继续使用应用私有目录，不阻塞任何功能，只是路径不可见。
+ * 授权后需要重启应用才能让 Python 侧重新解析路径并迁移旧数据。
+ */
+@Composable
+fun StoragePermissionDialog(viewModel: AppViewModel) {
+    val open by viewModel.storagePermissionDialogOpen.collectAsState()
+    if (!open) return
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val isR = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+    val legacyLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        viewModel.dismissStoragePermissionDialog()
+        if (granted) {
+            viewModel.showOsd("权限已授予", "请重启应用，把数据切换到 /sdcard/GuangYu")
+        } else {
+            viewModel.showOsd("继续使用私有目录", "文件管理器中看不到数据，卸载应用会一并删除")
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = { viewModel.dismissStoragePermissionDialog() },
+        title = { Text("数据保存位置", fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                Text(
+                    "把配置、日志、缓存和导出文件统一保存到 /sdcard/GuangYu/，" +
+                        "在文件管理器里可以直接查看、备份和拷贝。",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    if (isR) "Android 11 及以上需要「所有文件访问权限」才能写入共享目录。"
+                    else "需要授予「存储」权限才能写入共享目录。",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "不授权也能正常使用：数据会保存到应用私有目录，但文件管理器看不到，" +
+                        "卸载或清除数据时会被删除。授权后重启应用生效，旧数据会自动迁移，" +
+                        "不会覆盖新目录里已有的文件。",
+                    fontSize = 12.sp,
+                    color = tvPalette.warning
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (isR) {
+                        val ok = AppStorage.openAllFilesAccessSettings(context)
+                        viewModel.dismissStoragePermissionDialog()
+                        if (!ok) {
+                            viewModel.showOsd("无法打开权限设置", "请到系统设置手动授予「所有文件访问权限」")
+                        }
+                    } else {
+                        legacyLauncher.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                    }
+                },
+                modifier = Modifier.tvFocusBorder()
+            ) { Text("去授权") }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = { viewModel.dismissStoragePermissionDialog() },
+                modifier = Modifier.tvFocusBorder()
+            ) { Text("暂不，使用私有目录") }
+        }
+    )
+}
+
 /**
  * 更新提示对话框：发现新版本时弹出，提供应用内直接下载安装功能。
  *
