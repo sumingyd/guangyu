@@ -284,6 +284,25 @@ internal fun dolbyVisionConvertState(vo: String): String =
     if (vo == "gpu-next") DV_SUPPORTED else DV_UNKNOWN
 
 /**
+ * 面板 HDR 峰值亮度（nits），取不到返回 null。
+ *
+ * HLG 的 OOTF 随显示端峰值变化，target-peak 必须用实际面板峰值；
+ * getDesiredMaxLuminance() 在部分设备上会返回 0，此时由调用方回退到 1000nit。
+ */
+internal fun AppViewModel.hdrPanelPeakLuminance(): Int? {
+    return try {
+        val display = (getApplication() as android.app.Application)
+            .getSystemService(android.content.Context.WINDOW_SERVICE)
+            .let { it as? android.view.WindowManager }
+            ?.defaultDisplay
+        val peak = display?.hdrCapabilities?.desiredMaxLuminance ?: 0f
+        if (peak.isFinite() && peak > 0f) peak.toInt() else null
+    } catch (_: Throwable) {
+        null
+    }
+}
+
+/**
  * 片源杜比视界 profile：开发者强制值 → 设置项 → 扫描阶段按播放地址登记的 profile。
  *
  * 内核不暴露 profile（直写路径连 DV 标记都读不到），p5 与 p8/p7 的处理差异只能靠
@@ -616,8 +635,17 @@ internal fun AppViewModel.applyPassthroughConfig(mpv: Player, isPq: Boolean) {
     safeSetProperty(mpv, "target-colorspace-hint", "yes")
     safeSetProperty(mpv, "target-colorspace-hint-mode", if (isPq) "source" else "target")
     // 显式设置峰值基准（与 PC 端 _apply_passthrough_config 对齐）：
-    // PQ 按 10000nit 母版峰值直通，HLG 按 1000nit 参考峰值
-    safeSetProperty(mpv, "target-peak", if (isPq) "10000" else "1000")
+    // PQ 按 10000nit 母版峰值直通；HLG 是显示端相关的，按面板实际峰值取，
+    // 取不到时保留 1000nit 参考值，不猜其他数值
+    val targetPeak = if (isPq) {
+        "10000"
+    } else {
+        val panelPeak = hdrPanelPeakLuminance()
+        Log.i(AppViewModel.TAG, "HDR 峰值: 面板=${panelPeak ?: "未取到"}nit, " +
+            "HLG target-peak=${panelPeak ?: 1000}")
+        (panelPeak ?: 1000).toString()
+    }
+    safeSetProperty(mpv, "target-peak", targetPeak)
     safeSetProperty(mpv, "gamut-mapping-mode", "relative")
 }
 
