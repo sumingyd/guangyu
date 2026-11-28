@@ -1023,8 +1023,63 @@ class SettingsFileOperations:
             if val == current_hdr:
                 selected_hdr_idx = i
         hdr_combo.setCurrentIndex(selected_hdr_idx)
-        layout.addRow(tr("hdr_output_mode_colon", "HDR Output:"), hdr_combo)
-        for combo in (rtsp_transport_combo, hwdec_combo, passthrough_combo, hdr_combo):
+        layout.addRow(self._form_label(tr("hdr_output_mode_colon", "HDR Output:")), hdr_combo)
+
+        # HLG 目标峰值：紧挨 HDR 输出，自动取面板峰值，也可手动指定
+        panel_peak = None
+        try:
+            from utils.hdr_detect import get_windows_display_peak_luminance
+            panel_peak = get_windows_display_peak_luminance()
+        except Exception:
+            panel_peak = None
+
+        hlg_peak_combo = QComboBox()
+        hlg_peak_combo.setObjectName("hlg_peak_mode_combo")
+        hlg_peak_combo.addItem(tr("hlg_peak_auto", "自动（面板峰值）"), "auto")
+        hlg_peak_combo.addItem(tr("hlg_peak_manual", "手动指定"), "manual")
+        hlg_peak_spin = QSpinBox()
+        hlg_peak_spin.setObjectName("hlg_peak_spin")
+        hlg_peak_spin.setRange(100, 10000)
+        hlg_peak_spin.setSingleStep(50)
+        hlg_peak_spin.setSuffix(" nit")
+        try:
+            manual_peak = int(playback_settings.get('hlg_target_peak', 0) or 0)
+        except (TypeError, ValueError):
+            manual_peak = 0
+        hlg_peak_spin.setValue(manual_peak if manual_peak > 0 else 700)
+        hlg_peak_combo.setCurrentIndex(1 if manual_peak > 0 else 0)
+
+        hlg_state = QLabel()
+        hlg_state.setObjectName("hlg_peak_state_label")
+
+        def _hlg_effective_text():
+            if hlg_peak_combo.currentData() == 'manual':
+                return tr("hlg_peak_effective_manual",
+                          "当前: 手动 {value} nit").format(value=hlg_peak_spin.value())
+            if panel_peak and panel_peak > 0:
+                return tr("hlg_peak_effective_auto",
+                          "当前: 自动（面板 {value} nit）").format(
+                              value=int(round(panel_peak)))
+            return tr("hlg_peak_effective_unknown", "当前: 自动（面板峰值未知）")
+
+        def _sync_hlg_peak():
+            hlg_peak_spin.setEnabled(hlg_peak_combo.currentData() == 'manual')
+            hlg_state.setText(_hlg_effective_text())
+
+        hlg_peak_combo.currentIndexChanged.connect(lambda _=0: _sync_hlg_peak())
+        hlg_peak_spin.valueChanged.connect(lambda _=0: _sync_hlg_peak())
+        _sync_hlg_peak()
+
+        hlg_row = QHBoxLayout()
+        hlg_row.setContentsMargins(0, 0, 0, 0)
+        hlg_row.setSpacing(8)
+        hlg_row.addWidget(hlg_peak_combo)
+        hlg_row.addWidget(hlg_peak_spin)
+        hlg_row.addWidget(hlg_state)
+        hlg_row.addStretch()
+        layout.addRow(self._form_label(tr("hlg_peak_mode_colon", "HLG峰值亮度:")), hlg_row)
+        for combo in (rtsp_transport_combo, hwdec_combo, passthrough_combo, hdr_combo,
+                      hlg_peak_combo):
             self._shrink_combo(combo)
         basic.setLayout(layout)
 
@@ -1889,6 +1944,10 @@ class SettingsFileOperations:
         pick('network_timeout_combo', DEFAULT_NETWORK_TIMEOUT_SEC)
         pick('audio_passthrough_combo', 'never')
         pick('hdr_output_mode_combo', 'disable')
+        pick('hlg_peak_mode_combo', 'auto')
+        hlg_spin = dialog.findChild(QSpinBox, "hlg_peak_spin")
+        if hlg_spin is not None:
+            hlg_spin.setValue(700)
         pick('vo_combo', 'auto')
         pick('video_sync_combo', 'audio')
         pick('close_behavior_combo', 'ask')
@@ -2215,6 +2274,12 @@ class SettingsFileOperations:
         combo = dialog.findChild(QComboBox, "hdr_output_mode_combo")
         if combo:
             settings['hdr_output_mode'] = combo.currentData() if combo.currentData() is not None else 'disable'
+        combo = dialog.findChild(QComboBox, "hlg_peak_mode_combo")
+        spin = dialog.findChild(QSpinBox, "hlg_peak_spin")
+        if combo is not None:
+            use_manual = (combo.currentData() == 'manual'
+                          and spin is not None and spin.value() > 0)
+            settings['hlg_target_peak'] = int(spin.value()) if use_manual else 0
 
         # 高级参数（vo / video-sync / framedrop / 缓存 override）
         combo = dialog.findChild(QComboBox, "vo_combo")
@@ -2552,6 +2617,16 @@ class SettingsFileOperations:
                         pc.reinit_for_hdr_change(new_hdr)
                         # HDR 重建完成后继续应用同一次保存中的其余运行时参数，
                         # 不能提前返回导致后者被静默跳过
+
+                    # HLG 峰值变化：即时下发给正在播放的 HLG，不用重新加载
+                    if ('hlg_target_peak' in new_playback
+                            and old_playback.get('hlg_target_peak')
+                            != new_playback.get('hlg_target_peak')
+                            and hasattr(pc, '_hdr')):
+                        try:
+                            pc._hdr.refresh_hlg_target_peak()
+                        except Exception as e:
+                            global_logger.debug(f"即时应用 HLG 峰值失败: {e}")
 
                     # 即时应用可运行时修改的参数（无需重启 mpv）
                     self._apply_runtime_playback_params(pc, old_playback, new_playback)

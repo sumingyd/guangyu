@@ -7,8 +7,8 @@ from core.log_manager import global_logger as logger
 from utils.thread_safety import safe_single_shot
 from utils.delay_constants import DelayMs
 from PySide6.QtCore import QPoint, QTimer
-from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QApplication, QFileDialog, QMenu
+from PySide6.QtGui import QPixmap, QActionGroup
+from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QInputDialog
 
 
 class ContextMenuController:
@@ -1066,6 +1066,54 @@ class ContextMenuController:
             act.setCheckable(True)
             act.setChecked(mode == current_mode)
 
+        # ---- HLG 峰值：仅 HLG 片源可调，点击立即下发并持久化 ----
+        hdr_menu.addSeparator()
+        try:
+            current_peak = (int(pc._playback_settings.get('hlg_target_peak', 0) or 0)
+                            if pc and hasattr(pc, '_playback_settings') else 0)
+        except (TypeError, ValueError):
+            current_peak = 0
+        panel_peak = None
+        try:
+            from utils.hdr_detect import get_windows_display_peak_luminance
+            panel_peak = get_windows_display_peak_luminance()
+        except Exception:
+            panel_peak = None
+
+        hlg_menu = hdr_menu.addMenu(tr("ctx_hlg_peak", "HLG Peak"))
+        is_hlg = 'HLG' in (current_hdr_type or '').upper()
+        hlg_menu.setEnabled(is_hlg)
+        if not is_hlg:
+            only = hlg_menu.addAction(
+                tr("ctx_hlg_peak_hlg_only", "Only available for HLG sources"))
+            only.setEnabled(False)
+
+        if panel_peak and panel_peak > 0:
+            auto_label = tr("ctx_hlg_peak_auto_panel", "Auto (panel {value} nit)").format(
+                value=int(round(panel_peak)))
+        else:
+            auto_label = tr("ctx_hlg_peak_auto", "Auto (panel peak)")
+        options = [(0, auto_label)] + [(v, f'{v} nit') for v in (500, 700, 1000)]
+        known = {v for v, _ in options}
+        peak_group = QActionGroup(hlg_menu)
+        peak_group.setExclusive(True)
+        for value, label in options:
+            act = hlg_menu.addAction(
+                label, lambda checked=False, v=value: self._set_hlg_peak(v))
+            act.setCheckable(True)
+            act.setActionGroup(peak_group)
+            act.setChecked(current_peak == value)
+        if current_peak not in known:
+            custom_label = tr("ctx_hlg_peak_custom_current",
+                              "Custom... (current {value} nit)").format(value=current_peak)
+        else:
+            custom_label = tr("ctx_hlg_peak_custom", "Custom...")
+        custom = hlg_menu.addAction(
+            custom_label, lambda checked=False: self._set_hlg_peak_custom())
+        custom.setCheckable(True)
+        custom.setActionGroup(peak_group)
+        custom.setChecked(current_peak not in known)
+
     def _set_hdr_mode(self, mode: str):
         """切换 HDR 输出模式（需要重新初始化 mpv）"""
         try:
@@ -1088,6 +1136,75 @@ class ContextMenuController:
                     f"{tr('osd_hdr_mode', 'HDR Mode')}: {tr(f'hdr_{mode}', mode)}")
         except Exception as e:
             logger.error(f"切换 HDR 模式失败: {e}")
+
+    def _set_hlg_peak(self, peak: int):
+        """右键菜单设置 HLG 峰值：立即下发到当前播放并持久化。"""
+        try:
+            pc = self._facade.window.player_controller
+            if not pc:
+                return
+            peak = int(peak)
+            try:
+                if self._facade.window.config:
+                    settings = self._facade.window.config.load_playback_settings()
+                    settings['hlg_target_peak'] = peak
+                    self._facade.window.config.save_playback_settings(settings)
+            except Exception as e:
+                logger.warning(f"保存 HLG 峰值失败: {e}")
+            if hasattr(pc, '_playback_settings'):
+                pc._playback_settings['hlg_target_peak'] = peak
+
+            applied = False
+            if hasattr(pc, '_hdr'):
+                applied = pc._hdr.refresh_hlg_target_peak()
+            tr = self._facade.window.language_manager.tr
+            if not applied:
+                if hasattr(self._facade.window, '_show_osd_feedback'):
+                    self._facade.window._show_osd_feedback(
+                        tr("ctx_hlg_peak_hlg_only", "Only available for HLG sources"))
+                return
+
+            if peak > 0:
+                text = f"{peak} nit"
+            else:
+                try:
+                    target, _, _ = pc._hdr._resolve_hlg_peak()
+                    text = tr("ctx_hlg_peak_auto_value",
+                              "Auto (panel {value} nit)").format(value=target)
+                except Exception:
+                    text = tr("ctx_hlg_peak_auto", "Auto (panel peak)")
+            if hasattr(self._facade.window, '_show_osd_feedback'):
+                self._facade.window._show_osd_feedback(
+                    f"{tr('osd_hlg_peak', 'HLG Peak')}: {text}")
+        except Exception as e:
+            logger.error(f"设置 HLG 峰值失败: {e}")
+
+    def _set_hlg_peak_custom(self):
+        """弹窗输入自定义 HLG 峰值，确认后立即下发并持久化。"""
+        try:
+            pc = self._facade.window.player_controller
+            current = 0
+            try:
+                current = (int(pc._playback_settings.get('hlg_target_peak', 0) or 0)
+                           if pc else 0)
+            except (TypeError, ValueError):
+                current = 0
+            if current <= 0:
+                try:
+                    target, _, _ = pc._hdr._resolve_hlg_peak()
+                    current = int(target)
+                except Exception:
+                    current = 700
+            tr = self._facade.window.language_manager.tr
+            value, ok = QInputDialog.getInt(
+                self._facade.window,
+                tr("hlg_peak_custom_title", "HLG Peak"),
+                tr("hlg_peak_custom_label", "Target peak (nit):"),
+                current, 100, 10000, 50)
+            if ok and value > 0:
+                self._set_hlg_peak(value)
+        except Exception as e:
+            logger.error(f"自定义 HLG 峰值失败: {e}")
 
     def add_bookmark_now(self):
         """快捷键调用：在当前位置添加书签"""

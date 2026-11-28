@@ -613,6 +613,8 @@ class ConfigManager(Singleton):
             'network_timeout_sec': 30,
             'audio_passthrough': 'never',
             'hdr_output_mode': 'disable',
+            # HLG 目标峰值：0=自动（面板峰值），>0=手动指定 nit
+            'hlg_target_peak': 0,
             'queue_mode': 'none',
             'http_referer': '',
             'http_proxy': '',
@@ -666,6 +668,8 @@ class ConfigManager(Singleton):
             'network_timeout_sec': 30,
             'audio_passthrough': 'never',
             'hdr_output_mode': 'disable',
+            # HLG 目标峰值：0=自动（面板峰值），>0=手动指定 nit
+            'hlg_target_peak': 0,
             'queue_mode': 'none',
             'http_referer': '',
             'http_proxy': '',
