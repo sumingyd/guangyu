@@ -27,6 +27,7 @@ import com.iptv.scanner.editor.pro.data.IptvGroup
 import com.iptv.scanner.editor.pro.data.IptvRepository
 import com.iptv.scanner.editor.pro.data.IptvSource
 import com.iptv.scanner.editor.pro.data.IptvStatus
+import com.iptv.scanner.editor.pro.data.LogoFallbackBus
 import com.iptv.scanner.editor.pro.data.MappingEntry
 import com.iptv.scanner.editor.pro.data.ReminderItem
 import com.iptv.scanner.editor.pro.data.RecentEntry
@@ -1330,6 +1331,27 @@ internal var currentIsLocalFile: Boolean
                 delay(1_000L)
                 evaluateIdle()
                 evaluateScreenSaver()
+            }
+        }
+        // 台标加载失败后由 Python 重新解析，这里把新地址写回频道列表并触发重组
+        viewModelScope.launch {
+            LogoFallbackBus.updates.collect { updates ->
+                if (updates.isEmpty()) return@collect
+                val byIndex = updates.associate { it.index to it.logo }
+                _channels.value = _channels.value.mapIndexed { index, channel ->
+                    val replacement = byIndex[index]
+                    if (replacement != null && channel.logo != replacement) {
+                        channel.copy(logo = replacement)
+                    } else {
+                        channel
+                    }
+                }
+                val info = _channelDisplayInfo.value
+                byIndex[info.idx]?.let { replacement ->
+                    if (info.logo != replacement) {
+                        _channelDisplayInfo.value = info.copy(logo = replacement)
+                    }
+                }
             }
         }
     }

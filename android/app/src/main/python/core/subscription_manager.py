@@ -26,6 +26,8 @@ class SubscriptionManager(Singleton):
         self._config = ConfigManager()
         self._epg_data = {}
         self._epg_channel_names = {}
+        # epg 频道 id -> <icon src>（XMLTV <channel><icon src="..."/></channel>）
+        self._epg_channel_icons = {}
         # epg 频道 id -> {'name': EPG源名称, 'url': EPG源地址}
         # 多源合并时同一频道只保留第一个提供数据的源，与 _epg_data 的替补规则一致。
         self._epg_channel_sources = {}
@@ -287,6 +289,10 @@ class SubscriptionManager(Singleton):
         total_sources = len(sources)
         failed_sources = 0
         failed_reasons = []
+        # 本轮重新收集台标；全部源失败时恢复旧台标，避免网络抖动把可用台标清空
+        with self._epg_lock:
+            old_icons = dict(self._epg_channel_icons)
+            self._epg_channel_icons = {}
 
         for i, source in enumerate(sources):
             if status_callback:
@@ -325,6 +331,7 @@ class SubscriptionManager(Singleton):
             detail = '；'.join(failed_reasons) if failed_reasons else '未知原因'
             logger.warning(f"所有EPG源均加载失败({failed_sources}/{total_sources})，保留现有EPG缓存: {detail}")
             with self._epg_lock:
+                self._epg_channel_icons = old_icons
                 existing_channels = len(self._epg_data)
             if status_callback:
                 status_callback(f"EPG加载失败（{detail}），继续使用缓存数据（{existing_channels} 个频道）")
@@ -333,6 +340,10 @@ class SubscriptionManager(Singleton):
         with self._epg_lock:
             self._epg_data = merged_data
             self._epg_channel_sources = merged_sources
+            # 只保留本轮实际有节目数据的频道台标
+            self._epg_channel_icons = {
+                cid: src for cid, src in self._epg_channel_icons.items() if cid in merged_data
+            }
             self._last_epg_update = datetime.now()
         self._clear_epg_matcher_cache()
         
@@ -787,22 +798,37 @@ class SubscriptionManager(Singleton):
 
 
     def _scan_xmltv_channels(self, make_stream) -> dict:
-        """第一遍扫描：只收集 <channel>，返回 id -> 显示名（无显示名的频道不入表）"""
+        """第一遍扫描：收集 <channel> 的 id -> 显示名，以及 <icon src> 台标
+
+        同一 epg 频道已存在台标时保留先到的那个（多源合并按源顺序替补）。
+        """
         import xml.etree.ElementTree as ET
         names = {}
+        icons = {}
         with make_stream() as stream:
             for _event, elem in ET.iterparse(stream, events=('end',)):
                 if elem.tag == 'channel':
                     cid = elem.get('id')
-                    if cid and cid not in names:
-                        for display_name in elem.findall('display-name'):
-                            if display_name.text:
-                                names[cid] = display_name.text.strip()
-                                break
+                    if cid:
+                        if cid not in names:
+                            for display_name in elem.findall('display-name'):
+                                if display_name.text:
+                                    names[cid] = display_name.text.strip()
+                                    break
+                        if cid not in icons:
+                            for icon in elem.findall('icon'):
+                                src = (icon.get('src') or '').strip()
+                                if src:
+                                    icons[cid] = src
+                                    break
                     elem.clear()
                 elif elem.tag == 'programme':
                     # 第一遍不关心节目内容，立即释放
                     elem.clear()
+        if icons:
+            with self._epg_lock:
+                for cid, src in icons.items():
+                    self._epg_channel_icons.setdefault(cid, src)
         return names
 
     def _scan_xmltv_programmes(self, make_stream, keep_ids, channel_names: dict) -> dict:
@@ -920,6 +946,9 @@ class SubscriptionManager(Singleton):
             if matched:
                 target_ids.add(matched)
                 stats['matched'].append((display_name, matched))
+                icon = self._epg_channel_icons.get(matched, '')
+                if icon and not channel.get('_epg_logo'):
+                    channel['_epg_logo'] = icon
             else:
                 stats['unmatched'].append(display_name)
         return target_ids, stats
@@ -957,6 +986,42 @@ class SubscriptionManager(Singleton):
         """线程安全地获取 EPG 频道 id -> 显示名 的映射拷贝"""
         with self._epg_lock:
             return dict(self._epg_channel_names)
+
+    def get_epg_channel_icons(self) -> dict:
+        """线程安全地获取 EPG 频道 id -> 台标地址 的映射拷贝"""
+        with self._epg_lock:
+            return dict(self._epg_channel_icons)
+
+    def get_epg_signature(self) -> str:
+        """EPG 数据版本签名：数据/台标变化时让台标解析缓存整体失效。"""
+        with self._epg_lock:
+            updated = self._last_epg_update.isoformat() if self._last_epg_update else ''
+            return f"{updated}|{len(self._epg_channel_names)}|{len(self._epg_channel_icons)}"
+
+    def get_channel_icon(self, channel_name, tvg_id=None, tvg_name=None, comma_name=None):
+        """按频道信息匹配 EPG 频道并返回其 icon 地址（未匹配/无 icon 返回空串）。"""
+        with self._epg_lock:
+            if not self._epg_channel_icons:
+                return ''
+            channel_names = dict(self._epg_channel_names)
+            if not channel_names:
+                channel_names = {cid: cid for cid in self._epg_channel_icons}
+        if not channel_names:
+            return ''
+        try:
+            from services.epg_matcher import EpgMatcher
+            detail = EpgMatcher.match_detail(
+                channel_name, channel_names, tvg_id=tvg_id,
+                tvg_name=tvg_name, comma_name=comma_name,
+            )
+        except Exception as e:
+            logger.debug(f"EPG 台标匹配失败: {e}")
+            return ''
+        epg_id = detail.get('epg_id')
+        if not epg_id:
+            return ''
+        with self._epg_lock:
+            return self._epg_channel_icons.get(epg_id, '')
 
     @staticmethod
     def _clear_epg_matcher_cache() -> None:
@@ -1142,10 +1207,12 @@ class SubscriptionManager(Singleton):
             with self._epg_lock:
                 channel_names = dict(self._epg_channel_names)
                 channel_sources = dict(getattr(self, '_epg_channel_sources', {}) or {})
+                channel_icons = dict(self._epg_channel_icons)
             cache_payload = {
                 'epg_data': data,
                 'channel_names': channel_names,
                 'channel_sources': channel_sources,
+                'channel_icons': channel_icons,
             }
             fd, tmp_path = tempfile.mkstemp(dir=cache_dir, suffix='.tmp', prefix='epg_')
             try:
@@ -1187,6 +1254,7 @@ class SubscriptionManager(Singleton):
                 if isinstance(data, dict) and 'epg_data' in data:
                     self._epg_data = data['epg_data']
                     self._epg_channel_names = data.get('channel_names', {})
+                    self._epg_channel_icons = data.get('channel_icons', {}) or {}
                     # 旧缓存（升级前写入）没有来源信息。只在"恰好 1 个 EPG 源"时回填：
                     # 此时所有节目必然来自它，归属是确定的；多源时无法判断某个频道来自
                     # 哪个源，留空让 UI 显示"未知源"，不做猜测。
@@ -1198,9 +1266,14 @@ class SubscriptionManager(Singleton):
                     self._epg_data = data
                     self._epg_channel_names = {}
                     self._epg_channel_sources = {}
+                    self._epg_channel_icons = {}
                     for channel_id in data.keys():
                         self._epg_channel_names[channel_id] = channel_id
-                self._last_epg_update = datetime.now()
+                # 用缓存文件时间作为版本，保证重启后同一份缓存不会让台标解析缓存失效
+                try:
+                    self._last_epg_update = datetime.fromtimestamp(os.path.getmtime(cache_file))
+                except OSError:
+                    self._last_epg_update = datetime.now()
             self._clear_epg_matcher_cache()
             
             logger.info(f"load_cached_epg_data: 成功加载 {len(self._epg_data)} 个频道")

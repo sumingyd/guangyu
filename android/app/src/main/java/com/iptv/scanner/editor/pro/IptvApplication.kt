@@ -9,12 +9,15 @@ import coil.imageLoader
 import coil.intercept.Interceptor
 import coil.memory.MemoryCache
 import coil.request.CachePolicy
+import coil.request.ErrorResult
+import coil.request.ImageRequest
 import coil.request.ImageResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import com.chaquo.python.android.PyApplication
 import com.iptv.scanner.editor.pro.data.GithubProxy
 import com.iptv.scanner.editor.pro.data.GithubProxyRuntime
+import com.iptv.scanner.editor.pro.data.LogoFailureReporter
 import org.acra.ACRA
 import org.acra.config.CoreConfigurationBuilder
 import org.acra.data.StringFormat
@@ -172,6 +175,12 @@ class IptvApplication : PyApplication(), ImageLoaderFactory {
                     }
                 })
             }
+            // 台标图片加载失败（404/空/解码失败）回传 Python，按来源优先级切下一级
+            .eventListener(object : EventListener {
+                override fun onError(request: ImageRequest, result: ErrorResult) {
+                    (request.data as? String)?.let { LogoFailureReporter.report(it) }
+                }
+            })
             // 内存缓存：50MB 上限
             .memoryCache {
                 MemoryCache.Builder(this)

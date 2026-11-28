@@ -45,6 +45,7 @@ def _make_manager():
     obj = object.__new__(SubscriptionManager)
     obj._epg_data = {}
     obj._epg_channel_names = {}
+    obj._epg_channel_icons = {}
     obj._epg_lock = threading.RLock()
     obj._last_epg_error = ''
     obj._last_epg_update = None

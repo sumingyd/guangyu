@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.Brightness4
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CropFree
 import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Menu
@@ -752,8 +753,9 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
     // 底栏 TAB 的 UP 落点 + 详情关闭后的焦点回归：设置列表每一行都挂 FocusRequester。
     // - 底栏居中悬浮、正上方是 Mini 播放条，几何 UP 永远只会回到播放条，入口必须显式注册；
     // - BACK 关闭右侧详情后，焦点回到「进入详情前那一行」，而不是永远回第一项。
-    val rowFocuses = remember { List(21) { FocusRequester() } }
-    val rowBrings = remember { List(21) { BringIntoViewRequester() } }
+    val rowFocuses = remember { List(22) { FocusRequester() } }
+    val rowBrings = remember { List(22) { BringIntoViewRequester() } }
+    var showLogoSourcePanel by remember { mutableStateOf(false) }
     var lastFocusedRow by remember { mutableStateOf(0) }
     val scrollScope = rememberCoroutineScope()
     // 行序号与 PC 端三页签对齐：
@@ -824,7 +826,7 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
     }
 
     androidx.compose.runtime.CompositionLocalProvider(LocalLiquidGlass provides liquidGlass) {
-    // 用整列滚动而不是 LazyColumn：设置行数固定（19 行），一次性组合能保证分组之间
+    // 用整列滚动而不是 LazyColumn：设置行数固定（22 行），一次性组合能保证分组之间
     // 没有「尚未组合的间隙」，遥控器 UP/DOWN 可在整列中连续移动；LazyColumn 跨 item
     // 的焦点搜索在未组合区域会断裂，焦点会从「开机自启」直接逃逸到底栏。
     Column(
@@ -988,9 +990,28 @@ internal fun PortraitSettingsContent(viewModel: AppViewModel) {
                 ) { viewModel.toggleGithubProxyPanel() }
             }
         }
+
+        // ===== 台标：来源选择与兜底顺序（配置与 PC 端互通）=====
+        AptvSectionHeader("台标")
+        AptvGroupCard {
+            AptvRow(
+                Icons.Default.Image,
+                "台标来源",
+                value = "本地 / M3U / EPG / 规则",
+                modifier = rowModifier(21)
+            ) {
+                showLogoSourcePanel = true
+            }
+        }
         // 悬浮底栏遮挡预留（原 LazyColumn contentPadding(bottom = 130.dp)）
         Spacer(modifier = Modifier.height(130.dp))
     }
+    }
+
+    if (showLogoSourcePanel) {
+        PortraitPanelDialog(onDismiss = { showLogoSourcePanel = false }) {
+            LogoSourcePanel(viewModel = viewModel, onClose = { showLogoSourcePanel = false })
+        }
     }
 }
 

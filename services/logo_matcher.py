@@ -1,3 +1,4 @@
+import os
 import re
 from typing import Optional, List, Tuple, Callable, Union, Set, Dict
 from re import Pattern
@@ -484,6 +485,38 @@ class LogoMatcher:
     # ════════════════════════════════════════════════════════
     #  对外接口
     # ════════════════════════════════════════════════════════
+
+    def match_stem_exact(self, name: str) -> Optional[str]:
+        """只做规则与精确匹配，返回台标文件名（不含扩展名）；不做相似度兜底。
+
+        本地台标目录按文件名查找时使用：宁可没有台标，也不要把相近频道的
+        台标套到当前频道上。
+        """
+        if not name:
+            return None
+
+        for pattern, logo_file in self.rules:
+            m = pattern.match(name)
+            if m:
+                value = logo_file(m) if callable(logo_file) else logo_file
+                return os.path.splitext(value)[0] if value else None
+
+        for variant in self._get_variants(name):
+            result = self._match_variant(variant)
+            if result:
+                stem, score = result
+                if score >= 1.0:
+                    return stem
+
+        # 频道名常见「CCTV-1 综合」「CCTV-5 体育」：去掉分隔符与末尾描述词后精确比对
+        compact = self._SEPARATOR_RE.sub('', name).lower()
+        for suffix in ('综合', '新闻', '体育', '财经', '电影', '综艺', '纪录',
+                       '少儿', '音乐', '戏曲', '国际', '中文', '高清', '超高清'):
+            if compact.endswith(suffix) and len(compact) > len(suffix):
+                stem_key = compact[:-len(suffix)]
+                if stem_key in self._logo_compact_map:
+                    return self._logo_compact_map[stem_key]
+        return None
 
     def match(self, name: str) -> Optional[str]:
         if not name:

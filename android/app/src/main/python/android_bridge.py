@@ -606,9 +606,12 @@ def get_channels_json(page=1, size=100, group='', search='', valid_filter='', so
         end = start + size
         page_channels = filtered[start:end]
         # 保留 _index 字段（server 端包含），去掉其他内部下划线字段
+        from services.logo_resolver import resolve_channel_logo
         clean = []
         for i, c in enumerate(page_channels):
             item = {k: v for k, v in c.items() if not k.startswith('_')}
+            # 与 PC 共用同一套台标来源优先级（本地/M3U/EPG/规则）
+            item['logo'] = resolve_channel_logo(c)
             item['_index'] = all_channels.index(c) if c in all_channels else start + i
             clean.append(item)
         # 分组列表（按首次出现顺序去重，与 server 端一致）
@@ -636,7 +639,10 @@ def get_channel_json(idx):
         if idx < 0 or idx >= len(channels):
             return _err('idx out of range')
         c = channels[idx]
-        return _ok({k: v for k, v in c.items() if not k.startswith('_')})
+        item = {k: v for k, v in c.items() if not k.startswith('_')}
+        from services.logo_resolver import resolve_channel_logo
+        item['logo'] = resolve_channel_logo(c)
+        return _ok(item)
     except Exception as e:
         _ab_logger.exception('get_channel_json failed')
         return _err(str(e))
@@ -1409,6 +1415,85 @@ def set_github_proxy(enabled='true', proxy='gh-proxy.com'):
         return _ok(github_proxy.save_settings(is_enabled, proxy))
     except Exception as e:
         _ab_logger.exception('set_github_proxy failed')
+        return _err(str(e))
+
+
+# -------------------------------------------------------------------
+# 台标来源（与 PC 共用 services.logo_resolver 与同一份 config.ini）
+# -------------------------------------------------------------------
+
+def get_logo_settings_json():
+    """读取台标来源顺序、规则模板和解析缓存统计。"""
+    try:
+        from services.logo_resolver import get_logo_resolver, SOURCE_LABELS, SOURCE_ORDER
+        resolver = get_logo_resolver()
+        settings = resolver.get_settings()
+        sources = [{'key': key, 'label': SOURCE_LABELS.get(key, key)}
+                   for key in SOURCE_ORDER]
+        return _ok({
+            'order': settings['order'],
+            'rule_template': settings['rule_template'],
+            'sources': sources,
+            'stats': resolver.cache_stats(),
+        })
+    except Exception as e:
+        _ab_logger.exception('get_logo_settings_json failed')
+        return _err(str(e))
+
+
+def set_logo_settings(order_json='[]', rule_template=''):
+    """保存台标来源顺序与规则模板（写入 config.ini，PC/安卓共用）。"""
+    try:
+        import json as _json
+        from services.logo_resolver import get_logo_resolver
+        try:
+            order = _json.loads(order_json) if isinstance(order_json, str) else list(order_json)
+        except (TypeError, ValueError):
+            return _err('来源顺序格式错误')
+        if not isinstance(order, list) or not order:
+            return _err('请至少选择一个台标来源')
+        template = str(rule_template or '').strip()
+        if 'rule' in order and '[name]' not in template:
+            return _err('规则地址需要包含 [name] 占位符')
+        resolver = get_logo_resolver()
+        resolver.save_settings(order, template)
+        settings = resolver.get_settings()
+        return _ok({'order': settings['order'], 'rule_template': settings['rule_template']})
+    except Exception as e:
+        _ab_logger.exception('set_logo_settings failed')
+        return _err(str(e))
+
+
+def report_logo_failures(urls_json='[]'):
+    """安卓图片加载失败回传：记录失败并返回受影响频道的新台标地址。
+
+    返回 {updates: [{index, logo}]}，index 与 get_channels_json 的 _index 一致。
+    """
+    try:
+        import json as _json
+        ctx = _get_ctx()
+        if ctx is None:
+            return _err('not inited')
+        try:
+            urls = _json.loads(urls_json) if isinstance(urls_json, str) else list(urls_json or [])
+        except (TypeError, ValueError):
+            return _err('失败地址格式错误')
+        urls = [str(u).strip() for u in urls if str(u).strip()]
+        if not urls:
+            return _ok({'updates': []})
+
+        from services.logo_resolver import get_logo_resolver
+        resolver = get_logo_resolver()
+        removed_keys = resolver.invalidate_urls(urls)
+        updates = []
+        if removed_keys:
+            for index, channel in enumerate(ctx.get_all_channels() or []):
+                if resolver.channel_key(channel) in removed_keys:
+                    updates.append({'index': index, 'logo': resolver.resolve(channel) or ''})
+            _log(f'report_logo_failures: {len(urls)} 个地址失败, {len(updates)} 个频道换源', 'D')
+        return _ok({'updates': updates})
+    except Exception as e:
+        _ab_logger.exception('report_logo_failures failed')
         return _err(str(e))
 
 

@@ -1,6 +1,8 @@
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap, QIcon
 from PySide6.QtWidgets import QListWidget
+
+from core.log_manager import global_logger as logger
 
 
 class ThumbnailMixin:
@@ -8,6 +10,40 @@ class ThumbnailMixin:
 
     def _on_logo_cache_loaded(self, url, pixmap):
         self.ui_ctrl._on_logo_cache_loaded(url, pixmap)
+
+    def _on_logo_cache_failed(self, url):
+        """台标地址取不到图：记录失败并让该频道按优先级回退到下一来源。"""
+        try:
+            from services.logo_resolver import get_logo_resolver
+            get_logo_resolver().invalidate_url(url)
+        except Exception as e:
+            logger.debug(f"记录台标失败状态出错: {e}")
+
+        timer = getattr(self, '_logo_fallback_timer', None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(300)
+            timer.timeout.connect(self._refresh_logos_after_failure)
+            self._logo_fallback_timer = timer
+        if not timer.isActive():
+            timer.start()
+
+    def _refresh_logos_after_failure(self):
+        """失败原因汇入后再统一刷新可见台标，避免逐条失败触发刷新风暴。"""
+        try:
+            pairs = (
+                (getattr(self, 'sub_channel_list', None), getattr(self, '_sub_channels', None)),
+                (getattr(self, 'local_channel_list', None), getattr(self, '_local_channels', None)),
+            )
+            for list_widget, channels in pairs:
+                if list_widget is None or not channels:
+                    continue
+                self.channel_ctrl.reset_visible_logo_pixmaps(list_widget)
+                self._load_visible_icons(list_widget, channels)
+            self.channel_ctrl.update_channel_info_on_selection()
+        except Exception as e:
+            logger.debug(f"台标来源回退刷新失败: {e}")
 
     def _on_thumbnail_ready(self, channel_name, url):
         self._update_grid_thumbnail(url)

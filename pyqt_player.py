@@ -1041,6 +1041,7 @@ class IPTVPlayer(
         from services.logo_cache_service import LogoCacheService
         self._logo_cache_service = LogoCacheService(self)
         self._logo_cache_service.logo_loaded.connect(self._on_logo_cache_loaded)
+        self._logo_cache_service.logo_failed.connect(self._on_logo_cache_failed)
 
         from services.thumbnail_service import ThumbnailService
         self._thumbnail_service = ThumbnailService(self)

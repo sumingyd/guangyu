@@ -35,6 +35,33 @@ data class GithubProxySettings(
     @SerialName("proxies") val proxies: List<String> = emptyList(),
 )
 
+/** 台标来源选项（local / m3u / epg / rule） */
+@Serializable
+data class LogoSourceOption(
+    val key: String = "",
+    val label: String = "",
+)
+
+/** 台标来源设置：order 顺序即逐级兜底顺序 */
+@Serializable
+data class LogoSettings(
+    val order: List<String> = emptyList(),
+    @SerialName("rule_template") val ruleTemplate: String = "",
+    val sources: List<LogoSourceOption> = emptyList(),
+)
+
+/** 图片加载失败后，Python 端重新解析出的频道台标 */
+@Serializable
+data class LogoUpdate(
+    val index: Int = 0,
+    val logo: String = "",
+)
+
+@Serializable
+data class LogoFailureResponse(
+    val updates: List<LogoUpdate> = emptyList(),
+)
+
 /**
  * 当前实际使用的存储路径（Python 端 get_storage_info 返回）。
  * shared=true 表示数据落在 /sdcard/GuangYu（文件管理器可见）。

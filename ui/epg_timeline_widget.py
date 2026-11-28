@@ -4,6 +4,7 @@ from PySide6.QtWidgets import QWidget, QToolTip, QApplication
 from PySide6.QtCore import Qt, QRectF, Signal
 from PySide6.QtGui import QPainter, QColor, QPen, QFont, QFontMetrics, QPainterPath
 from ui.styles import AppStyles, color_to_hex
+from services.logo_resolver import resolve_channel_logo
 
 
 def _scaled_font(point_delta: int = 0) -> QFont:
@@ -535,7 +536,7 @@ class EpgChannelHeaderWidget(QWidget):
 
             # 台标（有缓存/可加载时显示）
             if logo_w:
-                pixmap = self._get_logo_pixmap(ch_data.get('logo', ''))
+                pixmap = self._get_logo_pixmap(resolve_channel_logo(ch_data))
                 if pixmap is not None:
                     lx = self.PADDING + num_w
                     ly = y + (self.ROW_HEIGHT - self.LOGO_HEIGHT) // 2

@@ -296,6 +296,26 @@ class IptvRepository private constructor() {
         callPyTyped("set_github_proxy", enabled.toString(), proxy)
 
     // -----------------------------------------------------------------
+    // 台标来源（配置存 config.ini，与 PC 端共用）
+    // -----------------------------------------------------------------
+
+    suspend fun getLogoSettings(): Result<LogoSettings> =
+        callPyTyped("get_logo_settings_json")
+
+    suspend fun setLogoSettings(order: List<String>, ruleTemplate: String): Result<LogoSettings> {
+        val orderJson = json.encodeToString(ListSerializer(String.serializer()), order)
+        return callPyTyped("set_logo_settings", orderJson, ruleTemplate)
+    }
+
+    /** 图片加载失败回传：Python 记录失败并返回受影响频道的新台标地址。 */
+    suspend fun reportLogoFailures(urls: List<String>): Result<List<LogoUpdate>> {
+        if (urls.isEmpty()) return Result.success(emptyList())
+        val urlsJson = json.encodeToString(ListSerializer(String.serializer()), urls)
+        return callPyTyped<LogoFailureResponse>("report_logo_failures", urlsJson)
+            .map { it.updates }
+    }
+
+    // -----------------------------------------------------------------
     // EPG 订阅源
     // -----------------------------------------------------------------
 

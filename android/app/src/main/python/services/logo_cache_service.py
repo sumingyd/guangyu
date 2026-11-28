@@ -14,6 +14,8 @@ from core.log_manager import global_logger as logger
 
 class LogoCacheService(ThreadSafeQObject):
     logo_loaded = Signal(str, QPixmap)
+    # 远程台标下载/解码失败（404、空数据、非图片等），供上层触发来源兜底
+    logo_failed = Signal(str)
 
     CACHE_DIR_NAME = 'logo_cache'
     META_FILE = 'meta.json'
@@ -188,6 +190,41 @@ class LogoCacheService(ThreadSafeQObject):
     def _url_to_key(self, url):
         return hashlib.sha1(url.encode('utf-8')).hexdigest()
 
+    @staticmethod
+    def _local_file_path(url):
+        """台标地址本身就是本地文件（本地台标来源）时返回绝对路径，否则 None。"""
+        if not url:
+            return None
+        path = url[7:] if str(url).lower().startswith('file://') else str(url)
+        try:
+            if os.path.isfile(path):
+                return path
+        except (OSError, ValueError):
+            return None
+        return None
+
+    def _local_scaled(self, path, width, height, max_pixels=None):
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            return None
+        cache_key = f'local|{path}|{mtime}|{int(width)}x{int(height)}'
+        with self._lock:
+            if cache_key in self._scaled_cache:
+                self._scaled_cache.move_to_end(cache_key)
+                return QPixmap(self._scaled_cache[cache_key])
+        image = self._read_image_at_size(path, width, height, max_pixels)
+        if image is None:
+            return None
+        pixmap = self._image_to_pixmap(image)
+        pixmap.setDevicePixelRatio(self._device_pixel_ratio())
+        with self._lock:
+            self._scaled_cache[cache_key] = pixmap
+            self._scaled_cache.move_to_end(cache_key)
+            while len(self._scaled_cache) > self.SCALED_CACHE_MAX:
+                self._scaled_cache.popitem(last=False)
+        return QPixmap(pixmap)
+
     def _guess_ext_from_url(self, url):
         from urllib.parse import urlparse, unquote
         path = unquote(urlparse(url).path).lower()
@@ -270,6 +307,11 @@ class LogoCacheService(ThreadSafeQObject):
     def get(self, url):
         if not url:
             return None
+        local_path = self._local_file_path(url)
+        if local_path:
+            image = self._read_image_at_size(
+                local_path, 4096, 4096, self.MAX_DECODE_PIXELS)
+            return self._image_to_pixmap(image) if image is not None else None
         with self._lock:
             if url in self._negative_cache:
                 neg_time = self._negative_cache[url]
@@ -312,6 +354,9 @@ class LogoCacheService(ThreadSafeQObject):
             return None
         width = max(1, int(width or 60))
         height = max(1, int(height or width))
+        local_path = self._local_file_path(url)
+        if local_path:
+            return self._local_scaled(local_path, width, height)
         cache_key = f'{url}|{width}x{height}'
         with self._lock:
             if url in self._negative_cache:
@@ -346,6 +391,10 @@ class LogoCacheService(ThreadSafeQObject):
     def get_image(self, url):
         if not url:
             return None
+        local_path = self._local_file_path(url)
+        if local_path:
+            image = QImage()
+            return image if image.load(local_path) else None
         with self._lock:
             if url in self._negative_cache:
                 neg_time = self._negative_cache[url]
@@ -447,13 +496,20 @@ class LogoCacheService(ThreadSafeQObject):
             return False
 
     def mark_negative(self, url, reason=''):
+        is_new = False
         with self._lock:
+            is_new = url not in self._negative_cache
             self._negative_cache[url] = time.time()
         if reason:
             logger.debug(f"台标标记为无效: {reason} | {url[:80]}")
+        if is_new and not self._local_file_path(url):
+            self.logo_failed.emit(url)
 
     def fetch_async(self, url, force=False):
         if not url:
+            return
+        # 本地台标文件不需要下载，get_scaled/get 会直接读盘
+        if self._local_file_path(url):
             return
         if not self._ensure_main_thread(self.fetch_async, url, force):
             return

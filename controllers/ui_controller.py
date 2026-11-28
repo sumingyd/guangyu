@@ -14,6 +14,7 @@ from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence, QPixmap, Q
 from PySide6.QtWidgets import QApplication, QComboBox, QFrame, QLabel, QListWidget, QMenuBar, QSlider, QToolButton
 from controllers.main_window_protocol import MainWindowProtocol
 from utils.platform_utils import is_macos
+from services.logo_resolver import get_logo_resolver, resolve_channel_logo
 
 
 def reapply_divider_styles(container):
@@ -1205,9 +1206,13 @@ class UIController:
         """台标加载完成的回调"""
 
         logger.debug(f"台标加载完成: {url[:50]}..., pixmap有效: {not pixmap.isNull()}")
+        try:
+            get_logo_resolver().note_url_ok(url)
+        except Exception:
+            pass
 
         if self.window.current_channel:
-            logo = self.window.current_channel.get('logo', '')
+            logo = resolve_channel_logo(self.window.current_channel)
             if logo:
                 logo = logo.strip('`"\'')
                 if logo == url and hasattr(self.window, 'channel_logo'):
@@ -1226,7 +1231,7 @@ class UIController:
             match_idx = None
             if channels:
                 for ci, ch in enumerate(channels):
-                    ch_logo = ch.get('logo', '')
+                    ch_logo = resolve_channel_logo(ch)
                     if ch_logo:
                         ch_logo = ch_logo.strip('`"\'')
                         if ch_logo == url:

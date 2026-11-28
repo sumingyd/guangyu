@@ -6,6 +6,7 @@ from PySide6.QtCore import QSize
 from PySide6.QtWidgets import QApplication, QInputDialog, QListWidget, QListWidgetItem, QMessageBox
 from core.log_manager import global_logger as logger
 from controllers.main_window_protocol import ChannelProtocol
+from services.logo_resolver import resolve_channel_logo
 
 
 class FavoritesController:
@@ -110,7 +111,7 @@ class FavoritesController:
                     list_widget.addItem(simple_item)
                     if logger:
                         logger.warning(f"收藏项自定义widget创建失败(idx={idx})，使用简单文本: {widget_ex}")
-                logo_url = channel.get('logo', '')
+                logo_url = resolve_channel_logo(channel)
                 if logo_url:
                     logo_cache = getattr(w, '_logo_cache_service', None)
                     if logo_cache:
@@ -183,7 +184,7 @@ class FavoritesController:
                     list_widget.addItem(simple_item)
                     if logger:
                         logger.warning(f"历史项自定义widget创建失败(idx={idx})，使用简单文本: {widget_ex}")
-                logo_url = channel.get('logo', '')
+                logo_url = resolve_channel_logo(channel)
                 if logo_url:
                     logo_cache = getattr(w, '_logo_cache_service', None)
                     if logo_cache:

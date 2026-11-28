@@ -155,6 +155,7 @@ HIDDEN_IMPORTS = [
     "services.fcc_service",
     "services.logo_cache_service",
     "services.logo_matcher",
+    "services.logo_resolver",
     "services.loopback_spectrum_service",
     "services.m3u_parser",
     "services.mpv_common",

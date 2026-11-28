@@ -10,6 +10,7 @@ from time import perf_counter
 
 from PySide6.QtWidgets import QListWidgetItem, QListWidget, QWidget
 from PySide6.QtCore import Qt, QSize, QTimer, QPoint
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6 import QtWidgets
 
 from core.application_state import app_state
@@ -17,6 +18,7 @@ from core.log_manager import global_logger as logger
 from utils.general_utils import get_display_channel_name
 from controllers.main_window_protocol import ChannelProtocol
 from services.stream_quality_scorer import StreamQualityScorer
+from services.logo_resolver import resolve_channel_logo
 from ui.quality_bar import QualityBarWidget
 from utils.thread_safety import safe_single_shot
 
@@ -105,7 +107,7 @@ class ChannelController:
         self.window.channel_name.setText(display_name)
 
         if self.window.channel_logo:
-            logo_url = channel.get('logo') or channel.get('logo_url')
+            logo_url = resolve_channel_logo(channel) or channel.get('logo_url')
             if not logo_url:
                 self.window.channel_logo.setText("")
                 self.window.channel_logo.setPixmap(None)
@@ -559,7 +561,7 @@ class ChannelController:
             if channel_idx is None or channel_idx >= len(channels):
                 continue
             channel = channels[channel_idx]
-            logo_url = channel.get('logo', '').strip('`' + '"' + '\'')
+            logo_url = resolve_channel_logo(channel).strip('`' + '"' + '\'')
 
             if is_grid:
                 if not item.icon().isNull():
@@ -624,6 +626,28 @@ class ChannelController:
         if need_capture and hasattr(w, '_thumbnail_service'):
             w._thumbnail_service.capture_channels(need_capture, force=True)
 
+    def reset_visible_logo_pixmaps(self, list_widget):
+        """来源兜底后清掉可见行的台标，让 load_visible_icons 重新按新来源取图。"""
+        row_h = int((getattr(list_widget, '_channel_render', None) or {}).get('row_h') or 46)
+        first_visible, last_visible = self._visible_row_bounds(list_widget, row_h)
+        first_visible = max(0, first_visible - 3)
+        last_visible = min(list_widget.count() - 1, last_visible + 3)
+        is_grid = list_widget.viewMode() == QListWidget.ViewMode.IconMode
+        for i in range(first_visible, last_visible + 1):
+            item = list_widget.item(i)
+            if not item:
+                continue
+            if is_grid:
+                item.setIcon(QIcon())
+                continue
+            item_widget = list_widget.itemWidget(item)
+            if not item_widget:
+                continue
+            logo_label = item_widget.findChild(QtWidgets.QLabel, "channel_logo_label")
+            if logo_label:
+                logo_label.setPixmap(QPixmap())
+                logo_label.setText("")
+
     def update_channel_info_on_selection(self):
         w = self.window
         if not w.current_channel:
@@ -634,7 +658,7 @@ class ChannelController:
         display_name = self._get_display_channel_name(w.current_channel)
         w.channel_name.setText(display_name)
         w.current_program.setText("")
-        logo = w.current_channel.get("logo", "")
+        logo = resolve_channel_logo(w.current_channel)
 
         if logo:
             logo = logo.strip('`"\'')

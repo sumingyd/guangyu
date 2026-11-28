@@ -261,11 +261,32 @@ class SettingsFileOperations:
         playlist_section = self._build_subscription_section(tr, 'playlist', playback=False)
         epg_section = self._build_subscription_section(tr, 'epg', playback=False)
 
-        sub_layout = QHBoxLayout()
-        sub_layout.setSpacing(8)
-        sub_layout.addWidget(playlist_section['group'], 1)
-        sub_layout.addWidget(epg_section['group'], 1)
-        subscription_tab_layout.addLayout(sub_layout)
+        subscription_content = QWidget()
+        subscription_content_layout = QHBoxLayout(subscription_content)
+        subscription_content_layout.setContentsMargins(0, 0, 0, 0)
+        subscription_content_layout.setSpacing(8)
+        # 三列：播放列表订阅 / EPG 订阅 / 台标来源，避免两列并排把宽度撑出屏幕
+        playlist_col = QVBoxLayout()
+        playlist_col.setSpacing(6)
+        playlist_col.addWidget(playlist_section['group'])
+        playlist_col.addStretch()
+        epg_col = QVBoxLayout()
+        epg_col.setSpacing(6)
+        epg_col.addWidget(epg_section['group'])
+        epg_col.addStretch()
+        logo_col = QVBoxLayout()
+        logo_col.setSpacing(6)
+        logo_col.addWidget(self._build_logo_section(tr))
+        logo_col.addStretch()
+        subscription_content_layout.addLayout(playlist_col, 1)
+        subscription_content_layout.addLayout(epg_col, 1)
+        subscription_content_layout.addLayout(logo_col, 1)
+
+        subscription_scroll = QScrollArea()
+        subscription_scroll.setWidgetResizable(True)
+        subscription_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        subscription_scroll.setWidget(subscription_content)
+        subscription_tab_layout.addWidget(subscription_scroll)
 
         tab_widget.addTab(subscription_tab, tr("subscription_sources_tab", "订阅源管理"))
 
@@ -1469,28 +1490,181 @@ class SettingsFileOperations:
         ))
         hint.setWordWrap(True)
         hint.setStyleSheet(AppStyles.hint_label_style())
-        layout.addRow(hint)
+
+        behavior.setLayout(layout)
+        return behavior, video_box, audio_box, sub_box, hint
+
+    def _build_playback_extras_section(self, tr, playback_settings):
+        """把播放设置的各分组纵向拼成一个容器，兼容只按整块放置的调用方。"""
+        behavior, video_box, audio_box, sub_box, hint = (
+            self._build_playback_extras_groups(tr, playback_settings))
+        container = QWidget()
+        box = QVBoxLayout(container)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(6)
+        for widget in (behavior, video_box, audio_box, sub_box, hint):
+            box.addWidget(widget)
+        return container
+
+    @staticmethod
+    def _shrink_combo(combo):
+        """让下拉框的最小宽度不再由最长选项文字决定。
+
+        协议/高级视频里不少选项说明很长（如带括号的 passthrough 说明），
+        QComboBox 默认按最长项撑最小宽度，三列并排时会横向溢出；这里改成
+        按最小内容长度计算，列变窄时由下拉框自身省略显示，选中值仍完整。
+        """
+        combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        combo.setMinimumContentsLength(0)
+
+    @staticmethod
+    def _compact_field(label_text, control):
+        """把「标签 + 控件」压成一行，供两列紧凑网格使用。"""
+        field = QWidget()
+        row = QHBoxLayout(field)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        row.addWidget(QLabel(label_text))
+        row.addWidget(control, 1)
+        return field
+
+    @staticmethod
+    def _compact_grid(group):
+        """两列紧凑网格：每行放两个「标签+控件」，行距压到最小。"""
+        grid = QGridLayout(group)
+        grid.setContentsMargins(8, 6, 8, 6)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(4)
+        return grid
+
+    @staticmethod
+    def _add_form_row_with_desc(layout, label_text, widget, desc_text):
+        """在 QFormLayout 中添加一行，参数说明放进 tooltip。
+
+        过去说明文字独占一行，一个参数占两行高度，整页很容易被撑到要滚动；
+        现在说明挂在标签与控件上，鼠标悬停即可看全，既不删内容也不缩小字号。
+        """
+        label = QLabel(label_text)
+        if desc_text:
+            widget.setToolTip(desc_text)
+            label.setToolTip(desc_text)
+        layout.addRow(label, widget)
+
+
+    def _build_logo_section(self, tr):
+        """台标来源：勾选 + 排序，顺序即逐级兜底优先级。"""
+        from services.logo_resolver import (
+            SOURCE_LABELS, SOURCE_ORDER, get_logo_resolver,
+        )
+
+        resolver = get_logo_resolver()
+        settings = resolver.get_settings()
+        enabled = list(settings['order'])
+        template = settings['rule_template']
+
+        group = QGroupBox(tr("logo_source_settings", "台标来源"))
+        layout = QVBoxLayout()
+
+        hint = QLabel(tr(
+            "logo_source_hint",
+            "勾选来源后按列表顺序逐级兜底：某一级取不到台标时自动尝试下一级。"
+            "只勾选一个来源＝固定只用它，不再往下找。用「上移/下移」调整顺序。"
+            "本地来源会到程序目录的 img 或配置目录的 logos 里找与频道同名的图片。"
+        ))
+        hint.setWordWrap(True)
+        hint.setStyleSheet(AppStyles.hint_label_style())
+        layout.addWidget(hint)
+
+        list_widget = QListWidget()
+        list_widget.setObjectName("logo_priority_list")
+        list_widget.setMaximumHeight(116)
+        ordered = [s for s in SOURCE_ORDER if s in enabled]
+        ordered += [s for s in SOURCE_ORDER if s not in ordered]
+        for source in ordered:
+            item = QListWidgetItem(tr(f"logo_source_{source}", SOURCE_LABELS[source]))
+            item.setData(Qt.ItemDataRole.UserRole, source)
+            item.setFlags(item.flags()
+                          | Qt.ItemFlag.ItemIsUserCheckable
+                          | Qt.ItemFlag.ItemIsEnabled
+                          | Qt.ItemFlag.ItemIsSelectable)
+            checked = source in enabled and (source != 'rule' or bool(template.strip()))
+            item.setCheckState(
+                Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+            list_widget.addItem(item)
+        layout.addWidget(list_widget)
+
+        btn_row = QHBoxLayout()
+        up_btn = QPushButton(tr("move_up", "上移"))
+        up_btn.setObjectName("logo_priority_up_btn")
+        down_btn = QPushButton(tr("move_down", "下移"))
+        down_btn.setObjectName("logo_priority_down_btn")
+        clear_btn = QPushButton(tr("clear_logo_cache", "清空台标缓存"))
+        clear_btn.setObjectName("logo_clear_cache_btn")
+        btn_row.addWidget(up_btn)
+        btn_row.addWidget(down_btn)
+        btn_row.addStretch()
+        btn_row.addWidget(clear_btn)
+        layout.addLayout(btn_row)
+
+        def _move(delta):
+            row = list_widget.currentRow()
+            if row < 0:
+                return
+            target = row + delta
+            if target < 0 or target >= list_widget.count():
+                return
+            item = list_widget.takeItem(row)
+            list_widget.insertItem(target, item)
+            list_widget.setCurrentRow(target)
+
+        up_btn.clicked.connect(lambda: _move(-1))
+        down_btn.clicked.connect(lambda: _move(1))
+
+        rule_row = QHBoxLayout()
+        rule_row.addWidget(QLabel(tr("logo_rule_template", "规则地址:")))
+        rule_edit = QLineEdit()
+        rule_edit.setObjectName("logo_rule_template_edit")
+        rule_edit.setText(template)
+        rule_edit.setPlaceholderText("https://example.com/[name].png")
+        rule_row.addWidget(rule_edit, 1)
+        layout.addLayout(rule_row)
+
+        rule_hint = QLabel(tr(
+            "logo_rule_hint",
+            "规则地址里的 [name] 会替换成频道名，例如 https://example.com/[name].png。"
+            "地址返回 404 或空内容时按顺序继续往下级兜底，并记住这次失败，"
+            "不会在每次刷新时重复请求；可点「清空台标缓存」重新尝试。"
+        ))
+        rule_hint.setWordWrap(True)
+        rule_hint.setStyleSheet(AppStyles.hint_label_style())
+        layout.addWidget(rule_hint)
+
+        def _clear_cache():
+            resolver.clear_cache()
+            service = getattr(self.window, '_logo_cache_service', None)
+            if service is not None:
+                try:
+                    service.clear()
+                except Exception as e:
+                    logger.debug(f"清空台标图片缓存失败: {e}")
+            stats = resolver.cache_stats()
+            self._show_logo_cache_cleared(tr, stats)
+
+        clear_btn.clicked.connect(_clear_cache)
 
         group.setLayout(layout)
         return group
 
-    @staticmethod
-    def _add_form_row_with_desc(layout, label_text, widget, desc_text):
-        """在 QFormLayout 中添加一行：label + (widget + 灰色说明文字)。
-
-        说明文字独立一行显示在 widget 下方，便于用户理解参数含义。
-        """
-        container = QWidget()
-        v = QVBoxLayout(container)
-        v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(3)
-        v.addWidget(widget)
-        desc = QLabel(desc_text)
-        desc.setWordWrap(True)
-        desc.setStyleSheet(AppStyles.description_text_style())
-        v.addWidget(desc)
-        layout.addRow(label_text, container)
-
+    def _show_logo_cache_cleared(self, tr, stats):
+        message = tr(
+            "logo_cache_cleared",
+            "台标缓存已清空（解析记录 {channels} 条，失败地址 {failed} 个）。"
+        ).format(channels=stats.get('channels', 0), failed=stats.get('failed_urls', 0))
+        try:
+            self.window.status_bar_show_message(message, 5000)
+        except Exception:
+            QMessageBox.information(self.window, tr("logo_source_settings", "台标来源"), message)
 
     def _build_subscription_section(self, tr, source_type, playback=True):
         if source_type == 'playlist':
@@ -1647,6 +1821,24 @@ class SettingsFileOperations:
         # 外观：颜色模式与视觉风格
         pick('color_mode_combo', 'dark')
         pick('visual_style_combo', 'flat')
+        # 台标来源：恢复默认顺序并全部勾选，规则模板清空
+        from services.logo_resolver import SOURCE_LABELS, SOURCE_ORDER
+        logo_list = dialog.findChild(QListWidget, "logo_priority_list")
+        if logo_list is not None:
+            logo_list.clear()
+            for source in SOURCE_ORDER:
+                item = QListWidgetItem(self._tr(f"logo_source_{source}", SOURCE_LABELS[source]))
+                item.setData(Qt.ItemDataRole.UserRole, source)
+                item.setFlags(item.flags()
+                              | Qt.ItemFlag.ItemIsUserCheckable
+                              | Qt.ItemFlag.ItemIsEnabled
+                              | Qt.ItemFlag.ItemIsSelectable)
+                item.setCheckState(
+                    Qt.CheckState.Unchecked if source == 'rule' else Qt.CheckState.Checked)
+                logo_list.addItem(item)
+        logo_rule = dialog.findChild(QLineEdit, "logo_rule_template_edit")
+        if logo_rule is not None:
+            logo_rule.clear()
         # 网络：流媒体请求
         for edit_name in ('http_proxy_edit', 'http_referer_edit'):
             edit = dialog.findChild(QLineEdit, edit_name)
@@ -1735,6 +1927,10 @@ class SettingsFileOperations:
                     proxy_edit.setFocus()
                     return
 
+            # 台标来源优先级先校验并落盘；失败时保持对话框打开，避免其它设置被半保存
+            if not self._save_logo_settings(dialog):
+                return
+
             # 订阅源在对话框内只改列表，因此用「打开对话框时」的配置做对比基线；
             # 保存时再读配置会拿到已改动后的值，导致改 URL 后不触发重新下载。
             old_playlist = getattr(dialog, '_old_playlist_sources', None)
@@ -1779,6 +1975,7 @@ class SettingsFileOperations:
             # 语言切换会重建菜单与界面文案，放到其余配置落盘之后
             self._save_general_app_settings(dialog)
 
+            self._apply_logo_settings_change(dialog)
             dialog.close()
             try:
                 self.window.status_bar_show_message(self._tr("settings_saved", "设置已保存"), 3000)
@@ -1787,6 +1984,91 @@ class SettingsFileOperations:
         except Exception as e:
             logger.error(f"保存订阅设置失败: {e}")
             dialog.close()
+
+    def _save_logo_settings(self, dialog) -> bool:
+        """保存台标来源顺序与规则模板；校验失败返回 False 并保持对话框。"""
+        from services.logo_resolver import get_logo_resolver
+
+        list_widget = dialog.findChild(QListWidget, "logo_priority_list")
+        rule_edit = dialog.findChild(QLineEdit, "logo_rule_template_edit")
+        if not isinstance(list_widget, QListWidget):
+            return True
+        if not isinstance(rule_edit, QLineEdit):
+            rule_edit = None
+
+        order = []
+        for i in range(list_widget.count()):
+            item = list_widget.item(i)
+            if item.checkState() == Qt.CheckState.Checked:
+                source = item.data(Qt.ItemDataRole.UserRole)
+                if source:
+                    order.append(str(source))
+        if not order:
+            QMessageBox.warning(
+                dialog,
+                self._tr("logo_source_settings", "台标来源"),
+                self._tr("logo_source_need_one", "请至少勾选一个台标来源。"),
+            )
+            return False
+
+        template = rule_edit.text().strip() if rule_edit is not None else ''
+        if 'rule' in order:
+            if '[name]' not in template:
+                QMessageBox.warning(
+                    dialog,
+                    self._tr("logo_source_settings", "台标来源"),
+                    self._tr(
+                        "logo_rule_need_name",
+                        "规则地址需要包含 [name] 占位符，例如 https://example.com/[name].png。",
+                    ),
+                )
+                if rule_edit is not None:
+                    rule_edit.setFocus()
+                return False
+            if not template.lower().startswith(('http://', 'https://')):
+                QMessageBox.warning(
+                    dialog,
+                    self._tr("logo_source_settings", "台标来源"),
+                    self._tr("logo_rule_invalid", "规则地址只支持 http:// 或 https://。"),
+                )
+                if rule_edit is not None:
+                    rule_edit.setFocus()
+                return False
+
+        resolver = get_logo_resolver()
+        before = resolver.get_settings()
+        resolver.save_settings(order, template)
+        after = resolver.get_settings()
+        dialog._logo_settings_changed = (before != after)
+        return True
+
+    def _apply_logo_settings_change(self, dialog):
+        """来源顺序变化后按新规则重算可见台标；规则模板变化同理。"""
+        if getattr(dialog, '_logo_settings_changed', False) is not True:
+            return
+        pairs = (
+            (getattr(self.window, 'sub_channel_list', None),
+             getattr(self.window, '_sub_channels', None)),
+            (getattr(self.window, 'local_channel_list', None),
+             getattr(self.window, '_local_channels', None)),
+        )
+        try:
+            for list_widget, _channels in pairs:
+                if list_widget is not None:
+                    self.window.channel_ctrl.reset_visible_logo_pixmaps(list_widget)
+            self.window.populate_channel_list('auto')
+            for list_widget, channels in pairs:
+                if list_widget is not None and channels:
+                    self.window._load_visible_icons(list_widget, channels)
+        except Exception as e:
+            logger.debug(f"刷新频道列表以应用台标来源失败: {e}")
+        try:
+            self.window.channel_ctrl.update_channel_info_on_selection()
+            favorites = getattr(self.window, 'favorites_ctrl', None)
+            if favorites is not None and hasattr(favorites, 'populate_favorites_tab'):
+                favorites.populate_favorites_tab()
+        except Exception as e:
+            logger.debug(f"应用台标来源后刷新界面失败: {e}")
 
     @staticmethod
     def _invalid_proxy_text(text: str) -> str:

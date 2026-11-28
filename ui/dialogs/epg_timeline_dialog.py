@@ -18,6 +18,7 @@ from ui.styles import AppStyles
 from ui.floating_dialog import FloatingDialog
 from ui.epg_timeline_widget import EpgTimelineWidget, EpgChannelHeaderWidget, EpgTimeHeaderWidget, epg_metrics
 from core.log_manager import global_logger as logger
+from services.logo_resolver import resolve_channel_logo
 from utils.delay_constants import DelayMs
 from utils.thread_safety import safe_single_shot
 
@@ -103,7 +104,7 @@ class _TimelineLoadWorker(QThread):
                 'name': ch_name,
                 # 保留原始频道对象，双击时按对象精确播台（同名频道不会串台）
                 'channel': ch,
-                'logo': ch.get('logo') or ch.get('logo_url') or all_tags.get('tvg-logo', ''),
+                'logo': resolve_channel_logo(ch) or all_tags.get('tvg-logo', ''),
                 'programs': programs,
             })
         self.data_ready.emit(channels_data, self._selected_date)
