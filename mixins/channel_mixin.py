@@ -15,7 +15,7 @@ class ChannelMixin:
     def update_channel_groups(self):
         self.subscription_ctrl.update_channel_groups()
 
-    def populate_channel_list(self, source='subscription'):
+    def populate_channel_list(self, source='subscription', force=False, restore_pending=True):
         if source == 'auto':
             if not hasattr(self, 'playlist_tab'):
                 source = 'subscription'
@@ -27,20 +27,19 @@ class ChannelMixin:
             self._last_populate_times = {}
         last_time = self._last_populate_times.get(source, 0)
 
-        if source == 'subscription':
-            new_channels = app_state.channels
-            skip_debounce = len(new_channels) != len(getattr(self, '_sub_channels', []))
-        else:
-            new_channels = None
-            skip_debounce = False
-
-        if not skip_debounce and current_time - last_time < 0.5:
+        # 页签各自渲染自己的来源块：订阅页只读 _sub_channels，本地页只读 _local_channels
+        channels = self._sub_channels if source == 'subscription' else self._local_channels
+        signature = (len(channels or []), id(channels))
+        last_signature = getattr(self, '_last_populate_signatures', {}).get(source)
+        if not force and signature == last_signature and current_time - last_time < 0.5:
             logger.debug(f"populate_channel_list: 跳过重复调用（source={source}，距上次{current_time - last_time:.2f}秒）")
             return
+        if not hasattr(self, '_last_populate_signatures'):
+            self._last_populate_signatures = {}
+        self._last_populate_signatures[source] = signature
         self._last_populate_times[source] = current_time
 
         if source == 'subscription':
-            self._sub_channels = new_channels
             self._update_groups_for('subscription')
             self._populate_channel_list_for(self.sub_channel_list, self._sub_channels,
                                             self.sub_group_combo.currentText())
@@ -50,11 +49,80 @@ class ChannelMixin:
                                             self.local_group_combo.currentText())
 
         pending = getattr(self, '_pending_last_channel', None)
-        if pending:
+        if pending and restore_pending:
             self._restore_pending_channel(source)
 
         if hasattr(self, '_update_playlist_tab_counts'):
             self._update_playlist_tab_counts()
+
+    def _rebuild_channel_aggregation(self):
+        """重建聚合表：本地块在前、订阅块在后，按归一化播放地址去重。
+
+        聚合表写入 app_state.channels，供播放、EPG 过滤、搜索、服务端与续播使用；
+        页签仍按各自的来源块渲染。
+        """
+        from services.channel_dedup_service import merge_channel_blocks
+
+        aggregated = merge_channel_blocks(
+            list(getattr(self, '_local_channels', []) or []),
+            list(getattr(self, '_sub_channels', []) or []),
+        )
+        app_state.replace_channels(aggregated)
+        self._sync_channel_model(aggregated)
+        if hasattr(self, '_update_playlist_tab_counts'):
+            self._update_playlist_tab_counts()
+        return aggregated
+
+    def _sync_channel_model(self, channels):
+        """让频道模型与聚合表保持一致，扫描/服务端/页签读到同一份数据。"""
+        model = getattr(self, 'channel_model', None)
+        if model is None:
+            return
+        try:
+            model.beginResetModel()
+            model.channels = [dict(ch) for ch in channels]
+            if hasattr(model, '_name_cache'):
+                model._name_cache = {c.get('name') for c in channels if c.get('name')}
+            if hasattr(model, '_group_cache'):
+                groups = set()
+                for c in channels:
+                    for g in (c.get('_groups') or [c.get('group', '')]):
+                        if g:
+                            groups.add(g)
+                model._group_cache = groups
+            model.endResetModel()
+        except Exception as e:
+            logger.warning(f"同步频道模型失败: {e}")
+
+    def _apply_local_block(self, channels, file_path, header_attrs=None,
+                           silent=False, record=True):
+        """替换本地来源块并重建聚合表。
+
+        silent=True 用于启动自动打开：只准备数据，不切页签、不选频道、不自动播放。
+        """
+        new_channels = []
+        for ch in channels or []:
+            item = dict(ch)
+            item['source'] = ''
+            new_channels.append(item)
+        # 本地文件内部也按播放地址去重，避免页签出现同地址重复项
+        from services.channel_dedup_service import ChannelDedupService
+        new_channels = ChannelDedupService().deduplicate(new_channels)
+        self._local_channels = new_channels
+        self._local_channels_dirty = True
+        self._local_playlist_path = file_path or ''
+        model = getattr(self, 'channel_model', None)
+        if model is not None and header_attrs is not None:
+            model._last_header_attrs = header_attrs
+        self._rebuild_channel_aggregation()
+        # 启动自动打开只准备数据：不触发上次频道恢复（不自动播放、不选频道）
+        self.populate_channel_list(source='local', force=True, restore_pending=not silent)
+        if record:
+            try:
+                self.config.save_last_playlist(file_path, len(new_channels))
+            except Exception as e:
+                logger.debug(f"记录上次播放列表失败: {e}")
+        return new_channels
 
     def _restore_pending_channel(self, populated_source):
         """恢复上次播放频道；频道在哪一页签就切到哪一页签。
@@ -73,11 +141,9 @@ class ChannelMixin:
         if populated_source != 'subscription':
             candidates.reverse()
 
-        has_data = False
         for source, target_list, channels in candidates:
             if not channels:
                 continue
-            has_data = True
             target_idx = self._find_channel_index(channels, pending)
             if target_idx < 0:
                 continue
@@ -97,8 +163,9 @@ class ChannelMixin:
             )
             return
 
-        # 两个列表都有数据却都没匹配上：配置已过期，清掉避免后续按下标误选
-        if has_data:
+        # 只有两个来源块都已加载且有数据时才判断「配置过期」；
+        # 另一来源还没填充时保留 pending，等它加载完继续尝试，避免启动竞态丢失恢复。
+        if getattr(self, '_sub_channels', None) and getattr(self, '_local_channels', None):
             self._pending_last_channel = None
 
     @staticmethod

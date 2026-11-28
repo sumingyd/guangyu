@@ -41,6 +41,8 @@ class SubscriptionManager(Singleton):
         # 同一 URL 的下载单飞/结果复用表：{url: {'lock': Lock, 'ts': float, 'data': dict|None}}
         self._epg_download_entries = {}
         self._epg_download_guard = threading.Lock()
+        # 最近一次 EPG 解析时使用的频道表指纹：解析会按频道表过滤，频道表变了要重解析
+        self._epg_filter_signature = ''
         self._initialized = True
 
     def _get_cache_dir(self) -> str:
@@ -190,6 +192,43 @@ class SubscriptionManager(Singleton):
             是否存在任何EPG数据
         """
         return bool(self._epg_data)
+
+    @staticmethod
+    def channel_table_signature(channels) -> str:
+        """计算频道表指纹：EPG 解析按频道表过滤，指纹用于判断是否需要重新解析。"""
+        import hashlib
+
+        digest = hashlib.sha1()
+        for channel in channels or []:
+            if not isinstance(channel, dict):
+                continue
+            digest.update(str(channel.get('name', '')).encode('utf-8'))
+            digest.update(b'\x1f')
+            digest.update(str(channel.get('url', '')).encode('utf-8'))
+            digest.update(b'\x1f')
+            digest.update(str(channel.get('tvg_id') or '').encode('utf-8'))
+            digest.update(b'\x1e')
+        return digest.hexdigest()
+
+    def current_channel_table_signature(self) -> str:
+        """当前频道表（app_state.channels）的指纹，取不到时返回空串。"""
+        try:
+            from core.application_state import app_state
+            return self.channel_table_signature(app_state.channels)
+        except Exception as e:
+            logger.debug(f"计算频道表指纹失败: {e}")
+            return ''
+
+    def get_epg_filter_signature(self) -> str:
+        """最近一次 EPG 解析所用的频道表指纹。"""
+        return getattr(self, '_epg_filter_signature', '') or ''
+
+    def _record_epg_filter_signature(self):
+        """记录本次 EPG 数据是按哪份频道表解析的（写入缓存，重启后仍可判断）。"""
+        signature = self.current_channel_table_signature()
+        with self._epg_lock:
+            self._epg_filter_signature = signature
+        return signature
     
     def add_epg_source(self, url: str, name: str | None = None) -> int:
         """添加新的EPG源
@@ -255,11 +294,14 @@ class SubscriptionManager(Singleton):
         """
         self._config.update_epg_source_last_update(index, timestamp)
     
-    def load_all_epg_data(self, status_callback=None) -> bool:
+    def load_all_epg_data(self, status_callback=None, force_download: bool = False) -> bool:
         """加载所有EPG源的数据（单飞：并发请求合并到正在执行的那一次）
 
         同一时刻只允许一个全量加载任务；重载风暴期间到达的重复请求直接返回，
         由正在执行的任务完成结果，避免同一 EPG 文件被并行下载多份。
+
+        force_download=True 时跳过「同一 URL 60 秒内复用解析结果」的短路，
+        强制按当前频道表重新下载并过滤（频道表变化后需要重新解析时使用）。
         """
         if not self._epg_load_lock.acquire(blocking=False):
             logger.info("已有 EPG 全量加载在进行中，本次请求合并等待其完成")
@@ -267,11 +309,11 @@ class SubscriptionManager(Singleton):
                 status_callback("EPG 正在加载中，已合并本次请求")
             return True
         try:
-            return self._load_all_epg_data_inner(status_callback)
+            return self._load_all_epg_data_inner(status_callback, force_download=force_download)
         finally:
             self._epg_load_lock.release()
 
-    def _load_all_epg_data_inner(self, status_callback=None) -> bool:
+    def _load_all_epg_data_inner(self, status_callback=None, force_download: bool = False) -> bool:
         """加载所有EPG源的数据，多源依次替补
 
         同一个频道只使用第一个有该频道数据的EPG源，不合并多个源的数据。
@@ -299,7 +341,8 @@ class SubscriptionManager(Singleton):
                 status_callback(f"正在加载EPG源 {i+1}/{total_sources}: {source.get('name', '')}")
 
             try:
-                data = self._load_single_epg(source['url'])
+                data = (self._load_single_epg(source['url'], force_download=True)
+                        if force_download else self._load_single_epg(source['url']))
 
                 if data:
                     new_channels = 0
@@ -355,6 +398,7 @@ class SubscriptionManager(Singleton):
         if status_callback:
             status_callback(f"EPG数据加载完成: {total_channels} 个频道, {total_programs} 个节目")
         
+        self._record_epg_filter_signature()
         self._save_epg_cache(merged_data)
         self._notify_update_callbacks()
         
@@ -405,6 +449,7 @@ class SubscriptionManager(Singleton):
                 
                 self._last_epg_update = datetime.now()
             self._clear_epg_matcher_cache()
+            self._record_epg_filter_signature()
             
             total_channels = len(self._epg_data)
             total_programs = sum(len(progs) for progs in self._epg_data.values())
@@ -461,6 +506,7 @@ class SubscriptionManager(Singleton):
                             new_channels += 1
                     self._last_epg_update = datetime.now()
                 self._clear_epg_matcher_cache()
+                self._record_epg_filter_signature()
 
                 total_channels = len(data)
                 total_programs = sum(len(progs) for progs in data.values())
@@ -490,17 +536,20 @@ class SubscriptionManager(Singleton):
                 status_callback(f"加载失败: {e}")
             return False
     
-    def _load_single_epg(self, epg_url: str) -> dict:
+    def _load_single_epg(self, epg_url: str, force_download: bool = False) -> dict:
         """加载单个EPG源的数据（同一 URL 单飞 + 结果复用）
 
         - 同一 URL 同时只允许一个下载+解析任务；
         - 重载期间到达的重复请求等待在途任务结束，并复用其刚完成的结果，
           避免同一个 8MB EPG 被并行下载、并行解析多份。
+        - force_download=True 时跳过结果复用，按当前频道表重新下载解析
+          （频道表变化后旧结果已被旧的过滤规则裁剪过，复用会漏频道）。
 
         失败时把可读原因写入 self._last_epg_error，供上层向用户展示真实原因。
 
         Args:
             epg_url: EPG源URL
+            force_download: 是否强制重新下载解析
 
         Returns:
             EPG数据字典
@@ -526,7 +575,7 @@ class SubscriptionManager(Singleton):
 
         try:
             age = _time.time() - entry['ts']
-            if entry['data'] is not None and age < EPG_DOWNLOAD_REUSE_SECONDS:
+            if not force_download and entry['data'] is not None and age < EPG_DOWNLOAD_REUSE_SECONDS:
                 logger.info(f"复用 {age:.0f}s 内的 EPG 下载结果，跳过重复下载: {epg_url}")
                 return dict(entry['data'])
             data = self._download_single_epg(epg_url)
@@ -1213,6 +1262,8 @@ class SubscriptionManager(Singleton):
                 'channel_names': channel_names,
                 'channel_sources': channel_sources,
                 'channel_icons': channel_icons,
+                # 记录解析时的频道表指纹：频道表变化后需要按新表重新解析
+                'channel_table_signature': self.get_epg_filter_signature(),
             }
             fd, tmp_path = tempfile.mkstemp(dir=cache_dir, suffix='.tmp', prefix='epg_')
             try:
@@ -1274,6 +1325,8 @@ class SubscriptionManager(Singleton):
                     self._last_epg_update = datetime.fromtimestamp(os.path.getmtime(cache_file))
                 except OSError:
                     self._last_epg_update = datetime.now()
+                # 旧缓存没有指纹；留空表示"不确定是按哪份频道表解析的"
+                self._epg_filter_signature = data.get('channel_table_signature', '') if isinstance(data, dict) else ''
             self._clear_epg_matcher_cache()
             
             logger.info(f"load_cached_epg_data: 成功加载 {len(self._epg_data)} 个频道")

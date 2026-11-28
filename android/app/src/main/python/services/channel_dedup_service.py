@@ -71,6 +71,28 @@ def carry_over_channel_state(new_channels: List[Dict[str, Any]],
     return new_channels
 
 
+def merge_channel_blocks(local_channels: List[Dict[str, Any]],
+                         sub_channels: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """把「本地块 + 订阅块」聚合成一张频道表（本地块在前、订阅块在后）。
+
+    去重口径与手动去重一致：只按归一化播放地址判断重复。
+    - 空地址不参与去重，各自保留（本地视频、未填地址的条目）
+    - 同地址保留第一条（本地优先），并把后面条目缺失的元数据补到保留条目
+    - 同名不同地址全部保留（不同分辨率/线路）
+    """
+    merged: List[Dict[str, Any]] = []
+    seen: Dict[str, int] = {}
+    for ch in list(local_channels or []) + list(sub_channels or []):
+        key = normalize_stream_url(ch.get('url', ''))
+        if key and key in seen:
+            ChannelDedupService._fill_missing(merged[seen[key]], ch)
+            continue
+        if key:
+            seen[key] = len(merged)
+        merged.append(ch)
+    return merged
+
+
 class ChannelDedupService:
     def __init__(self, name_threshold: float = 0.8, url_similarity: bool = True):
         self._name_threshold = name_threshold

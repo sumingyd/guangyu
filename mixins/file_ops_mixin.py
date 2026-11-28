@@ -51,13 +51,16 @@ class FileOpsMixin:
                         "catchup_source": ch.get('catchup_source', ''),
                         "resolution": ch.get('resolution', ''),
                         "current_program": '',
+                        "source": '',
                         "_raw_extinf": ch.get('_raw_extinf', ''),
                         "_all_tags": ch.get('_all_tags', {})
                     })
 
-                app_state.replace_channels(new_channels)
-                self._local_channels = list(new_channels)
-                self._local_channels_dirty = True
+                # 本地块整体替换，再按「本地在前、订阅在后」重建聚合表
+                self._apply_local_block(
+                    new_channels, file_path,
+                    header_attrs=getattr(self.channel_model, '_last_header_attrs', None),
+                )
 
                 if app_state.channel_count > 0:
                     self.current_channel = app_state.get_channel_by_index(0)
@@ -67,6 +70,17 @@ class FileOpsMixin:
                 if hasattr(self, 'playlist_tab'):
                     self.playlist_tab.setCurrentIndex(1)
                 self.populate_channel_list(source='local')
+                # 文件头 epg_url 登记为补充源（已配置同地址源时跳过）
+                self.settings_ops._apply_header_epg_url(schedule_populate=False)
+                try:
+                    # 立刻刷新顶部当前节目与节目单面板，避免停留在上一个频道
+                    if app_state.channel_count > 0:
+                        self.update_channel_info_on_selection()
+                        self._populate_epg_list()
+                    # EPG 未加载或解析时用的不是这份频道表时，后台按当前频道表重载
+                    self.settings_ops._ensure_epg_for_playlist_channels()
+                except Exception as refresh_err:
+                    logger.warning(f"刷新最近打开文件的节目信息失败: {refresh_err}")
                 self.status_bar.showMessage(f"{tr('file_opened', 'File opened')}: {file_path}")
                 logger.info(f"成功打开最近文件: {file_path}, 共 {app_state.channel_count} 个频道")
             else:
@@ -174,8 +188,13 @@ class FileOpsMixin:
         self.update_recent_files_menu()
 
     def _add_to_local_list(self, channel):
-        self._local_channels.append(copy.deepcopy(channel))
+        item = copy.deepcopy(channel)
+        item.setdefault('source', '')
+        self._local_channels.append(item)
         self._local_channels_dirty = True
+        rebuild = getattr(self, '_rebuild_channel_aggregation', None)
+        if callable(rebuild):
+            rebuild()
         new_idx = len(self._local_channels) - 1
         self.playlist_tab.setCurrentIndex(1)
         self._update_groups_for('local')

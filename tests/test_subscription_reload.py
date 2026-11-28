@@ -96,13 +96,15 @@ def test_refresh_sources_processes_enabled_in_order_and_aggregates():
 
     committed = []
     ctrl._refresh_one_source = fake_one
-    ctrl._commit_subscription_channels = lambda chans: committed.append(list(chans))
+    ctrl._apply_subscription_block = lambda chans: committed.append(list(chans))
 
-    stats = ctrl._refresh_sources_blocking(force=False)
+    result = ctrl._refresh_sources_blocking(force=False)
 
     assert order == [(0, 'http://a', False), (2, 'http://c', False)]
-    assert stats['ok'] == 2
-    assert [c['url'] for c in committed[0]] == ['http://ch0', 'http://ch2']
+    assert result['stats']['ok'] == 2
+    assert [c['url'] for c in result['channels']] == ['http://ch0', 'http://ch2']
+    # 后台刷新只返回订阅块，不再在 worker 线程里直接提交
+    assert committed == []
 
 
 def test_refresh_with_only_url_targets_single_source_even_if_disabled():
@@ -118,7 +120,7 @@ def test_refresh_with_only_url_targets_single_source_even_if_disabled():
         return 'ok'
 
     ctrl._refresh_one_source = fake_one
-    ctrl._commit_subscription_channels = MagicMock()
+    ctrl._apply_subscription_block = MagicMock()
 
     ctrl._refresh_sources_blocking(force=True, only_url='http://b')
 
@@ -130,12 +132,13 @@ def test_no_channels_keeps_existing_list():
     _FakeWorker.sources = [{'url': 'http://a', 'name': 'a', 'enabled': True}]
     ctrl, _ = _make()
     ctrl._refresh_one_source = lambda *a: 'failed'
-    ctrl._commit_subscription_channels = MagicMock()
+    ctrl._apply_subscription_block = MagicMock()
 
-    stats = ctrl._refresh_sources_blocking(force=True)
+    result = ctrl._refresh_sources_blocking(force=True)
 
-    assert stats['failed'] == 1
-    ctrl._commit_subscription_channels.assert_not_called()
+    assert result['stats']['failed'] == 1
+    assert result['channels'] is None
+    ctrl._apply_subscription_block.assert_not_called()
 
 
 def test_refresh_one_source_respects_cache_when_not_forced():
@@ -150,7 +153,7 @@ def test_refresh_one_source_respects_cache_when_not_forced():
     assert ctrl._refresh_one_source(0, source, False, merged, headers) == 'ok'
 
     ctrl._download_subscription_content.assert_not_called()
-    assert merged == [{'url': 'http://x/1'}]
+    assert merged == [{'url': 'http://x/1', 'source': 'local.m3u'}]
 
 
 def test_epg_timer_requires_channel_table(monkeypatch):

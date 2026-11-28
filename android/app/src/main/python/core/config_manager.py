@@ -12,6 +12,7 @@ from core.stores.resume_store import ResumeStore
 from core.stores.bookmark_store import BookmarkStore
 from core.stores.video_eq_store import VideoEqStore
 from core.stores.audio_eq_store import AudioEqStore
+from core.stores.local_playlist_store import LocalPlaylistStore
 
 
 class ConfigManager(Singleton):
@@ -43,6 +44,7 @@ class ConfigManager(Singleton):
         self._bookmark_store = BookmarkStore(self, self._bookmark_file)
         self._video_eq_store = VideoEqStore(self)
         self._audio_eq_store = AudioEqStore(self)
+        self._local_playlist_store = LocalPlaylistStore(self)
         self._initialized = True
 
     def save_window_layout(self, x, y, width, height, dividers):
@@ -624,6 +626,8 @@ class ConfigManager(Singleton):
             'skip_outro_seconds': 0.0,
             # 启动自动续播：开启后启动时自动播放上次关闭前的频道（与安卓端同名开关对齐）
             'auto_resume_last_channel': False,
+            # 启动自动打开上次的本地播放列表：只准备数据，不自动播放、不切页签
+            'auto_open_last_playlist': False,
             # 高级播放器参数（与安卓端 PlayerSettingsPanel 对齐）
             # vo: 'auto' 表示按 hdr_output_mode 自动推导
             'vo': 'auto',
@@ -679,6 +683,8 @@ class ConfigManager(Singleton):
             'skip_outro_seconds': 0.0,
             # 启动自动续播：开启后启动时自动播放上次关闭前的频道（与安卓端同名开关对齐）
             'auto_resume_last_channel': False,
+            # 启动自动打开上次的本地播放列表：只准备数据，不自动播放、不切页签
+            'auto_open_last_playlist': False,
             # 高级播放器参数（与安卓端 PlayerSettingsPanel 对齐）
             'vo': 'auto',
             'video_sync': 'audio',
@@ -732,6 +738,25 @@ class ConfigManager(Singleton):
 
     def load_last_channel(self):
         return self._resume_store.load_last_channel()
+
+    # ---------- 上次打开的本地播放列表 / 页签记忆 ----------
+    def save_last_playlist(self, file_path, channel_count=0):
+        return self._local_playlist_store.save_last_playlist(file_path, channel_count)
+
+    def load_last_playlist(self):
+        return self._local_playlist_store.load_last_playlist()
+
+    def record_last_playlist_miss(self):
+        return self._local_playlist_store.record_miss()
+
+    def clear_last_playlist(self):
+        return self._local_playlist_store.clear_last_playlist()
+
+    def save_last_active_tab(self, index):
+        return self._local_playlist_store.save_last_active_tab(index)
+
+    def load_last_active_tab(self):
+        return self._local_playlist_store.load_last_active_tab()
 
     # ---------- 断点续播（JSON 文件存储）----------
     def _load_resume_cache(self):

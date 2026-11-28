@@ -76,14 +76,15 @@ def test_idle_without_any_source():
     assert controller._idle_empty_kind() == 'no_source'
 
 
-def test_channel_total_includes_local_channels(monkeypatch):
+def test_channel_total_uses_aggregated_table(monkeypatch):
+    """聚合表已包含本地块，不能再把 _local_channels 加一遍。"""
     controller, window = _make_controller()
     window._local_channels = [{'name': 'a'}, {'name': 'b'}]
     monkeypatch.setattr(
         'core.application_state.app_state',
         types.SimpleNamespace(channel_count=3),
     )
-    assert controller._channel_total() == 5
+    assert controller._channel_total() == 3
 
 
 def test_no_selection_empty_state_text(monkeypatch):

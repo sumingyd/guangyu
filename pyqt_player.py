@@ -821,6 +821,17 @@ class IPTVPlayer(
             if hasattr(self, '_ensure_playlist_tab_has_content'):
                 self._ensure_playlist_tab_has_content()
 
+            # 按上次退出页签恢复（命令行/双击文件优先，不覆盖）
+            try:
+                self.settings_ops.restore_last_active_tab()
+            except Exception as ex:
+                logger.debug(f"恢复上次页签失败: {ex}")
+            # 启动自动打开上次本地 m3u：后台检查与解析，只准备数据
+            try:
+                self.settings_ops.maybe_auto_open_last_playlist()
+            except Exception as ex:
+                logger.error(f"启动自动打开上次播放列表失败: {ex}")
+
             self._check_for_updates_async()
             self._auto_start_server()
 

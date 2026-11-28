@@ -1011,22 +1011,10 @@ class ServerContext:
 
     def get_all_channels(self) -> List[Dict]:
         if self._main_window:
-            channels = []
-            # 使用 _channels_lock 保护读取，避免订阅加载线程并发修改
-            with self._channels_lock:
-                sub = getattr(self._main_window, '_sub_channels', [])
-                local = getattr(self._main_window, '_local_channels', [])
-                seen = set()
-                for ch in sub:
-                    url = ch.get('url', '')
-                    if url and url not in seen:
-                        channels.append(ch)
-                        seen.add(url)
-                for ch in local:
-                    url = ch.get('url', '')
-                    if url and url not in seen:
-                        channels.append(ch)
-                        seen.add(url)
+            # 桌面端以 app_state 的聚合表为准（本地在前、订阅在后、已去重），
+            # 服务端的频道下标与界面/播放使用同一顺序。
+            from core.application_state import app_state
+            channels = app_state.channels
             if not channels:
                 model = getattr(self._main_window, 'channel_model', None)
                 if model:

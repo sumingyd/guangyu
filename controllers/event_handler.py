@@ -1050,6 +1050,14 @@ class EventHandler:
             except Exception as e:
                 logger.error(f"保存窗口布局失败: {e}")
 
+        # 1.2 记住退出时所在页签，下次启动恢复
+        try:
+            tab = getattr(self.window, 'playlist_tab', None)
+            if tab is not None:
+                self.window.config.save_last_active_tab(tab.currentIndex())
+        except Exception as e:
+            logger.debug(f"保存上次页签失败: {e}")
+
         # 1.5 保存当前频道
         if hasattr(self.window, 'current_channel') and hasattr(self.window, 'config'):
             try:

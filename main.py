@@ -81,9 +81,10 @@ def _open_path_from_os(player, file_path):
     if not file_path or not os.path.isfile(file_path):
         return False
     # 双击文件/命令行传入文件时，以该文件为准：清掉待恢复的上次频道，
-    # 否则异步加载完播放列表后会把刚打开的文件覆盖成上次频道。
+    # 并禁用「启动自动打开上次播放列表」与页签记忆，避免覆盖刚打开的文件。
     try:
         player._pending_last_channel = None
+        player._skip_auto_open_last_playlist = True
     except Exception:
         pass
     lower = file_path.lower()

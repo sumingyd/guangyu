@@ -50,11 +50,15 @@ class SubscriptionController:
         self._workers = []
         # M3U 文件头里出现的 EPG 地址（可能有多个源）
         self._last_header_epg_urls = []
+        # 本地播放列表文件头登记为补充源的 EPG 地址（与订阅源分开，切文件时整体替换）
+        self._local_header_epg_urls = []
         # 订阅 / EPG 各自独立的刷新定时器，互不阻塞
         self._subscription_timer = None
         self._epg_timer = None
         self._refresh_busy = False
         self._epg_busy = False
+        # 最近一次因「频道表与 EPG 解析表不一致」触发强制重载的频道表指纹
+        self._last_epg_force_signature = ''
 
     def _cleanup_worker(self, worker):
         """从_workers列表中移除已完成的worker"""
@@ -188,16 +192,6 @@ class SubscriptionController:
                         )
                         break
 
-            # 获取 ApplicationState
-            from core.application_state import app_state
-            from services.channel_dedup_service import carry_over_channel_state
-
-            # 按归一化 URL 保留上一次的检测结果，避免重载后有效/疑似/无效全部丢失
-            channels_data = carry_over_channel_state(
-                channels_data, list(getattr(app_state, 'channels', []) or [])
-            )
-            app_state.channels = channels_data
-
             # 记录文件头EPG地址（在订阅EPG加载后再作为补充源加载）
             epg_url = header_attrs.get('epg_url', '')
             if epg_url:
@@ -206,6 +200,15 @@ class SubscriptionController:
                     urls.append(epg_url)
                 self._last_header_epg_urls = urls
                 logger.info(f"M3U文件头包含EPG地址: {epg_url[:80]}，将在订阅EPG加载后补充")
+
+            # 标记订阅来源，并回主线程提交订阅块（不直接改 app_state）
+            for ch in channels_data:
+                ch['source'] = file_path
+            from utils.thread_safety import invoke_on_thread
+            invoke_on_thread(
+                self.window,
+                lambda data=list(channels_data): self._apply_subscription_block(data),
+            )
 
             return 'ok'
 
@@ -424,7 +427,21 @@ class SubscriptionController:
     def _on_refresh_worker_done(self, worker, result):
         self._refresh_busy = False
         self._cleanup_worker(worker)
-        self._on_subscription_finished(result)
+        # 后台只收集数据，提交订阅块与重建聚合表都在主线程完成
+        from utils.thread_safety import invoke_on_thread
+        if isinstance(result, dict):
+            invoke_on_thread(self.window, lambda: self._apply_refresh_result(result))
+        else:
+            invoke_on_thread(self.window, lambda: self._on_subscription_finished(result))
+
+    def _apply_refresh_result(self, result):
+        """主线程应用订阅刷新结果：先提交订阅块，再刷新界面/EPG。"""
+        channels = result.get('channels')
+        if channels:
+            self._apply_subscription_block(channels)
+        self._on_subscription_finished(result.get('stats'))
+        if result.get('with_epg'):
+            self._spawn_epg_refresh(force=False)
 
     def _on_refresh_worker_error(self, worker, err):
         self._refresh_busy = False
@@ -433,11 +450,13 @@ class SubscriptionController:
 
     def _refresh_sources_blocking(self, force: bool = False, with_epg: bool = False,
                                   only_url: str = '') -> dict:
-        """在后台线程里按配置顺序刷新所有启用源，并把结果聚合成一份频道列表
+        """在后台线程里按配置顺序刷新所有启用源，收集订阅块
 
         - force=True：忽略缓存强制下载（手动重载 / 设置页保存后）
         - only_url 非空：只刷新指定地址的源
-        - with_epg=True：频道提交后再刷新 EPG（启动路径，保证过滤依赖频道表）
+        - with_epg=True：频道提交后由主线程触发 EPG 刷新（启动路径，保证过滤依赖频道表）
+
+        频道提交与聚合重建必须回主线程，这里只返回结果，不直接改 app_state。
         """
         sources = global_subscription_manager.get_playlist_sources()
         targets = []
@@ -470,9 +489,7 @@ class SubscriptionController:
         if header_epg_urls:
             self._last_header_epg_urls = list(dict.fromkeys(header_epg_urls))
 
-        if merged_channels:
-            self._commit_subscription_channels(merged_channels)
-        elif targets:
+        if not merged_channels and targets:
             # 全部失败或全部为空：保留现有频道列表，避免网络抖动把数据洗掉
             logger.warning(f"本次订阅刷新未得到任何频道（{stats}），保留现有频道列表")
 
@@ -482,9 +499,11 @@ class SubscriptionController:
             f"共 {len(merged_channels)} 个频道"
         )
 
-        if with_epg:
-            self._refresh_epg_blocking()
-        return stats
+        return {
+            'stats': stats,
+            'channels': merged_channels or None,
+            'with_epg': with_epg,
+        }
 
     def _refresh_one_source(self, index: int, source: dict, force: bool,
                             merged_channels: list, header_epg_urls: list) -> str:
@@ -521,6 +540,10 @@ class SubscriptionController:
                 header_epg_urls.append(epg_url)
                 logger.info(f"M3U文件头包含EPG地址: {epg_url[:80]}")
 
+            # 标记订阅来源：本地块保持 source 为空，播放/服务端据此区分两块
+            for ch in channels:
+                ch['source'] = url
+
             merged_channels.extend(channels)
             logger.info(f"订阅源 '{name}' 刷新完成: {len(channels)} 个频道")
             return 'ok'
@@ -528,27 +551,23 @@ class SubscriptionController:
             logger.error(f"刷新订阅源 '{name}' 失败: {e}", exc_info=True)
             return 'failed'
 
-    def _commit_subscription_channels(self, channels: list):
-        """聚合后的频道整体替换订阅列表（按播放地址去重，保留已有检测结果）"""
-        from core.application_state import app_state
-        from services.channel_dedup_service import (
-            carry_over_channel_state, normalize_stream_url,
-        )
+    def _apply_subscription_block(self, channels: list):
+        """在主线程提交订阅块：替换 _sub_channels 并重建聚合表。
 
-        deduped = []
-        seen = set()
-        for ch in channels:
-            key = normalize_stream_url(ch.get('url', ''))
-            if key:
-                if key in seen:
-                    continue
-                seen.add(key)
-            deduped.append(ch)
+        订阅刷新只影响订阅块，本地块原样保留；重复地址由聚合函数按
+        「本地优先、订阅补齐元数据」处理。
+        """
+        from services.channel_dedup_service import ChannelDedupService, carry_over_channel_state
 
-        deduped = carry_over_channel_state(
-            deduped, list(getattr(app_state, 'channels', None) or []))
-        app_state.channels = deduped
-        logger.info(f"订阅频道已更新: {len(deduped)} 个（已按播放地址去重）")
+        prev = list(getattr(self.window, '_sub_channels', []) or [])
+        sub = carry_over_channel_state(list(channels), prev)
+        # 多个订阅源之间也要按播放地址去重，页签显示和聚合表口径保持一致
+        sub = ChannelDedupService().deduplicate(sub)
+        self.window._sub_channels = sub
+        rebuild = getattr(self.window, '_rebuild_channel_aggregation', None)
+        if callable(rebuild):
+            rebuild()
+        logger.info(f"订阅块已更新: {len(sub)} 个（本地块保留 {len(getattr(self.window, '_local_channels', []) or [])} 个）")
         self._notify_channels_updated()
 
     def _notify_channels_updated(self):
@@ -561,12 +580,41 @@ class SubscriptionController:
 
     # ---------- EPG 刷新 ----------
 
-    def _spawn_epg_refresh(self):
+    def ensure_epg_for_current_channels(self):
+        """频道表换成新播放列表后调用，确保 EPG 是按当前频道表解析的。
+
+        两种需要重载的情况：
+        - 冷启动时 EPG 还没加载；
+        - 上次 EPG 解析用的是另一份频道表（解析会按频道表过滤，旧结果里没有新频道）。
+        同一份频道表只强制重载一次，避免反复下载大文件。
+        """
+        if not global_subscription_manager.get_epg_sources():
+            return
+        try:
+            from core.application_state import app_state
+            if not app_state.channels:
+                return
+        except Exception:
+            return
+        signature = global_subscription_manager.current_channel_table_signature()
+        if not signature:
+            return
+        if (global_subscription_manager.has_epg_data()
+                and signature == global_subscription_manager.get_epg_filter_signature()):
+            return
+        if signature == self._last_epg_force_signature:
+            return
+        self._last_epg_force_signature = signature
+        logger.info("当前频道表与已加载的 EPG 不一致，后台按当前频道表重新加载 EPG")
+        self._spawn_epg_refresh(force=True)
+
+    def _spawn_epg_refresh(self, force: bool = False):
         if self._epg_busy:
             logger.info("已有 EPG 刷新在进行中，跳过本次请求")
             return
         self._epg_busy = True
-        worker = SubscriptionWorker(lambda: self._refresh_epg_blocking(), self.window)
+        worker = SubscriptionWorker(
+            lambda: self._refresh_epg_blocking(force=force), self.window)
         worker.finished.connect(lambda result, w=worker: self._on_epg_worker_done(w, result))
         worker.error.connect(lambda err, w=worker: self._on_epg_worker_error(w, err))
         self._workers.append(worker)
@@ -579,11 +627,16 @@ class SubscriptionController:
 
     def _on_epg_worker_error(self, worker, err):
         self._epg_busy = False
+        # 强制重载异常时清掉指纹记录，下次加载同一份频道表还能再试
+        self._last_epg_force_signature = ''
         logger.error(f"EPG刷新错误: {err}")
         self._cleanup_worker(worker)
 
-    def _refresh_epg_blocking(self) -> bool:
-        """按 TTL 读取缓存或全量重下 EPG（调用方需保证频道表已就绪）"""
+    def _refresh_epg_blocking(self, force: bool = False) -> bool:
+        """按 TTL 读取缓存或全量重下 EPG（调用方需保证频道表已就绪）
+
+        force=True 时忽略缓存与 60 秒下载结果复用，按当前频道表强制重新解析。
+        """
         from core.application_state import app_state
 
         failure = {'msg': ''}
@@ -597,7 +650,7 @@ class SubscriptionController:
                 logger.debug(f"EPG加载状态: {msg}")
 
         self._last_epg_failure_msg = ''
-        need_download = not global_subscription_manager.is_epg_valid()
+        need_download = force or not global_subscription_manager.is_epg_valid()
 
         if not need_download:
             logger.debug("EPG缓存有效，从本地缓存加载")
@@ -607,8 +660,12 @@ class SubscriptionController:
             logger.warning("EPG缓存加载失败，改为重新下载")
             need_download = True
 
-        logger.info("EPG缓存无效或不存在，重新下载所有EPG源")
-        success = global_subscription_manager.load_all_epg_data(status_callback)
+        if force:
+            logger.info("按当前频道表强制重新加载所有EPG源")
+        else:
+            logger.info("EPG缓存无效或不存在，重新下载所有EPG源")
+        success = global_subscription_manager.load_all_epg_data(
+            status_callback, force_download=force)
         if success:
             app_state.epg_data = global_subscription_manager.get_epg_data_copy()
 
@@ -617,9 +674,21 @@ class SubscriptionController:
         self._last_epg_failure_msg = failure['msg']
         return success
 
+    def register_local_header_epg_url(self, url: str):
+        """登记本地播放列表文件头的 EPG 地址（作为补充源）。
+
+        本地文件是独立来源块：换文件时整体替换，不污染订阅源文件头记录。
+        """
+        self._local_header_epg_urls = [url] if url else []
+
+    def _all_header_epg_urls(self) -> list:
+        urls = list(getattr(self, '_last_header_epg_urls', None) or [])
+        urls += list(getattr(self, '_local_header_epg_urls', None) or [])
+        return list(dict.fromkeys(u for u in urls if u))
+
     def _load_header_epg_urls(self, status_callback=None):
         """补充加载 M3U 文件头里的 EPG 地址（已配置的源跳过）"""
-        urls = list(getattr(self, '_last_header_epg_urls', None) or [])
+        urls = self._all_header_epg_urls()
         if not urls:
             return
         from core.application_state import app_state
@@ -638,10 +707,19 @@ class SubscriptionController:
 
     def _on_epg_refresh_finished(self, result):
         """EPG 刷新完成：立即重绘节目单，失败原因带到状态栏"""
+        if not result:
+            # 强制重载失败时清掉指纹记录，下次加载同一份频道表还能再试
+            self._last_epg_force_signature = ''
+
         def refresh():
             try:
                 if hasattr(self.window, '_populate_epg_list'):
                     self.window._populate_epg_list()
+                # 还没开始播放时同步刷新顶部当前节目；播放中不动进度/时间控件
+                player = getattr(self.window, 'player_controller', None)
+                if (not getattr(player, 'is_playing', False)
+                        and hasattr(self.window, 'update_channel_info_on_selection')):
+                    self.window.update_channel_info_on_selection()
                 failure = getattr(self, '_last_epg_failure_msg', '')
                 if failure and hasattr(self.window, 'status_bar_show_message'):
                     self.window.status_bar_show_message(failure, 8000)

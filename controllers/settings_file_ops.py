@@ -73,6 +73,39 @@ class _EpgLoadThread(QThread):
             self.done.emit(last_msg['text'])
 
 
+class _AutoOpenPlaylistThread(QThread):
+    """启动自动打开上次播放列表的读取线程：存在性检查与解析都在后台完成。"""
+    done = Signal(object)
+
+    def __init__(self, file_path: str, parent=None):
+        super().__init__(parent)
+        self._file_path = file_path
+
+    def run(self):
+        result = {
+            'path': self._file_path,
+            'status': 'error',
+            'channels': [],
+            'header_attrs': {},
+        }
+        try:
+            if not os.path.isfile(self._file_path):
+                result['status'] = 'missing'
+            else:
+                content = load_m3u_file(self._file_path)
+                from services.m3u_parser import parse_m3u_content
+                channels, header_attrs = parse_m3u_content(content)
+                if channels:
+                    result['status'] = 'ok'
+                    result['channels'] = channels
+                    result['header_attrs'] = header_attrs or {}
+                else:
+                    result['status'] = 'empty'
+        except Exception as e:
+            logger.debug(f"启动自动打开上次播放列表失败: {e}")
+        self.done.emit(result)
+
+
 def _fit_button_text_height(button: QPushButton) -> int:
     """按字体行高与按钮样式（QSS 上下内边距 + 边框）计算高度，避免写死数值裁掉文字。
 
@@ -1497,6 +1530,16 @@ class SettingsFileOperations:
         ))
         layout.addRow('', resume_check)
 
+        # 启动自动打开上次本地 m3u：只准备数据，不自动播放、不切页签
+        auto_open_check = QCheckBox(tr("auto_open_last_playlist", "启动自动打开上次频道列表"))
+        auto_open_check.setObjectName("auto_open_last_playlist_check")
+        auto_open_check.setChecked(bool(playback_settings.get('auto_open_last_playlist', False)))
+        auto_open_check.setToolTip(tr(
+            "auto_open_last_playlist_hint",
+            "开启后，启动程序时自动载入上次打开的本地 m3u，但不自动播放"
+        ))
+        layout.addRow('', auto_open_check)
+
         # ---- 视频图像调整（核心参数） ----
         eq_cfg = self.window.config.load_video_eq() if self.window.config else {}
         video_box = QGroupBox(tr("video_eq_group_image", "图像参数"))
@@ -2136,7 +2179,7 @@ class SettingsFileOperations:
         # 播放行为
         pick('queue_mode_combo', 'none')
         for check_name in ('auto_skip_intro_check', 'auto_skip_outro_check',
-                           'auto_resume_on_start_check',
+                           'auto_resume_on_start_check', 'auto_open_last_playlist_check',
                            'video_eq_reset_check', 'sub_bold_check', 'sub_italic_check'):
             check = dialog.findChild(QCheckBox, check_name)
             if check is not None:
@@ -2451,6 +2494,9 @@ class SettingsFileOperations:
         check = dialog.findChild(QCheckBox, "auto_resume_on_start_check")
         if check is not None:
             settings['auto_resume_last_channel'] = check.isChecked()
+        check = dialog.findChild(QCheckBox, "auto_open_last_playlist_check")
+        if check is not None:
+            settings['auto_open_last_playlist'] = check.isChecked()
 
         def _parse_positive_int(edit_name):
             edit = dialog.findChild(QLineEdit, edit_name)
@@ -3226,53 +3272,187 @@ class SettingsFileOperations:
 
     # ==================== 内部文件 I/O ====================
 
-    def _load_playlist_file(self, file_path: str):
+    def _load_playlist_file(self, file_path: str, silent: bool = False):
+        """打开本地播放列表：替换本地来源块，再重建聚合表。
+
+        silent=True 用于启动自动打开：不切页签、不弹错误框、不自动播放。
+        """
         tr = self._tr
         try:
             content = load_m3u_file(file_path)
 
+            header_attrs = {}
             if self.window.channel_model and self.window.channel_model.load_from_file(content):
                 channels = self.window.channel_model.channels
+                header_attrs = getattr(self.window.channel_model, '_last_header_attrs', None) or {}
+                self.window.channel_model._source_file_path = file_path
             else:
                 channels = []
 
-            self.window._local_channels = list(channels)
-            self.window._local_channels_dirty = True
-            app_state.replace_channels(channels)
+            self.window._apply_local_block(
+                channels, file_path, header_attrs=header_attrs, silent=silent)
 
-            if self.window.channel_model:
-                self.window.channel_model._source_file_path = file_path
+            self._apply_header_epg_url(schedule_populate=not silent)
 
-            if self.window.channel_model:
-                epg_url = getattr(self.window.channel_model, '_last_header_attrs', {}).get('epg_url', '')
-                if epg_url and not global_subscription_manager.get_epg_sources():
-                    logger.info(f"本地文件头发现EPG地址，自动加载: {epg_url[:80]}")
-                    try:
-                        global_subscription_manager.load_single_epg(epg_url)
-                        if hasattr(self.window, '_populate_epg_list') and callable(self.window._populate_epg_list):
-                            QTimer.singleShot(DelayMs.OSD_FADE, self.window._populate_epg_list)
-                    except Exception as epg_err:
-                        logger.warning(f"从本地文件头加载EPG失败: {epg_err}")
+            if not silent and self.window.playlist_tab:
+                self.window._switch_playlist_tab(1) if hasattr(
+                    self.window, '_switch_playlist_tab') else self.window.playlist_tab.setCurrentIndex(1)
 
-            if self.window.playlist_tab:
-                self.window.playlist_tab.setCurrentIndex(1)
+            self._ensure_epg_for_playlist_channels()
 
-            if hasattr(self.window, 'populate_channel_list'):
-                self.window.populate_channel_list(source='local')
-
-            from core.config_manager import ConfigManager
-            ConfigManager().add_recent_file(file_path)
-            if hasattr(self.window, 'update_recent_files_menu'):
-                self.window.update_recent_files_menu()
+            if not silent:
+                from core.config_manager import ConfigManager
+                ConfigManager().add_recent_file(file_path)
+                if hasattr(self.window, 'update_recent_files_menu'):
+                    self.window.update_recent_files_menu()
 
             logger.info(f"成功加载播放列表: {file_path}, 共 {len(channels)} 个频道")
         except Exception as e:
             logger.error(f"加载播放列表失败: {e}")
+            if silent:
+                return
             QMessageBox.critical(
                 self.window,
                 tr("error", "Error"),
                 tr("open_file_error", "Failed to load channel list. Please check the file format and try again.")
             )
+
+    def _apply_header_epg_url(self, schedule_populate: bool = True) -> bool:
+        """按 M3U 文件头 epg_url 登记并补充加载 EPG。
+
+        文件头地址作为「补充源」登记到订阅控制器：即使已配置 EPG 源，
+        只要地址不同也会补充加载，最后按聚合频道表过滤；已配置的同地址源跳过。
+        """
+        model = getattr(self.window, 'channel_model', None)
+        attrs = getattr(model, '_last_header_attrs', None) or {}
+        epg_url = attrs.get('epg_url', '')
+        ctrl = getattr(self.window, 'subscription_ctrl', None)
+        register = getattr(ctrl, 'register_local_header_epg_url', None)
+        if callable(register):
+            # 换文件时整体替换本地补充源：新文件没写 epg_url 就清掉旧登记
+            register(epg_url)
+        if not epg_url:
+            return False
+        configured = {
+            src.get('url', '')
+            for src in (global_subscription_manager.get_epg_sources() or [])
+        }
+        if epg_url in configured:
+            return False
+        logger.info(f"本地文件头发现EPG地址，作为补充源加载: {epg_url[:80]}")
+        try:
+            if not global_subscription_manager.load_single_epg(epg_url):
+                logger.warning(f"从本地文件头加载EPG失败: {epg_url[:80]}")
+                return False
+            if schedule_populate and hasattr(self.window, '_populate_epg_list') \
+                    and callable(self.window._populate_epg_list):
+                QTimer.singleShot(DelayMs.OSD_FADE, self.window._populate_epg_list)
+            return True
+        except Exception as epg_err:
+            logger.warning(f"从本地文件头加载EPG失败: {epg_err}")
+            return False
+
+    def _ensure_epg_for_playlist_channels(self):
+        """频道表换成新播放列表后，确保 EPG 是按这份频道表解析的。
+
+        冷启动时 EPG 可能还未加载，或上次解析用的是别的频道表（解析会按当时
+        频道表过滤），这里交给订阅控制器在后台按当前频道表重载并刷新节目单。
+        """
+        ctrl = getattr(self.window, 'subscription_ctrl', None)
+        ensure = getattr(ctrl, 'ensure_epg_for_current_channels', None)
+        if callable(ensure):
+            ensure()
+
+    def _is_auto_open_last_playlist_enabled(self) -> bool:
+        try:
+            settings = self.window.config.load_playback_settings()
+            if isinstance(settings, dict):
+                return bool(settings.get('auto_open_last_playlist', False))
+        except Exception as e:
+            logger.debug(f"读取启动自动打开上次播放列表设置失败: {e}")
+        return False
+
+    def restore_last_active_tab(self):
+        """按上次退出所在页签恢复。
+
+        记录为本地页但本地块为空时，只有「自动打开上次播放列表」确实有记录
+        才先停在本地页等待后台填充；否则回落到订阅页。
+        命令行/双击传入文件优先，不覆盖已经打开的本地页。
+        """
+        if getattr(self.window, '_skip_auto_open_last_playlist', False):
+            return
+        tab = getattr(self.window, 'playlist_tab', None)
+        if tab is None:
+            return
+        try:
+            idx = int(self.window.config.load_last_active_tab())
+        except Exception:
+            idx = 0
+        if idx not in (0, 1, 2, 3):
+            idx = 0
+        if idx == 1 and not (getattr(self.window, '_local_channels', None) or []):
+            auto = self._is_auto_open_last_playlist_enabled()
+            last = self.window.config.load_last_playlist().get('last_file', '')
+            if not (auto and last):
+                idx = 0
+        switch = getattr(self.window, '_switch_playlist_tab', None)
+        if callable(switch):
+            switch(idx)
+        else:
+            tab.setCurrentIndex(idx)
+
+    def maybe_auto_open_last_playlist(self):
+        """启动时静默打开上次的本地 m3u：只准备数据，不自动播放、不切页签、不选频道。"""
+        if getattr(self.window, '_skip_auto_open_last_playlist', False):
+            return
+        if not self._is_auto_open_last_playlist_enabled():
+            return
+        last_file = self.window.config.load_last_playlist().get('last_file', '')
+        if not last_file:
+            return
+        self._auto_open_thread = _AutoOpenPlaylistThread(last_file, self.window)
+        self._auto_open_thread.done.connect(self._on_auto_open_last_playlist_done)
+        self._auto_open_thread.finished.connect(self._auto_open_thread.deleteLater)
+        self._auto_open_thread.start()
+
+    def _on_auto_open_last_playlist_done(self, result):
+        # 线程信号回到主线程再改频道块与 UI
+        from utils.thread_safety import invoke_on_thread
+        invoke_on_thread(self.window, lambda: self._apply_auto_open_result(result))
+
+    def _apply_auto_open_result(self, result):
+        status = result.get('status')
+        path = result.get('path', '')
+        tr = self._tr
+        if status == 'missing':
+            info = self.window.config.record_last_playlist_miss()
+            if hasattr(self.window, 'status_bar_show_message'):
+                self.window.status_bar_show_message(
+                    tr('last_playlist_missing',
+                       '上次打开的频道列表不存在: {path}').format(path=path), 5000)
+            if info.get('cleared'):
+                logger.info(f"上次播放列表连续缺失，已清除记录: {path}")
+            # 记录为本地但文件丢失：回落到订阅页
+            ensure = getattr(self.window, '_ensure_playlist_tab_has_content', None)
+            if callable(ensure):
+                ensure()
+            return
+        if status == 'ok':
+            channels = result.get('channels') or []
+            header_attrs = result.get('header_attrs') or {}
+            model = getattr(self.window, 'channel_model', None)
+            if model is not None:
+                model._source_file_path = path
+                model._last_header_attrs = header_attrs
+            self.window._apply_local_block(
+                channels, path, header_attrs=header_attrs, silent=True)
+            self._apply_header_epg_url(schedule_populate=False)
+            self._ensure_epg_for_playlist_channels()
+            logger.info(f"启动自动打开上次播放列表: {path}, {len(channels)} 个频道")
+        elif status == 'empty':
+            logger.warning(f"上次播放列表解析为空: {path}")
+        else:
+            logger.debug(f"启动自动打开上次播放列表失败: {path}")
 
     def _save_playlist_file(self, file_path: str):
         tr = self._tr
@@ -3369,6 +3549,7 @@ class SettingsFileOperations:
             if sub_ctrl:
                 content = sub_ctrl._download_subscription_content(file_path)
                 if content:
+                    w._pending_last_channel = None
                     w._apply_m3u_content(content, file_path)
                     w.config.add_recent_file(file_path)
                     w.update_recent_files_menu()
@@ -3387,6 +3568,7 @@ class SettingsFileOperations:
         def _handle_local_playlist():
             try:
                 content = load_m3u_file(file_path)
+                w._pending_last_channel = None
                 w._apply_m3u_content(content, file_path)
                 w.config.add_recent_file(file_path)
                 w.update_recent_files_menu()

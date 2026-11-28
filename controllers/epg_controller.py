@@ -298,19 +298,17 @@ class EPGController:
         label.show()
 
     def _channel_total(self) -> int:
-        """当前实际可用的频道数（订阅频道 + 本地频道）。"""
-        total = 0
+        """当前实际可用的频道数。
+
+        app_state.channels 已经是「本地块 + 订阅块」去重后的聚合表，
+        这里只读这一份，避免再把 _local_channels 加一遍造成重复计数。
+        """
         try:
             from core.application_state import app_state
-            total += int(app_state.channel_count or 0)
+            return int(app_state.channel_count or 0)
         except Exception as e:
-            logger.debug(f"_channel_total 读取订阅频道数失败: {e}")
-        local = getattr(self.window, '_local_channels', None) or []
-        try:
-            total += len(local)
-        except TypeError as e:
-            logger.debug(f"_channel_total 读取本地频道数失败: {e}")
-        return total
+            logger.debug(f"_channel_total 读取聚合频道数失败: {e}")
+            return 0
 
     def _channels_loading(self) -> bool:
         """订阅源频道是否仍在加载（用于区分「加载中」与「确实没有频道」）。"""

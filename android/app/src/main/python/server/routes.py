@@ -1042,22 +1042,30 @@ async def handle_channel_update(request):
     data = _filter_channel_fields(data)
     if not data:
         return _json_error('没有可更新的字段')
+    mw = get_main_window()
+    if mw is not None and hasattr(mw, '_local_channels'):
+        # 桌面端：下标按聚合顺序（本地块在前、订阅块在后）寻址
+        def _apply_update():
+            local_list = getattr(mw, '_local_channels', []) or []
+            if 0 <= idx < len(local_list):
+                local_list[idx].update(data)
+            else:
+                sub_list = getattr(mw, '_sub_channels', []) or []
+                sub_idx = idx - len(local_list)
+                if 0 <= sub_idx < len(sub_list):
+                    sub_list[sub_idx].update(data)
+                else:
+                    return
+            rebuild = getattr(mw, '_rebuild_channel_aggregation', None)
+            if callable(rebuild):
+                rebuild()
+        _call_model_on_qt_thread(mw, _apply_update)
+        return _json_success()
     if model and 0 <= idx < model.rowCount():
         _call_model_on_qt_thread(model, model.update_channel, idx, data)
     elif ctx and hasattr(ctx, '_channels') and 0 <= idx < len(ctx._channels):
         # standalone 模式（Android）：调用带锁方法
         ctx.update_channel(idx, data)
-    else:
-        mw = get_main_window()
-        if mw:
-            sub_len = len(getattr(mw, '_sub_channels', []))
-            if idx < sub_len:
-                mw._sub_channels[idx].update(data)
-            else:
-                local_idx = idx - sub_len
-                local_list = getattr(mw, '_local_channels', [])
-                if 0 <= local_idx < len(local_list):
-                    local_list[local_idx].update(data)
     return _json_success()
 
 
@@ -1068,6 +1076,24 @@ async def handle_channel_delete(request):
         idx = int(request.match_info['id'])
     except ValueError:
         return _json_error('无效的频道ID')
+    mw = get_main_window()
+    if mw is not None and hasattr(mw, '_local_channels'):
+        # 桌面端：下标按聚合顺序（本地块在前、订阅块在后）寻址
+        def _apply_delete():
+            local_list = getattr(mw, '_local_channels', []) or []
+            if 0 <= idx < len(local_list):
+                local_list.pop(idx)
+            else:
+                sub_list = getattr(mw, '_sub_channels', []) or []
+                sub_idx = idx - len(local_list)
+                if not (0 <= sub_idx < len(sub_list)):
+                    return
+                sub_list.pop(sub_idx)
+            rebuild = getattr(mw, '_rebuild_channel_aggregation', None)
+            if callable(rebuild):
+                rebuild()
+        _call_model_on_qt_thread(mw, _apply_delete)
+        return _json_success()
     if model and 0 <= idx < model.rowCount():
         _call_model_on_qt_thread(model, model.remove_channel, idx)
     elif ctx and hasattr(ctx, '_channels') and 0 <= idx < len(ctx._channels):
@@ -1098,6 +1124,16 @@ async def handle_channel_add(request):
     data.setdefault('fcc', '')
     data.setdefault('resolution', '')
     data.setdefault('status', '待检测')
+    mw = get_main_window()
+    if mw is not None and hasattr(mw, '_local_channels'):
+        # 桌面端：手动添加进入本地块，再重建聚合表
+        def _apply_add():
+            mw._local_channels.append(dict(data))
+            rebuild = getattr(mw, '_rebuild_channel_aggregation', None)
+            if callable(rebuild):
+                rebuild()
+        _call_model_on_qt_thread(mw, _apply_add)
+        return _json_success()
     ctx = get_context()
     model = get_channel_model() if ctx else None
     if model:
