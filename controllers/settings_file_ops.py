@@ -2840,6 +2840,9 @@ class SettingsFileOperations:
                             new_val = 'auto-copy'
                         else:
                             new_val = 'no'
+                    # 运动补偿/细节增强开启时，原生硬解接不上滤镜，按需保持 copy-back
+                    if hasattr(pc, 'resolve_hwdec_setting'):
+                        new_val = pc.resolve_hwdec_setting(new_val)
                 elif cfg_key == 'framedrop':
                     # 旧配置可能残留 insert/none/never（mpv 不认），即时应用时一并纠正
                     fd = str(new_val).lower()

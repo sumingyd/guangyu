@@ -685,13 +685,25 @@ class ContextMenuController:
         mc_strength = cfg.get('motion_comp', 'off')
         mc_fps = int(cfg.get('motion_comp_fps', 60))
         if mc_strength and mc_strength != 'off' and hasattr(pc, 'set_motion_compensation'):
-            pc.set_motion_compensation(mc_strength, mc_fps)
+            if not pc.set_motion_compensation(mc_strength, mc_fps):
+                tr = self._facade.window.language_manager.tr
+                if hasattr(self._facade.window, '_show_osd_feedback'):
+                    self._facade.window._show_osd_feedback(
+                        f"{tr('osd_motion_comp', '运动补偿')}: "
+                        f"{tr('enhance_filter_unavailable', '未生效：当前解码方式无法接入滤镜')}"
+                    )
         # 应用分辨率提升
         sr_scale = cfg.get('superres_scale', 'off')
         sr_detail = int(cfg.get('superres_detail', 0))
         if (sr_scale and sr_scale != 'off') or sr_detail > 0:
             if hasattr(pc, 'set_super_resolution'):
-                pc.set_super_resolution(sr_scale if sr_scale else 'off', sr_detail)
+                if not pc.set_super_resolution(sr_scale if sr_scale else 'off', sr_detail):
+                    tr = self._facade.window.language_manager.tr
+                    if hasattr(self._facade.window, '_show_osd_feedback'):
+                        self._facade.window._show_osd_feedback(
+                            f"{tr('osd_super_res', '分辨率提升')}: "
+                            f"{tr('sr_detail_filter_unavailable', '细节增强未生效：当前解码方式无法接入滤镜')}"
+                        )
         # 应用用户着色器
         shader_preset = cfg.get('shader_preset', 'off')
         if shader_preset and shader_preset != 'off' and hasattr(pc, 'set_user_shader'):
@@ -702,9 +714,15 @@ class ContextMenuController:
         pc = self._facade.window.player_controller
         if not pc or not pc.is_playing or not hasattr(pc, 'set_motion_compensation'):
             return
-        pc.set_motion_compensation(strength, target_fps)
+        ok = pc.set_motion_compensation(strength, target_fps)
         tr = self._facade.window.language_manager.tr
         if hasattr(self._facade.window, '_show_osd_feedback'):
+            if strength != 'off' and not ok:
+                self._facade.window._show_osd_feedback(
+                    f"{tr('osd_motion_comp', '运动补偿')}: "
+                    f"{tr('enhance_filter_unavailable', '未生效：当前解码方式无法接入滤镜')}"
+                )
+                return
             strength_labels = {
                 'off': tr('mc_off', '关闭'),
                 'low': tr('mc_low', '轻度'),
@@ -722,9 +740,15 @@ class ContextMenuController:
         pc = self._facade.window.player_controller
         if not pc or not pc.is_playing or not hasattr(pc, 'set_super_resolution'):
             return
-        pc.set_super_resolution(scale_algo, detail_enhance)
+        ok = pc.set_super_resolution(scale_algo, detail_enhance)
         tr = self._facade.window.language_manager.tr
         if hasattr(self._facade.window, '_show_osd_feedback'):
+            if detail_enhance > 0 and not ok:
+                self._facade.window._show_osd_feedback(
+                    f"{tr('osd_super_res', '分辨率提升')}: "
+                    f"{tr('sr_detail_filter_unavailable', '细节增强未生效：当前解码方式无法接入滤镜')}"
+                )
+                return
             scale_labels = {
                 'off': tr('sr_off', '关闭'),
                 'bilinear': tr('sr_bilinear', '双线性'),

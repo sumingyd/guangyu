@@ -209,7 +209,7 @@ class VideoEqualizerDialog(FloatingDialog):
         self.mc_combo.addItem(tr('mc_low', '轻度（帧混合）'), 'low')
         self.mc_combo.addItem(tr('mc_medium', '中度（运动补偿）'), 'medium')
         self.mc_combo.addItem(tr('mc_high', '强力（高级补偿）'), 'high')
-        self.mc_combo.setToolTip(tr('mc_hint', '需 copy-back 硬解或软解。中度以上会明显增加 CPU 负载'))
+        self.mc_combo.setToolTip(tr('mc_hint', '开启后会自动选用支持滤镜的解码方式。中度以上会明显增加 CPU 负载'))
         self.mc_combo.currentIndexChanged.connect(self._on_mc_changed)
         enhance_form.addRow(tr('mc_strength_label', '运动补偿'), self.mc_combo)
 
@@ -232,7 +232,7 @@ class VideoEqualizerDialog(FloatingDialog):
         self.sr_combo.addItem(tr('sr_spline', '样条'), 'spline')
         self.sr_combo.addItem(tr('sr_ewa_lanczos', 'EWA Lanczos'), 'ewa_lanczos')
         self.sr_combo.addItem(tr('sr_ewa_lanczossharp', 'EWA Lanczos Sharp'), 'ewa_lanczossharp')
-        self.sr_combo.setToolTip(tr('sr_hint', '缩放算法全局生效；细节增强需 copy-back 硬解或软解'))
+        self.sr_combo.setToolTip(tr('sr_hint', '缩放算法全局生效；细节增强开启后会自动选用支持滤镜的解码方式'))
         self.sr_combo.currentIndexChanged.connect(self._on_sr_changed)
         enhance_form.addRow(tr('sr_scale_label', '缩放算法'), self.sr_combo)
 
@@ -243,7 +243,7 @@ class VideoEqualizerDialog(FloatingDialog):
         self.sr_detail_slider.setPageStep(10)
         self.sr_detail_slider.setValue(0)
         self.sr_detail_slider.setToolTip(
-            tr('sr_hint', '缩放算法全局生效；细节增强需 copy-back 硬解或软解，4K 视频会先降到 1080p 再处理'))
+            tr('sr_hint', '缩放算法全局生效；细节增强开启后会自动选用支持滤镜的解码方式，4K 视频会先降到 1080p 再处理'))
         self.sr_detail_label = QLabel('0')
         self.sr_detail_label.setMinimumWidth(30)
         self.sr_detail_slider.valueChanged.connect(

@@ -940,3 +940,29 @@ class TestSettingsConsolidation:
         ctrl._facade = facade
         ctrl._show_network_enhance_dialog()
         facade.window.player_settings.assert_called_once_with("network_stream")
+
+
+class TestP0_SettingsRuntimeParamsLogging:
+    """settings_file_ops 里曾直接使用未导入的 global_logger。
+
+    内层 except 自己抛 NameError，真实失败原因被吞掉，用户只看到
+    「保存订阅设置失败」。修复后应正常记下原始异常且不向外抛。
+    """
+
+    def test_runtime_param_failure_is_logged_not_raised(self):
+        from controllers.settings_file_ops import SettingsFileOperations
+
+        pc = MagicMock()
+        pc.set_property_string.side_effect = RuntimeError('mpv 已退出')
+
+        with patch('controllers.settings_file_ops.logger') as mock_logger:
+            # 出现 NameError 就会在这里抛出去，测试失败
+            SettingsFileOperations._apply_runtime_playback_params(
+                pc,
+                {'hwdec': 'no', 'tls_verify': True, 'network_timeout_sec': 60},
+                {'hwdec': 'auto-copy', 'tls_verify': False, 'network_timeout_sec': 30},
+            )
+
+        messages = [c.args[0] for c in mock_logger.debug.call_args_list if c.args]
+        assert messages, '即时应用失败必须留下日志'
+        assert all('mpv 已退出' in m for m in messages)

@@ -4,6 +4,7 @@ import os
 import sys
 
 from core.log_manager import global_logger as logger
+from services.mpv_common import normalize_hwdec
 
 
 def _candidate_shader_dirs() -> list:
@@ -35,6 +36,92 @@ class MpvShader:
 
     def __init__(self, facade):
         self._facade = facade
+        # 当前会话里是否由本控制器添加了需要 lavfi 滤镜的增强项。
+        # 用于判断能否把自动提升的 copy-back 硬解还原成用户设置。
+        self._mc_active = False
+        self._sr_detail_active = False
+
+    def _configured_hwdec(self) -> str:
+        """用户配置的硬解模式（未被自动提升过的原始值）。"""
+        settings = getattr(self._facade, '_playback_settings', None) or {}
+        return normalize_hwdec(settings.get('hwdec', 'auto-copy'))
+
+    def resolve_hwdec(self, value) -> str:
+        """把用户选择的硬解模式解析为当前应下发的值。
+
+        运动补偿或细节增强开着时，原生硬解(auto)无法接入 lavfi 滤镜，
+        这里统一改成 copy-back(auto-copy)；增强项关闭后保持用户选择。
+        """
+        mode = normalize_hwdec(value)
+        if mode == 'auto' and (self._mc_active or self._sr_detail_active):
+            self._facade.logger.info(
+                "运动补偿/细节增强开启中，硬解保持 copy-back(auto-copy) 以支持滤镜"
+            )
+            return 'auto-copy'
+        return mode
+
+    def _ensure_filter_capable_hwdec(self, feature: str) -> bool:
+        """确保当前解码方式能接入 lavfi 滤镜。
+
+        用户选原生硬解(auto)时，解码帧留在 GPU，lavfi 拿不到帧数据，
+        mpv 会把滤镜静默禁用。此时自动切到 copy-back，不修改用户配置，
+        增强项全部关闭后由 _restore_hwdec_after_filters 还原。
+        """
+        if self._configured_hwdec() != 'auto':
+            return True
+        try:
+            current = self._facade._get_mpv_property_string('hwdec') or ''
+        except Exception as _e:
+            logger.debug(f"读取 hwdec 失败: {_e}")
+            current = ''
+        if current == 'auto-copy':
+            return True
+        try:
+            ret = self._facade._set_mpv_string('hwdec', 'auto-copy')
+        except Exception as _e:
+            logger.debug(f"切换 copy-back 硬解失败: {_e}")
+            ret = -1
+        if ret < 0:
+            self._facade.logger.warning(
+                f"{feature}需要视频滤镜，自动切换 copy-back(auto-copy) 失败(ret={ret})"
+            )
+            return False
+        self._facade.logger.info(
+            f"{feature}需要视频滤镜，硬解已自动由 auto 切换为 copy-back(auto-copy)"
+        )
+        return True
+
+    def _restore_hwdec_after_filters(self) -> None:
+        """增强项全部关闭后，把自动提升的 copy-back 还原为用户配置的硬解模式。"""
+        if self._configured_hwdec() != 'auto':
+            return
+        if self._mc_active or self._sr_detail_active:
+            return
+        try:
+            current = self._facade._get_mpv_property_string('hwdec') or ''
+            if current != 'auto-copy':
+                return
+            if self._facade._set_mpv_string('hwdec', 'auto') < 0:
+                return
+            self._facade.logger.info("运动补偿/细节增强已关闭，硬解还原为原生(auto)")
+        except Exception as _e:
+            logger.debug(f"还原硬解模式失败: {_e}")
+
+    def _add_lavfi_filter(self, filter_str: str) -> int:
+        """添加 lavfi 滤镜；失败时重载视频后重试一次。
+
+        部分 mpv 版本把运行时的 hwdec 变更推迟到下一次视频重载才生效，
+        此时首次添加滤镜仍会因格式不兼容失败，重载后可正常接入。
+        """
+        ret = self._facade.send_command(['vf', 'add', filter_str])
+        if ret == 0:
+            return 0
+        try:
+            self._facade.send_command(['video-reload'])
+        except Exception as _e:
+            logger.debug(f"视频重载失败: {_e}")
+            return ret
+        return self._facade.send_command(['vf', 'add', filter_str])
 
     def _find_shader_files(self, preset: str) -> list:
         """查找预设对应的所有着色器文件路径
@@ -92,6 +179,8 @@ class MpvShader:
             return False
         try:
             self._facade.send_command(['vf', 'remove', '@iptv_mc'])
+            self._mc_active = False
+            self._restore_hwdec_after_filters()
             self._facade.logger.info("运动补偿滤镜已移除")
             return True
         except Exception:
@@ -109,6 +198,8 @@ class MpvShader:
         # 移除滤镜
         try:
             self._facade.send_command(['vf', 'remove', '@iptv_sr'])
+            self._sr_detail_active = False
+            self._restore_hwdec_after_filters()
             self._facade.logger.info("分辨率提升已清除（缩放恢复默认，细节增强已移除）")
             return True
         except Exception:
@@ -259,8 +350,18 @@ class MpvShader:
             strength = 'off'
         preset = self._facade._MC_PRESETS[strength]
         if preset is None:
+            self._mc_active = False
+            self._restore_hwdec_after_filters()
             self._facade.logger.info("运动补偿已关闭")
             return True
+
+        # 滤镜需要能访问解码帧：原生硬解下自动切到 copy-back
+        if not self._ensure_filter_capable_hwdec("运动补偿"):
+            self._mc_active = False
+            self._facade.logger.warning(
+                "运动补偿未生效：当前解码方式无法接入滤镜，且自动切换 copy-back 失败"
+            )
+            return False
 
         # 限制目标帧率到合理范围
         fps = int(target_fps)
@@ -281,8 +382,9 @@ class MpvShader:
             )
         else:
             filter_str = f'@iptv_mc:lavfi=[minterpolate=fps={fps}:{preset}]'
-        ret = self._facade.send_command(['vf', 'add', filter_str])
+        ret = self._add_lavfi_filter(filter_str)
         if ret != 0:
+            self._mc_active = False
             cur_hwdec = ''
             try:
                 cur_hwdec = self._facade._get_mpv_property_string('hwdec') or ''
@@ -290,10 +392,10 @@ class MpvShader:
                 logger.debug(f"unexpected error: {_e}")
             self._facade.logger.warning(
                 f"运动补偿滤镜添加失败(ret={ret})，strength='{strength}'，fps={fps}，"
-                f"当前 hwdec='{cur_hwdec}'。"
-                f"若为原生硬解(auto)，请在播放设置中改为 copy-back(auto-copy) 或软解(no)"
+                f"当前 hwdec='{cur_hwdec}'；已自动尝试 copy-back 仍未能接入滤镜"
             )
             return False
+        self._mc_active = True
         self._facade.logger.info(f"运动补偿滤镜已添加: strength={strength}, fps={fps}")
         return True
 
@@ -344,6 +446,13 @@ class MpvShader:
 
         detail = max(0, min(100, int(detail_enhance)))
         if detail > 0:
+            # 滤镜需要能访问解码帧：原生硬解下自动切到 copy-back
+            if not self._ensure_filter_capable_hwdec("细节增强"):
+                self._sr_detail_active = False
+                self._facade.logger.warning(
+                    "细节增强未生效：当前解码方式无法接入滤镜，且自动切换 copy-back 失败"
+                )
+                return False
             # unsharp=luma_msize=5:luma_amount=X:chroma_msize=5:chroma_amount=0
             # amount 范围 0.0~1.5，映射 detail 0-100
             amount = round(detail / 100.0 * 1.5, 3)
@@ -360,8 +469,9 @@ class MpvShader:
                 )
             else:
                 filter_str = f'@iptv_sr:lavfi=[unsharp=5:5:{amount}:5:5:0.0]'
-            ret = self._facade.send_command(['vf', 'add', filter_str])
+            ret = self._add_lavfi_filter(filter_str)
             if ret != 0:
+                self._sr_detail_active = False
                 cur_hwdec = ''
                 try:
                     cur_hwdec = self._facade._get_mpv_property_string('hwdec') or ''
@@ -369,12 +479,15 @@ class MpvShader:
                     logger.debug(f"unexpected error: {_e}")
                 self._facade.logger.warning(
                     f"细节增强滤镜添加失败(ret={ret})，detail={detail}，"
-                    f"当前 hwdec='{cur_hwdec}'。"
-                    f"若为原生硬解(auto)，请在播放设置中改为 copy-back(auto-copy) 或软解(no)"
+                    f"当前 hwdec='{cur_hwdec}'；已自动尝试 copy-back 仍未能接入滤镜"
                 )
                 success = False
             else:
+                self._sr_detail_active = True
                 self._facade.logger.info(f"细节增强滤镜已添加: detail={detail} (amount={amount})")
+        else:
+            self._sr_detail_active = False
+            self._restore_hwdec_after_filters()
 
         return success
 

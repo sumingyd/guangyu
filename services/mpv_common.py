@@ -27,6 +27,47 @@ AUDIO_SPDIF_MAP = {
     'all': 'ac3,eac3,dts,dts-hd,truehd,dsd',
 }
 
+# 原生硬解（hwdec=auto）把解码帧留在 GPU，lavfi/vf 滤镜拿不到帧数据；
+# 运动补偿、细节增强这类滤镜必须走 copy-back（auto-copy）或软解（no）。
+def normalize_hwdec(value) -> str:
+    """把配置中的 hwdec 归一为 mpv 接受的 auto / auto-copy / no。"""
+    if isinstance(value, bool):
+        return 'auto-copy' if value else 'no'
+    text = str(value or '').strip().lower()
+    if text in ('auto', 'auto-copy', 'no'):
+        return text
+    if text in ('true', '1', 'yes'):
+        return 'auto-copy'
+    return 'no'
+
+
+def video_eq_needs_filters(video_eq: dict) -> bool:
+    """运动补偿或细节增强开启时，视频链需要 lavfi 滤镜。"""
+    if not isinstance(video_eq, dict):
+        return False
+    # 每次起播都会重置增强项，滤镜不会实际挂上，没必要因此降低解码性能
+    if video_eq.get('reset_on_new_file'):
+        return False
+    strength = str(video_eq.get('motion_comp', 'off') or 'off').strip().lower()
+    if strength not in ('', 'off', 'none'):
+        return True
+    try:
+        return int(video_eq.get('superres_detail', 0) or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def effective_hwdec(config_value, video_eq=None) -> str:
+    """按「是否开启需要滤镜的增强项」决定实际下发的硬解模式。
+
+    用户选 auto（原生）又开启了运动补偿/细节增强时，自动升为 copy-back；
+    两项都关时保持用户选择，避免无谓降低性能。
+    """
+    mode = normalize_hwdec(config_value)
+    if mode == 'auto' and video_eq_needs_filters(video_eq or {}):
+        return 'auto-copy'
+    return mode
+
 _mpv_loaded = False
 _env_initialized = False
 
